@@ -1,0 +1,3318 @@
+"""
+fish_analyzer/gui.py
+====================
+Layer 5: Graphical User Interface
+
+This module contains the EnhancedFishAnalyzer class - the main application window.
+It's built with tkinter, Python's built-in GUI toolkit.
+
+TKINTER CONCEPTS FOR BEGINNERS:
+
+WIDGETS - Everything visible is a "widget":
+   - tk.Label: Displays text
+   - tk.Button: Clickable button (command= specifies what happens on click)
+   - tk.Entry: Text input field (use StringVar to read/write value)
+   - tk.Listbox: Scrollable list of items
+   - ttk.Notebook: Tabbed interface
+   - ttk.Frame: Container to organize other widgets
+
+LAYOUT - How widgets are arranged:
+   - pack(): Stack widgets (side="left"/"right"/"top"/"bottom")
+   - grid(): Place in row/column grid (row=0, column=1, etc.)
+   - fill="both", expand=True: Make widget resize with window
+
+VARIABLES - Special tkinter variables that auto-update widgets:
+   - tk.StringVar(): For text values
+   - tk.IntVar(): For integers
+   - tk.BooleanVar(): For checkboxes
+   - Use .get() to read, .set() to write
+
+APPLICATION STRUCTURE:
+   The main window has a Notebook (tabbed interface) with 4 tabs:
+   1. Data Setup & Calibration - Load files, set units
+   2. Individual Analysis - Per-fish metrics and plots
+   3. Shoaling Analysis - Group behavior metrics
+   4. Spatial Analysis - Thigmotaxis and heatmaps
+"""
+
+from typing import Dict, List, Optional, Any, Tuple
+from pathlib import Path
+import numpy as np
+import pandas as pd
+import tkinter as tk
+from tkinter import ttk, filedialog, messagebox, simpledialog
+import matplotlib
+matplotlib.use('TkAgg')  # MUST be before importing pyplot
+from matplotlib.figure import Figure
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+import matplotlib.pyplot as plt
+from matplotlib.patches import Polygon as MplPolygon
+from scipy.ndimage import uniform_filter1d
+
+# Import from our own package
+from .data_structures import LoadedTrajectoryFile, CalibrationSettings
+from .file_loading import TrajectoryFileLoader
+from .processing import (
+    ProcessingParameters, 
+    FishTrajectory, 
+    TrajectoryProcessor, 
+    MetricsCalculator,
+    process_and_analyze_file
+)
+from .shoaling import ShoalingParameters, ShoalingResults, ShoalingCalculator
+from .spatial import (
+    ArenaDefinition, 
+    ThigmotaxisResults, 
+    ThigmotaxisCalculator, 
+    HeatmapGenerator,
+    SHAPELY_AVAILABLE,
+    compute_shared_heatmap_scale
+)
+
+
+def smooth_time_series(data: np.ndarray, window_seconds: float, frame_rate: float) -> np.ndarray:
+    """
+    Apply smoothing to a time series using a rolling average.
+    
+    Parameters
+    ----------
+    data : np.ndarray
+        The time series data to smooth
+    window_seconds : float
+        The smoothing window size in seconds
+    frame_rate : float
+        The frame rate of the data (fps)
+        
+    Returns
+    -------
+    np.ndarray
+        Smoothed data (same length as input)
+    """
+    if window_seconds <= 0:
+        return data
+    
+    # Calculate window size in samples
+    window_samples = int(window_seconds * frame_rate)
+    if window_samples < 1:
+        window_samples = 1
+    
+    # Handle NaN values by interpolating, smoothing, then restoring NaN positions
+    nan_mask = np.isnan(data)
+    if np.all(nan_mask):
+        return data
+    
+    # Create a copy for smoothing
+    smoothed = data.copy()
+    
+    # For data with NaNs, we'll work only on valid sections
+    if np.any(nan_mask):
+        # Simple approach: interpolate over NaNs, smooth, then restore NaNs
+        valid_indices = np.where(~nan_mask)[0]
+        if len(valid_indices) < 2:
+            return data
+        
+        # Linear interpolation over NaN gaps
+        smoothed = np.interp(
+            np.arange(len(data)),
+            valid_indices,
+            data[valid_indices]
+        )
+        
+        # Apply uniform filter (moving average)
+        smoothed = uniform_filter1d(smoothed, size=window_samples, mode='nearest')
+        
+        # Restore NaNs at original positions (optional - keep smoothed values)
+        # smoothed[nan_mask] = np.nan
+    else:
+        smoothed = uniform_filter1d(data, size=window_samples, mode='nearest')
+    
+    return smoothed
+
+
+class EnhancedFishAnalyzer:
+    """
+    Main application class - orchestrates the entire GUI.
+
+    This class:
+    - Creates the main window and all tabs
+    - Manages loaded files (self.loaded_files dictionary)
+    - Handles user interactions (button clicks, etc.)
+    - Coordinates between analysis modules
+
+    IMPORTANT INSTANCE VARIABLES:
+    - self.loaded_files: Dict[str, LoadedTrajectoryFile] - all loaded data
+    - self.active_file: str - nickname of currently selected file
+    - self.root: tk.Tk - the main tkinter window
+    - self.notebook: ttk.Notebook - the tabbed container
+    """
+
+    def __init__(self):
+        """Initialize the application and create the GUI."""
+        # Data storage
+        self.loaded_files: Dict[str, LoadedTrajectoryFile] = {}
+        self.active_file: Optional[str] = None
+        
+        # Default parameters
+        self.processing_params = ProcessingParameters.default_for_fish()
+        self.shoaling_params = ShoalingParameters()
+
+        # Animation state
+        self.animation_running = False
+        self.animation_after_id = None
+
+        # Arena drawing state
+        self.arena_vertices = []
+        self.arena_definition = None
+        self.arena_fig = None
+        self.arena_ax = None
+        self.arena_canvas = None
+        self._arena_width_bl = None
+        self._arena_height_bl = None
+        
+        # Per-file arena storage (for redesigned spatial tab)
+        self.file_arena_definitions: Dict[str, ArenaDefinition] = {}
+        self.current_arena_file: Optional[str] = None
+
+        # Frame viewer state
+        self.frame_view_fig = None
+        self.frame_view_canvas = None
+        self.frame_view_ax_main = None
+        self.frame_view_ax_time = None
+        self.frame_view_time_marker = None
+
+        # Create the main window
+        self.root = tk.Tk()
+        self.root.title("Fish Trajectory Analyzer")
+        self.root.geometry("1200x850")
+
+        # Build the GUI
+        self._setup_gui()
+
+    def _setup_gui(self):
+        """Create the main window structure with tabbed interface."""
+        self.notebook = ttk.Notebook(self.root)
+        self.notebook.pack(fill="both", expand=True, padx=10, pady=10)
+
+        # Create each tab
+        self._create_data_tab()
+        self._create_analysis_tab()
+        self._create_shoaling_tab()
+        self._create_spatial_tab()
+
+    # =========================================================================
+    # DATA TAB - File loading and calibration
+    # =========================================================================
+
+    def _create_data_tab(self):
+        """Create the data loading and setup tab with scrolling support."""
+        tab = ttk.Frame(self.notebook)
+        self.notebook.add(tab, text="Data Setup & Calibration")
+
+        # Create scrollable container
+        canvas = tk.Canvas(tab, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(tab, orient="vertical", command=canvas.yview)
+        self.scrollable_frame = ttk.Frame(canvas)
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        scrollbar.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
+
+        canvas_window = canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
+
+        def _on_frame_configure(event):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+        self.scrollable_frame.bind("<Configure>", _on_frame_configure)
+
+        def _on_canvas_configure(event):
+            canvas.itemconfig(canvas_window, width=event.width)
+        canvas.bind("<Configure>", _on_canvas_configure)
+
+        def _on_mousewheel(event):
+            canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+        canvas.bind_all("<MouseWheel>", _on_mousewheel)
+
+        # Add sections to the scrollable frame
+        self._create_file_section(self.scrollable_frame)
+        self._create_calibration_section(self.scrollable_frame)
+        self._create_processing_parameters_section(self.scrollable_frame)
+
+        # Main analyze button
+        analyze_frame = tk.Frame(self.scrollable_frame)
+        analyze_frame.pack(fill="x", padx=20, pady=20)
+
+        tk.Button(
+            analyze_frame, text="Analyze All Files",
+            command=self._run_analysis_and_switch_tab,
+            bg="lightgreen", font=("Arial", 14, "bold"), height=2
+        ).pack()
+
+        tk.Label(
+            analyze_frame, text="Process all loaded files and display results",
+            font=("Arial", 9), fg="gray"
+        ).pack(pady=5)
+
+    def _create_file_section(self, parent):
+        """Create the file loading section."""
+        file_frame = tk.LabelFrame(parent, text="Load Trajectory Files", font=("Arial", 12, "bold"))
+        file_frame.pack(fill="x", padx=20, pady=10)
+
+        # Session folder input
+        controls = tk.Frame(file_frame)
+        controls.pack(fill="x", pady=10, padx=10)
+
+        tk.Label(controls, text="Session Folder:").pack(side="left", padx=5)
+        self.file_path_var = tk.StringVar()
+        tk.Entry(controls, textvariable=self.file_path_var, width=50).pack(side="left", padx=5)
+        tk.Button(controls, text="Browse...", command=self._browse_for_session_folder,
+                 bg="lightblue", font=("Arial", 10, "bold")).pack(side="left", padx=5)
+        
+        # Help text
+        tk.Label(file_frame, 
+                text="Select an idtracker.ai session folder (e.g., session_MyExperiment). "
+                     "The trajectories.npy and background.png will be found automatically.",
+                font=("Arial", 9), fg="gray", wraplength=500, justify=tk.LEFT
+        ).pack(anchor="w", padx=10, pady=(0, 10))
+
+        # Loaded files list
+        list_frame = tk.Frame(file_frame)
+        list_frame.pack(fill="both", expand=True, padx=10, pady=5)
+
+        tk.Label(list_frame, text="Loaded Files:", font=("Arial", 10, "bold")).pack(anchor="w")
+
+        list_container = tk.Frame(list_frame)
+        list_container.pack(fill="both", expand=True)
+
+        scrollbar = tk.Scrollbar(list_container)
+        scrollbar.pack(side="right", fill="y")
+
+        self.files_listbox = tk.Listbox(list_container, yscrollcommand=scrollbar.set, height=6)
+        self.files_listbox.pack(side="left", fill="both", expand=True)
+        scrollbar.config(command=self.files_listbox.yview)
+
+        # File management buttons
+        button_frame = tk.Frame(list_frame)
+        button_frame.pack(fill="x", pady=5)
+
+        tk.Button(button_frame, text="Set Active", command=self._set_active_file).pack(side="left", padx=5)
+        tk.Button(button_frame, text="View Details", command=self._show_file_details).pack(side="left", padx=5)
+        tk.Button(button_frame, text="Remove", command=self._remove_file).pack(side="left", padx=5)
+
+    def _create_calibration_section(self, parent):
+        """Create the calibration controls section."""
+        cal_frame = tk.LabelFrame(parent, text="Calibration Settings", font=("Arial", 12, "bold"))
+        cal_frame.pack(fill="x", padx=20, pady=10)
+
+        self.calibration_info_label = tk.Label(
+            cal_frame, text="Select an active file to configure calibration",
+            font=("Arial", 10), fg="gray"
+        )
+        self.calibration_info_label.pack(pady=10)
+
+        # Calibration method selection
+        self.calibration_method = tk.StringVar(value="body_length")
+
+        methods_frame = tk.Frame(cal_frame)
+        methods_frame.pack(fill="x", padx=20, pady=5)
+
+        tk.Label(methods_frame, text="Calibration method:", font=("Arial", 10, "bold")).pack(anchor="w", pady=5)
+
+        # Body length option
+        self.body_length_radio = tk.Radiobutton(
+            methods_frame, text="Use body length from tracking data",
+            variable=self.calibration_method, value="body_length",
+            command=self._on_calibration_method_changed
+        )
+        self.body_length_radio.pack(anchor="w", padx=20)
+
+        self.body_length_display = tk.Label(methods_frame, text="", font=("Arial", 9), fg="blue")
+        self.body_length_display.pack(anchor="w", padx=40)
+
+        # Custom calibration option
+        self.custom_radio = tk.Radiobutton(
+            methods_frame, text="Use custom calibration measurement",
+            variable=self.calibration_method, value="custom",
+            command=self._on_calibration_method_changed
+        )
+        self.custom_radio.pack(anchor="w", padx=20, pady=(10, 5))
+
+        custom_inputs_frame = tk.Frame(methods_frame)
+        custom_inputs_frame.pack(anchor="w", padx=40, pady=5)
+
+        tk.Label(custom_inputs_frame, text="I measured:").grid(row=0, column=0, sticky="w", padx=5)
+        self.pixels_var = tk.StringVar()
+        self.pixels_entry = tk.Entry(custom_inputs_frame, textvariable=self.pixels_var, width=10)
+        self.pixels_entry.grid(row=0, column=1, padx=5)
+        tk.Label(custom_inputs_frame, text="pixels =").grid(row=0, column=2, padx=5)
+        self.units_var = tk.StringVar(value="1")
+        self.units_entry = tk.Entry(custom_inputs_frame, textvariable=self.units_var, width=10)
+        self.units_entry.grid(row=0, column=3, padx=5)
+        self.unit_name_var = tk.StringVar(value="cm")
+        self.unit_name_entry = tk.Entry(custom_inputs_frame, textvariable=self.unit_name_var, width=8)
+        self.unit_name_entry.grid(row=0, column=4, padx=5)
+
+        tk.Label(
+            custom_inputs_frame,
+            text="(Example: '240 pixels = 10 cm' means 24 pixels per cm)",
+            font=("Arial", 8), fg="gray"
+        ).grid(row=1, column=0, columnspan=5, sticky="w", pady=2)
+
+        self.custom_input_widgets = [self.pixels_entry, self.units_entry, self.unit_name_entry]
+
+        # No calibration option
+        self.no_calibration_radio = tk.Radiobutton(
+            methods_frame, text="No calibration (keep pixel units)",
+            variable=self.calibration_method, value="none",
+            command=self._on_calibration_method_changed
+        )
+        self.no_calibration_radio.pack(anchor="w", padx=20, pady=(10, 5))
+
+        # Frame rate input
+        fps_frame = tk.Frame(cal_frame)
+        fps_frame.pack(fill="x", padx=20, pady=10)
+
+        tk.Label(fps_frame, text="Frame rate:", font=("Arial", 10)).pack(side="left", padx=5)
+        self.fps_var = tk.StringVar()
+        self.fps_entry = tk.Entry(fps_frame, textvariable=self.fps_var, width=12)
+        self.fps_entry.pack(side="left", padx=5)
+        tk.Label(fps_frame, text="fps").pack(side="left", padx=2)
+        self.fps_display = tk.Label(fps_frame, text="", font=("Arial", 9), fg="blue")
+        self.fps_display.pack(side="left", padx=10)
+
+        # Apply buttons
+        tk.Button(
+            cal_frame, text="Apply Calibration to Active File",
+            command=self._apply_calibration, bg="lightgreen", font=("Arial", 10, "bold")
+        ).pack(pady=10)
+
+        tk.Button(
+            cal_frame, text="Apply Calibration to ALL Files",
+            command=self._apply_calibration_to_all, bg="orange", font=("Arial", 10, "bold")
+        ).pack(pady=5)
+
+        tk.Label(cal_frame, text="[!] This will update calibration for every loaded file",
+                font=("Arial", 8), fg="darkorange").pack()
+
+        self.calibration_summary = tk.Label(cal_frame, text="", font=("Arial", 9),
+                                           fg="darkgreen", justify=tk.LEFT)
+        self.calibration_summary.pack(pady=5)
+
+        self._on_calibration_method_changed()
+
+    def _create_processing_parameters_section(self, parent):
+        """Create UI for configuring processing parameters."""
+        params_frame = tk.LabelFrame(parent, text="Processing Parameters", font=("Arial", 12, "bold"))
+        params_frame.pack(fill="x", padx=20, pady=10)
+
+        tk.Label(
+            params_frame, text="Configure how trajectories are processed and analyzed",
+            font=("Arial", 9), fg="gray"
+        ).pack(anchor="w", padx=10, pady=5)
+
+        settings_container = tk.Frame(params_frame)
+        settings_container.pack(fill="x", padx=10, pady=10)
+
+        params_col = tk.Frame(settings_container)
+        params_col.pack(fill="x", expand=True, padx=5)
+
+        tk.Label(params_col, text="Processing Settings:", font=("Arial", 10, "bold")).pack(anchor="w", pady=(0, 5))
+
+        # Smoothing checkbox
+        self.apply_smoothing_var = tk.BooleanVar(value=True)
+        tk.Checkbutton(params_col, text="Apply Savitzky-Golay smoothing",
+                      variable=self.apply_smoothing_var).pack(anchor="w")
+
+        # Smoothing window
+        smooth_frame = tk.Frame(params_col)
+        smooth_frame.pack(anchor="w", padx=20, pady=2)
+        tk.Label(smooth_frame, text="Window size:").pack(side="left")
+        self.smoothing_window_var = tk.StringVar(value="5")
+        tk.Entry(smooth_frame, textvariable=self.smoothing_window_var, width=5).pack(side="left", padx=5)
+        tk.Label(smooth_frame, text="frames (must be odd)").pack(side="left")
+
+        # Turn angle lag
+        turn_frame = tk.Frame(params_col)
+        turn_frame.pack(anchor="w", pady=(10, 2))
+        tk.Label(turn_frame, text="Turn angle lag:").pack(side="left")
+        self.turn_lag_var = tk.StringVar(value="10")
+        tk.Entry(turn_frame, textvariable=self.turn_lag_var, width=5).pack(side="left", padx=5)
+        tk.Label(turn_frame, text="frames").pack(side="left")
+
+        # Rest speed threshold
+        rest_frame = tk.Frame(params_col)
+        rest_frame.pack(anchor="w", pady=(10, 2))
+        tk.Label(rest_frame, text="Rest speed threshold:").pack(side="left")
+        self.rest_threshold_var = tk.StringVar(value="0.5")
+        tk.Entry(rest_frame, textvariable=self.rest_threshold_var, width=8).pack(side="left", padx=5)
+        self.rest_unit_label = tk.Label(rest_frame, text="BL/s")
+        self.rest_unit_label.pack(side="left")
+
+        # Help text
+        help_text = ("Smoothing reduces noise in position data. "
+                    "Rest threshold defines the speed below which fish are considered inactive.")
+        tk.Label(params_frame, text=help_text, font=("Arial", 8), fg="gray",
+                wraplength=600, justify=tk.LEFT).pack(anchor="w", padx=10, pady=5)
+
+    # =========================================================================
+    # ANALYSIS TAB - Individual trajectory metrics
+    # =========================================================================
+
+    def _create_analysis_tab(self):
+        """Create the individual analysis results tab."""
+        tab = ttk.Frame(self.notebook)
+        self.notebook.add(tab, text="Individual Analysis")
+
+        # Split into left controls and right results
+        paned = ttk.PanedWindow(tab, orient=tk.HORIZONTAL)
+        paned.pack(fill="both", expand=True, padx=5, pady=5)
+
+        left_panel = ttk.Frame(paned)
+        paned.add(left_panel, weight=1)
+
+        right_panel = ttk.Frame(paned)
+        paned.add(right_panel, weight=3)
+
+        # ----- LEFT PANEL: Controls -----
+        
+        # File selection
+        select_frame = tk.LabelFrame(left_panel, text="Data Selection", font=("Arial", 11, "bold"))
+        select_frame.pack(fill="x", padx=10, pady=10)
+
+        tk.Label(select_frame, text="Select files to compare:", font=("Arial", 9)).pack(anchor="w", padx=10, pady=2)
+        tk.Label(select_frame, text="(Ctrl+click for multiple)", font=("Arial", 8), fg="gray").pack(anchor="w", padx=10)
+
+        list_container = tk.Frame(select_frame)
+        list_container.pack(fill="x", padx=10, pady=5)
+
+        scrollbar = tk.Scrollbar(list_container)
+        scrollbar.pack(side="right", fill="y")
+
+        self.analysis_files_listbox = tk.Listbox(
+            list_container, selectmode=tk.EXTENDED, height=5,
+            yscrollcommand=scrollbar.set
+        )
+        self.analysis_files_listbox.pack(side="left", fill="both", expand=True)
+        scrollbar.config(command=self.analysis_files_listbox.yview)
+
+        # Plot settings
+        plot_frame = tk.LabelFrame(left_panel, text="Plot Settings", font=("Arial", 11, "bold"))
+        plot_frame.pack(fill="x", padx=10, pady=10)
+
+        smooth_frame = tk.Frame(plot_frame)
+        smooth_frame.pack(fill="x", padx=10, pady=5)
+        tk.Label(smooth_frame, text="Smoothing:").pack(side="left")
+        self.analysis_smooth_var = tk.StringVar(value="2.0")
+        tk.Entry(smooth_frame, textvariable=self.analysis_smooth_var, width=6).pack(side="left", padx=5)
+        tk.Label(smooth_frame, text="seconds").pack(side="left")
+
+        self.show_individual_fish_var = tk.BooleanVar(value=True)
+        tk.Checkbutton(plot_frame, text="Show individual fish",
+                      variable=self.show_individual_fish_var).pack(anchor="w", padx=10)
+
+        self.show_file_average_var = tk.BooleanVar(value=True)
+        tk.Checkbutton(plot_frame, text="Show file average (bold)",
+                      variable=self.show_file_average_var).pack(anchor="w", padx=10)
+
+        tk.Button(
+            left_panel, text="Update Visualizations",
+            command=self._update_analysis_visualizations,
+            bg="lightblue", font=("Arial", 11, "bold")
+        ).pack(fill="x", padx=10, pady=10)
+
+        # Distribution settings
+        dist_frame = tk.LabelFrame(left_panel, text="Distribution Settings", font=("Arial", 11, "bold"))
+        dist_frame.pack(fill="x", padx=10, pady=10)
+
+        bins_frame = tk.Frame(dist_frame)
+        bins_frame.pack(fill="x", padx=10, pady=5)
+        tk.Label(bins_frame, text="Histogram bins:").pack(side="left")
+        self.histogram_bins_var = tk.StringVar(value="30")
+        tk.Entry(bins_frame, textvariable=self.histogram_bins_var, width=6).pack(side="left", padx=5)
+
+        # ----- RIGHT PANEL: Results -----
+        results_notebook = ttk.Notebook(right_panel)
+        results_notebook.pack(fill="both", expand=True, padx=5, pady=5)
+
+        # Summary tab
+        summary_tab = ttk.Frame(results_notebook)
+        results_notebook.add(summary_tab, text="Summary")
+
+        summary_scroll = tk.Scrollbar(summary_tab)
+        summary_scroll.pack(side="right", fill="y")
+
+        self.analysis_summary_text = tk.Text(
+            summary_tab, wrap=tk.WORD, font=("Courier", 10),
+            yscrollcommand=summary_scroll.set
+        )
+        self.analysis_summary_text.pack(side="left", fill="both", expand=True)
+        summary_scroll.config(command=self.analysis_summary_text.yview)
+
+        self.analysis_summary_text.insert("1.0",
+            "Individual trajectory analysis results will appear here.\n\n"
+            "To run analysis:\n"
+            "1. Load trajectory files in the 'Data Setup' tab\n"
+            "2. Click 'Analyze All Files' to process\n"
+            "3. Select files from the list and click 'Update Visualizations'\n\n"
+            "Metrics calculated:\n"
+            "- Total distance traveled\n"
+            "- Mean/max speed\n"
+            "- Net displacement (start to end)\n"
+            "- Sinuosity (path tortuosity)\n"
+            "- Turn angle statistics\n"
+        )
+
+        # Speed Time Series tab
+        speed_ts_tab = ttk.Frame(results_notebook)
+        results_notebook.add(speed_ts_tab, text="Speed Over Time")
+        self.speed_timeseries_frame = tk.Frame(speed_ts_tab, bg="white")
+        self.speed_timeseries_frame.pack(fill="both", expand=True)
+
+        # Speed Distribution tab
+        speed_dist_tab = ttk.Frame(results_notebook)
+        results_notebook.add(speed_dist_tab, text="Speed Distribution")
+        self.speed_distribution_frame = tk.Frame(speed_dist_tab, bg="white")
+        self.speed_distribution_frame.pack(fill="both", expand=True)
+
+        # Distance Comparison tab
+        distance_tab = ttk.Frame(results_notebook)
+        results_notebook.add(distance_tab, text="Distance & Sinuosity")
+        self.distance_comparison_frame = tk.Frame(distance_tab, bg="white")
+        self.distance_comparison_frame.pack(fill="both", expand=True)
+
+        # Trajectory View tab
+        traj_tab = ttk.Frame(results_notebook)
+        results_notebook.add(traj_tab, text="Trajectory View")
+
+        traj_control_frame = tk.Frame(traj_tab)
+        traj_control_frame.pack(fill="x", padx=5, pady=5)
+
+        tk.Label(traj_control_frame, text="View mode:").pack(side="left", padx=5)
+        self.trajectory_view_mode_var = tk.StringVar(value="spaghetti")
+        tk.Radiobutton(traj_control_frame, text="Combined (spaghetti)",
+                      variable=self.trajectory_view_mode_var, value="spaghetti").pack(side="left")
+        tk.Radiobutton(traj_control_frame, text="Grid (individual fish)",
+                      variable=self.trajectory_view_mode_var, value="grid").pack(side="left")
+
+        tk.Button(traj_control_frame, text="Refresh",
+                 command=self._refresh_trajectory_view).pack(side="left", padx=10)
+
+        self.trajectory_view_frame = tk.Frame(traj_tab, bg="white")
+        self.trajectory_view_frame.pack(fill="both", expand=True)
+
+    # =========================================================================
+    # SHOALING TAB - Group behavior analysis
+    # =========================================================================
+
+    def _create_shoaling_tab(self):
+        """Create the shoaling analysis tab with interactive frame scrubber."""
+        tab = ttk.Frame(self.notebook)
+        self.notebook.add(tab, text="Shoaling Analysis")
+
+        paned = ttk.PanedWindow(tab, orient=tk.HORIZONTAL)
+        paned.pack(fill="both", expand=True, padx=5, pady=5)
+
+        left_panel = ttk.Frame(paned)
+        paned.add(left_panel, weight=1)
+
+        right_panel = ttk.Frame(paned)
+        paned.add(right_panel, weight=2)
+
+        # ----- LEFT PANEL: Controls -----
+        
+        # Parameters
+        params_frame = tk.LabelFrame(left_panel, text="Shoaling Parameters", font=("Arial", 11, "bold"))
+        params_frame.pack(fill="x", padx=10, pady=10)
+
+        interval_frame = tk.Frame(params_frame)
+        interval_frame.pack(fill="x", padx=10, pady=5)
+        tk.Label(interval_frame, text="Sample every:").pack(side="left")
+        self.shoaling_interval_var = tk.StringVar(value="30")
+        tk.Entry(interval_frame, textvariable=self.shoaling_interval_var, width=6).pack(side="left", padx=5)
+        tk.Label(interval_frame, text="frames").pack(side="left")
+
+        tk.Label(params_frame, text="At 30fps, sampling every 30 frames = 1 sample/second",
+                font=("Arial", 8), fg="gray").pack(anchor="w", padx=10)
+
+        smooth_frame = tk.Frame(params_frame)
+        smooth_frame.pack(fill="x", padx=10, pady=5)
+        tk.Label(smooth_frame, text="Plot smoothing:").pack(side="left")
+        self.shoaling_smooth_var = tk.StringVar(value="5.0")
+        tk.Entry(smooth_frame, textvariable=self.shoaling_smooth_var, width=6).pack(side="left", padx=5)
+        tk.Label(smooth_frame, text="seconds").pack(side="left")
+
+        # File selection
+        file_frame = tk.LabelFrame(left_panel, text="Select Files to Compare", font=("Arial", 11, "bold"))
+        file_frame.pack(fill="x", padx=10, pady=10)
+
+        tk.Label(file_frame, text="Hold Ctrl/Cmd to select multiple files",
+                font=("Arial", 8), fg="gray").pack(anchor="w", padx=10, pady=2)
+
+        list_container = tk.Frame(file_frame)
+        list_container.pack(fill="x", padx=10, pady=5)
+
+        scrollbar = tk.Scrollbar(list_container)
+        scrollbar.pack(side="right", fill="y")
+
+        self.shoaling_files_listbox = tk.Listbox(
+            list_container, selectmode=tk.EXTENDED, height=5,
+            yscrollcommand=scrollbar.set
+        )
+        self.shoaling_files_listbox.pack(side="left", fill="both", expand=True)
+        scrollbar.config(command=self.shoaling_files_listbox.yview)
+
+        tk.Button(
+            left_panel, text="Run Shoaling Analysis",
+            command=self._run_shoaling_analysis,
+            bg="lightgreen", font=("Arial", 12, "bold"), height=2
+        ).pack(fill="x", padx=10, pady=10)
+
+        # Frame scrubber section
+        scrubber_frame = tk.LabelFrame(left_panel, text="Interactive Frame Viewer", font=("Arial", 11, "bold"))
+        scrubber_frame.pack(fill="x", padx=10, pady=10)
+
+        # File selection for visualization
+        file_viz_frame = tk.Frame(scrubber_frame)
+        file_viz_frame.pack(fill="x", padx=10, pady=5)
+        tk.Label(file_viz_frame, text="File:").pack(side="left")
+        self.viz_shoaling_file_var = tk.StringVar()
+        self.viz_shoaling_file_dropdown = ttk.Combobox(
+            file_viz_frame, textvariable=self.viz_shoaling_file_var,
+            state="readonly", width=18
+        )
+        self.viz_shoaling_file_dropdown.pack(side="left", padx=5)
+        self.viz_shoaling_file_dropdown.bind("<<ComboboxSelected>>", self._on_viz_shoaling_file_selected)
+
+        # Visualization mode
+        mode_frame = tk.Frame(scrubber_frame)
+        mode_frame.pack(fill="x", padx=10, pady=5)
+        tk.Label(mode_frame, text="Show:").pack(side="left")
+        self.viz_mode_var = tk.StringVar(value="nnd")
+
+        rb_frame = tk.Frame(mode_frame)
+        rb_frame.pack(side="left", padx=5)
+        tk.Radiobutton(rb_frame, text="NND", variable=self.viz_mode_var, value="nnd").grid(row=0, column=0, sticky="w")
+        tk.Radiobutton(rb_frame, text="Hull", variable=self.viz_mode_var, value="hull").grid(row=0, column=1, sticky="w")
+        tk.Radiobutton(rb_frame, text="IID", variable=self.viz_mode_var, value="iid").grid(row=0, column=2, sticky="w")
+
+        # Focus fish for IID
+        focus_frame = tk.Frame(scrubber_frame)
+        focus_frame.pack(fill="x", padx=10, pady=2)
+        tk.Label(focus_frame, text="IID Focus Fish:").pack(side="left")
+        self.iid_focus_fish_var = tk.StringVar(value="0")
+        self.iid_focus_fish_dropdown = ttk.Combobox(
+            focus_frame, textvariable=self.iid_focus_fish_var,
+            state="readonly", width=8
+        )
+        self.iid_focus_fish_dropdown.pack(side="left", padx=5)
+        tk.Label(focus_frame, text="(shows distances from this fish to all others)",
+                font=("Arial", 8), fg="gray").pack(side="left")
+
+        # Frame slider
+        slider_frame = tk.Frame(scrubber_frame)
+        slider_frame.pack(fill="x", padx=10, pady=5)
+
+        tk.Label(slider_frame, text="Sample:").pack(side="left")
+        self.frame_slider_var = tk.IntVar(value=0)
+        self.frame_slider = tk.Scale(
+            slider_frame, from_=0, to=100, orient=tk.HORIZONTAL,
+            variable=self.frame_slider_var, command=self._on_slider_change,
+            length=150, showvalue=False
+        )
+        self.frame_slider.pack(side="left", padx=5, fill="x", expand=True)
+
+        # Jump to frame/time
+        jump_frame = tk.Frame(scrubber_frame)
+        jump_frame.pack(fill="x", padx=10, pady=5)
+
+        tk.Label(jump_frame, text="Jump to:").pack(side="left")
+
+        tk.Label(jump_frame, text="Frame:").pack(side="left", padx=(10, 2))
+        self.jump_frame_var = tk.StringVar()
+        jump_frame_entry = tk.Entry(jump_frame, textvariable=self.jump_frame_var, width=8)
+        jump_frame_entry.pack(side="left")
+        jump_frame_entry.bind("<Return>", self._jump_to_frame)
+
+        tk.Label(jump_frame, text="Time(s):").pack(side="left", padx=(10, 2))
+        self.jump_time_var = tk.StringVar()
+        jump_time_entry = tk.Entry(jump_frame, textvariable=self.jump_time_var, width=8)
+        jump_time_entry.pack(side="left")
+        jump_time_entry.bind("<Return>", self._jump_to_time)
+
+        tk.Button(jump_frame, text="Go", command=self._jump_to_input, width=4).pack(side="left", padx=5)
+
+        # Current frame info
+        self.frame_info_label = tk.Label(scrubber_frame, text="Frame: -- | Time: --", font=("Arial", 9))
+        self.frame_info_label.pack(anchor="w", padx=10)
+
+        # Playback controls
+        playback_frame = tk.Frame(scrubber_frame)
+        playback_frame.pack(fill="x", padx=10, pady=5)
+
+        self.play_button = tk.Button(playback_frame, text="> Play", command=self._toggle_playback,
+                                    bg="lightblue", width=8)
+        self.play_button.pack(side="left", padx=2)
+
+        tk.Label(playback_frame, text="Speed:").pack(side="left", padx=(10, 2))
+        self.playback_speed_var = tk.StringVar(value="1x")
+        speed_combo = ttk.Combobox(playback_frame, textvariable=self.playback_speed_var,
+                                   values=["0.5x", "1x", "2x", "4x", "8x"], width=5, state="readonly")
+        speed_combo.pack(side="left")
+        tk.Label(playback_frame, text="(real-time)").pack(side="left", padx=2)
+
+        # ----- RIGHT PANEL: Results -----
+        results_notebook = ttk.Notebook(right_panel)
+        results_notebook.pack(fill="both", expand=True, padx=5, pady=5)
+
+        # Text results
+        text_tab = ttk.Frame(results_notebook)
+        results_notebook.add(text_tab, text="Results Summary")
+
+        scrollbar = tk.Scrollbar(text_tab)
+        scrollbar.pack(side="right", fill="y")
+
+        self.shoaling_results_text = tk.Text(
+            text_tab, wrap=tk.WORD, font=("Courier", 10),
+            yscrollcommand=scrollbar.set
+        )
+        self.shoaling_results_text.pack(side="left", fill="both", expand=True)
+        scrollbar.config(command=self.shoaling_results_text.yview)
+
+        self.shoaling_results_text.insert("1.0",
+            "Shoaling analysis results will appear here.\n\n"
+            "To run analysis:\n"
+            "1. Load trajectory files in the 'Data Setup' tab\n"
+            "2. Select one or more files (Ctrl+click for multiple)\n"
+            "3. Click 'Run Shoaling Analysis'\n\n"
+            "Metrics:\n"
+            "- NND: Nearest Neighbor Distance (closest fish)\n"
+            "- IID: Inter-Individual Distance (all pairs average)\n"
+            "- Hull: Convex Hull Area (group footprint)\n"
+        )
+
+        # NND Plot
+        nnd_plot_tab = ttk.Frame(results_notebook)
+        results_notebook.add(nnd_plot_tab, text="NND Time Series")
+        self.shoaling_nnd_plot_frame = tk.Frame(nnd_plot_tab, bg="white")
+        self.shoaling_nnd_plot_frame.pack(fill="both", expand=True)
+
+        # IID Plot
+        iid_plot_tab = ttk.Frame(results_notebook)
+        results_notebook.add(iid_plot_tab, text="IID Time Series")
+        self.shoaling_iid_plot_frame = tk.Frame(iid_plot_tab, bg="white")
+        self.shoaling_iid_plot_frame.pack(fill="both", expand=True)
+
+        # Hull Area Plot
+        hull_plot_tab = ttk.Frame(results_notebook)
+        results_notebook.add(hull_plot_tab, text="Hull Area")
+        self.shoaling_hull_plot_frame = tk.Frame(hull_plot_tab, bg="white")
+        self.shoaling_hull_plot_frame.pack(fill="both", expand=True)
+
+        # Frame visualization
+        frame_tab = ttk.Frame(results_notebook)
+        results_notebook.add(frame_tab, text="Frame View")
+        self.shoaling_frame_plot = tk.Frame(frame_tab, bg="white")
+        self.shoaling_frame_plot.pack(fill="both", expand=True)
+
+        tk.Label(self.shoaling_frame_plot,
+                text="Run analysis, then use the slider to scrub through frames",
+                font=("Arial", 11), fg="gray").pack(expand=True)
+
+    # =========================================================================
+    # SPATIAL TAB - Thigmotaxis and heatmaps
+    # =========================================================================
+
+    def _create_spatial_tab(self):
+        """Create the REDESIGNED spatial analysis tab."""
+        tab = ttk.Frame(self.notebook)
+        self.notebook.add(tab, text="Spatial Analysis")
+
+        paned = ttk.PanedWindow(tab, orient=tk.HORIZONTAL)
+        paned.pack(fill="both", expand=True, padx=5, pady=5)
+
+        left_panel = ttk.Frame(paned)
+        paned.add(left_panel, weight=1)
+
+        right_panel = ttk.Frame(paned)
+        paned.add(right_panel, weight=3)
+
+        # ----- LEFT PANEL: Controls -----
+        
+        # ===== FILE STATUS SECTION =====
+        status_frame = tk.LabelFrame(left_panel, text="Files & Status", font=("Arial", 11, "bold"))
+        status_frame.pack(fill="x", padx=10, pady=10)
+        
+        tk.Label(status_frame, text="Select files for analysis:", 
+                 font=("Arial", 9)).pack(anchor="w", padx=10, pady=2)
+        
+        # Legend
+        legend_frame = tk.Frame(status_frame)
+        legend_frame.pack(fill="x", padx=10, pady=2)
+        tk.Label(legend_frame, text="[âœ“]=Arena  [â—]=Analyzed", 
+                 font=("Arial", 8), fg="gray").pack(anchor="w")
+        
+        # File status listbox with multi-select
+        list_container = tk.Frame(status_frame)
+        list_container.pack(fill="x", padx=10, pady=5)
+        
+        scrollbar = tk.Scrollbar(list_container)
+        scrollbar.pack(side="right", fill="y")
+        
+        self.spatial_files_listbox = tk.Listbox(
+            list_container, selectmode=tk.EXTENDED, height=5,
+            yscrollcommand=scrollbar.set, font=("Courier", 9)
+        )
+        self.spatial_files_listbox.pack(side="left", fill="both", expand=True)
+        scrollbar.config(command=self.spatial_files_listbox.yview)
+        self.spatial_files_listbox.bind('<<ListboxSelect>>', self._on_spatial_file_selection_changed)
+
+        # ===== ARENA DEFINITION SECTION =====
+        arena_frame = tk.LabelFrame(left_panel, text="Arena Definition", font=("Arial", 11, "bold"))
+        arena_frame.pack(fill="x", padx=10, pady=10)
+        
+        # Current file being edited
+        self.arena_edit_label = tk.Label(
+            arena_frame, text="Select a file to edit arena", 
+            font=("Arial", 9), fg="gray"
+        )
+        self.arena_edit_label.pack(anchor="w", padx=10, pady=3)
+        
+        # Arena drawing buttons
+        arena_btn_frame = tk.Frame(arena_frame)
+        arena_btn_frame.pack(fill="x", padx=10, pady=5)
+        
+        tk.Button(arena_btn_frame, text="Clear", 
+                  command=self._clear_current_arena, width=8).pack(side="left", padx=2)
+        tk.Button(arena_btn_frame, text="Complete", 
+                  command=self._complete_arena, bg="lightgreen", width=8).pack(side="left", padx=2)
+        tk.Button(arena_btn_frame, text="Rectangle", 
+                  command=self._draw_rectangle_arena, width=8).pack(side="left", padx=2)
+        
+        # Apply arena buttons
+        apply_frame = tk.Frame(arena_frame)
+        apply_frame.pack(fill="x", padx=10, pady=5)
+        
+        tk.Button(apply_frame, text="Apply Arena to Selected Files", 
+                  command=self._apply_arena_to_selected,
+                  bg="lightyellow", font=("Arial", 9)).pack(fill="x")
+        
+        # Arena status
+        self.arena_status_label = tk.Label(arena_frame, text="", font=("Arial", 9))
+        self.arena_status_label.pack(anchor="w", padx=10, pady=2)
+
+        # ===== ANALYSIS SETTINGS SECTION =====
+        settings_frame = tk.LabelFrame(left_panel, text="Analysis Settings", font=("Arial", 11, "bold"))
+        settings_frame.pack(fill="x", padx=10, pady=10)
+        
+        # Border zone
+        border_frame = tk.Frame(settings_frame)
+        border_frame.pack(fill="x", padx=10, pady=3)
+        tk.Label(border_frame, text="Border zone:").pack(side="left")
+        self.border_pct_var = tk.StringVar(value="15")
+        tk.Entry(border_frame, textvariable=self.border_pct_var, width=5).pack(side="left", padx=5)
+        tk.Label(border_frame, text="% from wall").pack(side="left")
+        
+        # Sample interval
+        sample_frame = tk.Frame(settings_frame)
+        sample_frame.pack(fill="x", padx=10, pady=3)
+        tk.Label(sample_frame, text="Sample every:").pack(side="left")
+        self.spatial_sample_var = tk.StringVar(value="30")
+        tk.Entry(sample_frame, textvariable=self.spatial_sample_var, width=5).pack(side="left", padx=5)
+        tk.Label(sample_frame, text="frames").pack(side="left")
+        
+        # Plot smoothing
+        smooth_frame = tk.Frame(settings_frame)
+        smooth_frame.pack(fill="x", padx=10, pady=3)
+        tk.Label(smooth_frame, text="Plot smoothing:").pack(side="left")
+        self.spatial_smooth_var = tk.StringVar(value="30")
+        tk.Entry(smooth_frame, textvariable=self.spatial_smooth_var, width=5).pack(side="left", padx=5)
+        tk.Label(smooth_frame, text="seconds").pack(side="left")
+        
+        # Show individual fish option
+        self.show_individual_fish_thig_var = tk.BooleanVar(value=True)
+        tk.Checkbutton(settings_frame, text="Show individual fish in time series",
+                       variable=self.show_individual_fish_thig_var).pack(anchor="w", padx=10)
+
+        # ===== MAIN ACTION BUTTON =====
+        tk.Button(
+            left_panel, text="Run Analysis on Selected Files",
+            command=self._run_spatial_analysis_batch,
+            bg="lightgreen", font=("Arial", 11, "bold"), height=2
+        ).pack(fill="x", padx=10, pady=10)
+        
+        # Update plots button
+        tk.Button(
+            left_panel, text="Update Visualizations",
+            command=self._update_spatial_visualizations,
+            bg="lightblue", font=("Arial", 10)
+        ).pack(fill="x", padx=10, pady=5)
+
+        # ===== HEATMAP SETTINGS =====
+        heat_frame = tk.LabelFrame(left_panel, text="Heatmap Settings", font=("Arial", 11, "bold"))
+        heat_frame.pack(fill="x", padx=10, pady=10)
+        
+        grid_frame = tk.Frame(heat_frame)
+        grid_frame.pack(fill="x", padx=10, pady=3)
+        tk.Label(grid_frame, text="Grid size:").pack(side="left")
+        self.heatmap_grid_var = tk.StringVar(value="50")
+        tk.Entry(grid_frame, textvariable=self.heatmap_grid_var, width=5).pack(side="left", padx=5)
+        tk.Label(grid_frame, text="bins").pack(side="left")
+        
+        self.heatmap_mode_var = tk.StringVar(value="combined")
+        tk.Radiobutton(heat_frame, text="Combined (all fish per file)",
+                       variable=self.heatmap_mode_var, value="combined").pack(anchor="w", padx=10)
+        tk.Radiobutton(heat_frame, text="Individual fish grid",
+                       variable=self.heatmap_mode_var, value="individual").pack(anchor="w", padx=10)
+        
+        self.shared_colorscale_var = tk.BooleanVar(value=True)
+        tk.Checkbutton(heat_frame, text="Use shared color scale",
+                       variable=self.shared_colorscale_var).pack(anchor="w", padx=10)
+
+        # ----- RIGHT PANEL: Results -----
+        results_notebook = ttk.Notebook(right_panel)
+        results_notebook.pack(fill="both", expand=True, padx=5, pady=5)
+
+        # Tab 1: Arena Definition
+        arena_tab = ttk.Frame(results_notebook)
+        results_notebook.add(arena_tab, text="Arena Definition")
+        self.arena_canvas_frame = tk.Frame(arena_tab, bg="white")
+        self.arena_canvas_frame.pack(fill="both", expand=True)
+        tk.Label(self.arena_canvas_frame,
+                 text="Select a file from the list to define its arena",
+                 font=("Arial", 11), fg="gray").pack(expand=True)
+
+        # Tab 2: Results Summary (ALL FILES)
+        summary_tab = ttk.Frame(results_notebook)
+        results_notebook.add(summary_tab, text="Results Summary")
+        
+        summary_scroll = tk.Scrollbar(summary_tab)
+        summary_scroll.pack(side="right", fill="y")
+        
+        self.thigmotaxis_text = tk.Text(
+            summary_tab, wrap=tk.WORD, font=("Courier", 10),
+            yscrollcommand=summary_scroll.set
+        )
+        self.thigmotaxis_text.pack(side="left", fill="both", expand=True)
+        summary_scroll.config(command=self.thigmotaxis_text.yview)
+        
+        self.thigmotaxis_text.insert("1.0",
+            "SPATIAL ANALYSIS - THIGMOTAXIS & HEATMAPS\n"
+            "=" * 50 + "\n\n"
+            "Workflow:\n"
+            "1. Select file(s) from the list\n"
+            "2. Define arena boundary (click vertices or use Rectangle)\n"
+            "3. Click 'Complete' to finalize arena\n"
+            "4. Use 'Apply Arena to Selected Files' if same arena works for multiple files\n"
+            "5. Click 'Run Analysis on Selected Files'\n\n"
+            "Status indicators:\n"
+            "  [âœ“] = Arena defined for this file\n"
+            "  [â—] = Analysis completed for this file\n"
+        )
+
+        # Tab 3: Thigmotaxis Time Series
+        ts_tab = ttk.Frame(results_notebook)
+        results_notebook.add(ts_tab, text="Time Series")
+        self.thigmotaxis_plot_frame = tk.Frame(ts_tab, bg="white")
+        self.thigmotaxis_plot_frame.pack(fill="both", expand=True)
+
+        # Tab 4: Thigmotaxis Comparison (bar charts)
+        compare_tab = ttk.Frame(results_notebook)
+        results_notebook.add(compare_tab, text="Comparison")
+        self.thigmotaxis_compare_frame = tk.Frame(compare_tab, bg="white")
+        self.thigmotaxis_compare_frame.pack(fill="both", expand=True)
+
+        # Tab 5: Heatmaps
+        heatmap_tab = ttk.Frame(results_notebook)
+        results_notebook.add(heatmap_tab, text="Heatmaps")
+        self.heatmap_frame = tk.Frame(heatmap_tab, bg="white")
+        self.heatmap_frame.pack(fill="both", expand=True)
+        
+        # Initialize per-file arena storage
+        if not hasattr(self, 'file_arena_definitions'):
+            self.file_arena_definitions = {}
+        if not hasattr(self, 'current_arena_file'):
+            self.current_arena_file = None
+        
+        # For backwards compatibility - create old widgets that some methods might reference
+        self.spatial_file_var = tk.StringVar()
+        self.spatial_compare_listbox = tk.Listbox(tk.Frame())  # Hidden dummy
+
+    # =========================================================================
+    # HELPER METHODS - File operations, calibration, etc.
+    # =========================================================================
+
+    def _on_calibration_method_changed(self):
+        """Enable/disable custom calibration inputs based on selection."""
+        method = self.calibration_method.get()
+        state = tk.NORMAL if method == "custom" else tk.DISABLED
+        for widget in self.custom_input_widgets:
+            widget.config(state=state)
+
+    def _browse_for_session_folder(self):
+        """Open folder browser dialog and automatically load the session."""
+        folder_path = filedialog.askdirectory(
+            title="Select idtracker.ai Session Folder",
+            mustexist=True
+        )
+        if folder_path:
+            self.file_path_var.set(folder_path)
+            # Automatically proceed to load
+            self._load_session_folder(folder_path)
+    
+    def _load_session_folder(self, folder_path_str: str):
+        """Load a session folder and prompt for nickname."""
+        folder_path = Path(folder_path_str)
+        
+        # Generate suggested nickname from folder name
+        folder_name = folder_path.name
+        if folder_name.startswith('session_'):
+            suggested_nickname = folder_name[8:]  # Remove 'session_' prefix
+        else:
+            suggested_nickname = folder_name
+        
+        # Ask for nickname
+        nickname = simpledialog.askstring(
+            "File Nickname",
+            f"Enter a nickname for this session:\n({folder_path.name})",
+            initialvalue=suggested_nickname
+        )
+        if not nickname:
+            return  # User cancelled
+
+        if nickname in self.loaded_files:
+            if not messagebox.askyesno("Nickname Exists", f"'{nickname}' already exists. Replace it?"):
+                return
+
+        try:
+            loaded_file = TrajectoryFileLoader.load_from_session_folder(folder_path, nickname)
+            self.loaded_files[nickname] = loaded_file
+
+            if self.active_file is None:
+                self.active_file = nickname
+
+            self._update_files_list()
+            self._update_calibration_display()
+            self._update_shoaling_file_dropdown()
+            
+            # Show success message with file info
+            messagebox.showinfo(
+                "Session Loaded", 
+                f"Successfully loaded '{nickname}'!\n\n"
+                f"Fish: {loaded_file.n_fish}\n"
+                f"Frames: {loaded_file.n_frames}\n"
+                f"Duration: {loaded_file.duration_minutes:.1f} minutes\n"
+                f"Background: {'Found' if loaded_file.background_image_path else 'Not found'}"
+            )
+        except Exception as e:
+            messagebox.showerror("Error Loading Session", f"Failed to load {folder_path.name}:\n\n{str(e)}")
+
+    def _load_selected_file(self):
+        """Load the file/folder specified in the path entry."""
+        path_str = self.file_path_var.get()
+        if not path_str:
+            messagebox.showerror("Error", "Please select a session folder first")
+            return
+
+        path = Path(path_str)
+        
+        if path.is_dir():
+            # It's a folder - use session folder loading
+            self._load_session_folder(path_str)
+        elif path.is_file() and path.suffix == '.npy':
+            # It's a .npy file - use legacy file loading
+            self._load_legacy_npy_file(path)
+        else:
+            messagebox.showerror(
+                "Invalid Path", 
+                f"Please select either:\n"
+                f"- An idtracker.ai session folder, or\n"
+                f"- A trajectories.npy file\n\n"
+                f"Got: {path}"
+            )
+    
+    def _load_legacy_npy_file(self, file_path: Path):
+        """Load a .npy file directly (legacy support)."""
+        suggested_nickname = file_path.stem
+        nickname = simpledialog.askstring(
+            "File Nickname",
+            "Enter a nickname for this file:",
+            initialvalue=suggested_nickname
+        )
+        if not nickname:
+            return
+
+        if nickname in self.loaded_files:
+            if not messagebox.askyesno("Nickname Exists", f"'{nickname}' already exists. Replace it?"):
+                return
+
+        try:
+            loaded_file = TrajectoryFileLoader.load_file(file_path, nickname)
+            self.loaded_files[nickname] = loaded_file
+
+            if self.active_file is None:
+                self.active_file = nickname
+
+            self._update_files_list()
+            self._update_calibration_display()
+            self._update_shoaling_file_dropdown()
+        except Exception as e:
+            messagebox.showerror("Error Loading File", f"Failed to load {file_path.name}:\n\n{str(e)}")
+
+    def _update_files_list(self):
+        """Update the files listbox in the data tab."""
+        self.files_listbox.delete(0, tk.END)
+        for nickname in self.loaded_files.keys():
+            display_text = f"> {nickname}" if nickname == self.active_file else f"  {nickname}"
+            self.files_listbox.insert(tk.END, display_text)
+
+    def _update_shoaling_file_dropdown(self):
+        """Update all file selection widgets across tabs."""
+        # Update shoaling files listbox
+        self.shoaling_files_listbox.delete(0, tk.END)
+        for nickname in self.loaded_files.keys():
+            self.shoaling_files_listbox.insert(tk.END, nickname)
+
+        # Update visualization dropdown
+        file_list = list(self.loaded_files.keys())
+        self.viz_shoaling_file_dropdown['values'] = file_list
+        if file_list and not self.viz_shoaling_file_var.get():
+            self.viz_shoaling_file_dropdown.current(0)
+            self._on_viz_shoaling_file_selected()
+
+        # Update analysis files listbox
+        self._update_analysis_files_listbox()
+
+        # Update spatial analysis dropdown
+        self._update_spatial_file_dropdown()
+
+    def _update_analysis_files_listbox(self):
+        """Update the analysis tab file listbox."""
+        self.analysis_files_listbox.delete(0, tk.END)
+        for nickname in self.loaded_files.keys():
+            self.analysis_files_listbox.insert(tk.END, nickname)
+
+    def _update_spatial_file_dropdown(self):
+        """Update the spatial analysis file dropdown and comparison listbox."""
+        # Call the new list-based method
+        self._update_spatial_files_list()
+    
+    def _update_spatial_files_list(self):
+        """Update the spatial file list with status indicators."""
+        # Update the new listbox if it exists
+        if hasattr(self, 'spatial_files_listbox'):
+            self.spatial_files_listbox.delete(0, tk.END)
+            
+            for filename in self.loaded_files.keys():
+                # Check arena status
+                has_arena = filename in self.file_arena_definitions
+                
+                # Check analysis status
+                loaded_file = self.loaded_files[filename]
+                has_results = (hasattr(loaded_file, 'thigmotaxis_results') and 
+                               loaded_file.thigmotaxis_results is not None)
+                
+                # Build status string
+                arena_mark = "âœ“" if has_arena else " "
+                results_mark = "â—" if has_results else " "
+                
+                display_text = f"[{arena_mark}][{results_mark}] {filename}"
+                self.spatial_files_listbox.insert(tk.END, display_text)
+        
+        # Also update the old dropdown for backwards compatibility
+        file_list = list(self.loaded_files.keys())
+        if hasattr(self, 'spatial_file_dropdown'):
+            self.spatial_file_dropdown['values'] = file_list
+            if file_list and not self.spatial_file_var.get():
+                self.spatial_file_dropdown.current(0)
+
+        # Update old comparison listbox if it exists
+        if hasattr(self, 'spatial_compare_listbox'):
+            self.spatial_compare_listbox.delete(0, tk.END)
+            analyzed_indices = []
+            for idx, filename in enumerate(file_list):
+                loaded_file = self.loaded_files[filename]
+                if hasattr(loaded_file, 'thigmotaxis_results') and loaded_file.thigmotaxis_results:
+                    display_text = f"[Done] {filename}"
+                    analyzed_indices.append(idx)
+                else:
+                    display_text = f"       {filename}"
+                self.spatial_compare_listbox.insert(tk.END, display_text)
+            
+            for idx in analyzed_indices:
+                self.spatial_compare_listbox.selection_set(idx)
+
+    def _set_active_file(self):
+        """Set the selected file as the active file for calibration."""
+        selection = self.files_listbox.curselection()
+        if not selection:
+            messagebox.showinfo("Info", "Please select a file from the list")
+            return
+        nickname = list(self.loaded_files.keys())[selection[0]]
+        self.active_file = nickname
+        self._update_files_list()
+        self._update_calibration_display()
+
+    def _show_file_details(self):
+        """Show detailed information about the selected file."""
+        selection = self.files_listbox.curselection()
+        if not selection:
+            messagebox.showinfo("Info", "Please select a file from the list")
+            return
+        nickname = list(self.loaded_files.keys())[selection[0]]
+        loaded_file = self.loaded_files[nickname]
+        messagebox.showinfo(f"File Details: {nickname}", loaded_file.summary())
+
+    def _remove_file(self):
+        """Remove the selected file from the loaded files."""
+        selection = self.files_listbox.curselection()
+        if not selection:
+            messagebox.showinfo("Info", "Please select a file from the list")
+            return
+        nickname = list(self.loaded_files.keys())[selection[0]]
+        if not messagebox.askyesno("Confirm Removal", f"Remove '{nickname}'?"):
+            return
+        del self.loaded_files[nickname]
+        if self.active_file == nickname:
+            self.active_file = next(iter(self.loaded_files), None)
+        self._update_files_list()
+        self._update_calibration_display()
+        self._update_shoaling_file_dropdown()
+
+    def _update_calibration_display(self):
+        """Update the calibration section to reflect the active file."""
+        if self.active_file is None or self.active_file not in self.loaded_files:
+            self.calibration_info_label.config(text="Select an active file to configure calibration", fg="gray")
+            self.body_length_display.config(text="")
+            self.fps_display.config(text="")
+            self.calibration_summary.config(text="")
+            self.body_length_radio.config(state=tk.DISABLED)
+            self.custom_radio.config(state=tk.DISABLED)
+            self.no_calibration_radio.config(state=tk.DISABLED)
+            self.fps_entry.config(state=tk.DISABLED)
+            return
+
+        loaded_file = self.loaded_files[self.active_file]
+        metadata = loaded_file.metadata
+
+        self.calibration_info_label.config(text=f"Configuring calibration for: {self.active_file}", fg="black")
+        self.body_length_radio.config(state=tk.NORMAL)
+        self.custom_radio.config(state=tk.NORMAL)
+        self.no_calibration_radio.config(state=tk.NORMAL)
+        self.fps_entry.config(state=tk.NORMAL)
+
+        self.body_length_display.config(text=f"  (Body length from file: {metadata.body_length:.2f} pixels)")
+        self.fps_var.set(f"{metadata.frames_per_second:.2f}")
+        self.fps_display.config(text=f"(from file: {metadata.frames_per_second:.2f} fps)")
+
+        current_cal = loaded_file.calibration
+        summary_text = (f"Current calibration: {current_cal.unit_name}\n"
+                       f"  {current_cal.pixels_per_unit:.2f} pixels per {current_cal.unit_name}")
+        self.calibration_summary.config(text=summary_text)
+        self.rest_unit_label.config(text=f"{current_cal.unit_name}/s")
+
+    def _apply_calibration(self):
+        """Apply calibration settings to the active file."""
+        if self.active_file is None or self.active_file not in self.loaded_files:
+            messagebox.showerror("Error", "No active file selected")
+            return
+
+        loaded_file = self.loaded_files[self.active_file]
+        method = self.calibration_method.get()
+
+        try:
+            frame_rate = float(self.fps_var.get())
+            if frame_rate <= 0:
+                raise ValueError("Frame rate must be positive")
+        except ValueError as e:
+            messagebox.showerror("Invalid Frame Rate", f"Please enter a valid frame rate: {e}")
+            return
+
+        try:
+            if method == "body_length":
+                calibration = CalibrationSettings.from_body_lengths(
+                    body_length_pixels=loaded_file.metadata.body_length, frame_rate=frame_rate)
+            elif method == "custom":
+                pixels = float(self.pixels_var.get())
+                units = float(self.units_var.get())
+                unit_name = self.unit_name_var.get().strip()
+                if pixels <= 0 or units <= 0:
+                    raise ValueError("Pixel and unit values must be positive")
+                if not unit_name:
+                    raise ValueError("Please specify a unit name")
+                pixels_per_unit = pixels / units
+                calibration = CalibrationSettings.from_physical_measurement(
+                    pixels_per_unit=pixels_per_unit, unit_name=unit_name, frame_rate=frame_rate)
+            elif method == "none":
+                calibration = CalibrationSettings.no_calibration(frame_rate)
+            else:
+                return
+
+            loaded_file.calibration = calibration
+            self._update_calibration_display()
+            messagebox.showinfo("Calibration Applied", f"Applied:\n\n{calibration}")
+        except Exception as e:
+            messagebox.showerror("Calibration Error", f"Failed:\n\n{e}")
+
+    def _apply_calibration_to_all(self):
+        """Apply calibration settings to all loaded files."""
+        if not self.loaded_files:
+            messagebox.showerror("No Files", "Please load at least one file first.")
+            return
+
+        file_count = len(self.loaded_files)
+        if not messagebox.askyesno("Apply to All?", f"Apply calibration to all {file_count} file(s)?"):
+            return
+
+        method = self.calibration_method.get()
+
+        try:
+            frame_rate = float(self.fps_var.get())
+            if frame_rate <= 0:
+                raise ValueError("Frame rate must be positive")
+        except ValueError as e:
+            messagebox.showerror("Invalid Frame Rate", str(e))
+            return
+
+        try:
+            for loaded_file in self.loaded_files.values():
+                if method == "body_length":
+                    calibration = CalibrationSettings.from_body_lengths(
+                        body_length_pixels=loaded_file.metadata.body_length, frame_rate=frame_rate)
+                elif method == "custom":
+                    pixels = float(self.pixels_var.get())
+                    units = float(self.units_var.get())
+                    unit_name = self.unit_name_var.get().strip()
+                    pixels_per_unit = pixels / units
+                    calibration = CalibrationSettings.from_physical_measurement(
+                        pixels_per_unit=pixels_per_unit, unit_name=unit_name, frame_rate=frame_rate)
+                elif method == "none":
+                    calibration = CalibrationSettings.no_calibration(frame_rate)
+                loaded_file.calibration = calibration
+
+            self._update_calibration_display()
+            messagebox.showinfo("Done", f"Applied calibration to {file_count} file(s).")
+        except Exception as e:
+            messagebox.showerror("Error", str(e))
+
+    def _run_analysis_and_switch_tab(self):
+        """Run analysis and switch to the results tab."""
+        self._run_analysis()
+        self.notebook.select(1)
+
+    def _run_analysis(self):
+        """Run individual trajectory analysis on all loaded files."""
+        if not self.loaded_files:
+            messagebox.showerror("No Files", "Please load at least one trajectory file.")
+            return
+
+        try:
+            params = self._get_processing_parameters_from_gui()
+        except ValueError as e:
+            messagebox.showerror("Invalid Parameters", str(e))
+            return
+
+        self.analysis_summary_text.delete("1.0", tk.END)
+        self.analysis_summary_text.insert("1.0", f"Processing {len(self.loaded_files)} file(s)...\n\n")
+        self.root.update()
+
+        try:
+            for nickname, loaded_file in self.loaded_files.items():
+                self.analysis_summary_text.insert(tk.END, f"Processing: {nickname}...\n")
+                self.root.update()
+
+                fish_list = process_and_analyze_file(loaded_file, params)
+                loaded_file.processed_data = fish_list
+
+                self.analysis_summary_text.insert(tk.END,
+                    f"  [OK] Analyzed {len(fish_list)}/{loaded_file.n_fish} fish\n")
+                self.root.update()
+
+            # Update file lists and auto-select all
+            self._update_analysis_files_listbox()
+            for i in range(self.analysis_files_listbox.size()):
+                self.analysis_files_listbox.selection_set(i)
+
+            self._update_analysis_visualizations()
+
+            messagebox.showinfo("Complete", f"Processed {len(self.loaded_files)} file(s).\n"
+                              "View results in the Individual Analysis tab.")
+        except Exception as e:
+            self.analysis_summary_text.delete("1.0", tk.END)
+            self.analysis_summary_text.insert("1.0", f"Error: {str(e)}")
+            import traceback
+            traceback.print_exc()
+
+    def _get_processing_parameters_from_gui(self) -> ProcessingParameters:
+        """Read processing parameters from the GUI inputs."""
+        apply_smoothing = self.apply_smoothing_var.get()
+        smoothing_window = int(self.smoothing_window_var.get())
+        turn_lag = int(self.turn_lag_var.get())
+        rest_threshold = float(self.rest_threshold_var.get())
+
+        params = ProcessingParameters(
+            apply_smoothing=apply_smoothing,
+            smoothing_window=smoothing_window,
+            smoothing_polynomial_order=3,
+            min_valid_points=1,
+            min_valid_percentage=0.01,
+            turn_angle_lag=turn_lag,
+            rest_speed_threshold=rest_threshold
+        )
+        params.validate()
+        return params
+
+    # =========================================================================
+    # INDIVIDUAL ANALYSIS VISUALIZATION METHODS
+    # =========================================================================
+
+    def _update_analysis_visualizations(self):
+        """Update all individual analysis visualizations for selected files."""
+        selected_indices = self.analysis_files_listbox.curselection()
+
+        if not selected_indices:
+            messagebox.showinfo("No Selection", "Please select one or more files to visualize.")
+            return
+
+        file_keys = list(self.loaded_files.keys())
+        selected_files = [file_keys[i] for i in selected_indices]
+
+        # Check if files have been analyzed
+        for filename in selected_files:
+            loaded_file = self.loaded_files[filename]
+            if not loaded_file.processed_data:
+                messagebox.showwarning("Not Analyzed",
+                                      f"'{filename}' has not been analyzed yet.\n"
+                                      "Please run 'Analyze All Files' first.")
+                return
+
+        # Update all visualizations
+        self._update_analysis_summary(selected_files)
+        self._plot_speed_timeseries(selected_files)
+        self._plot_speed_distribution(selected_files)
+        self._plot_distance_comparison(selected_files)
+        self._plot_trajectory_view(selected_files)
+
+    def _update_analysis_summary(self, selected_files: List[str]):
+        """Update the text summary of individual analysis."""
+        self.analysis_summary_text.delete("1.0", tk.END)
+
+        lines = []
+        lines.append("=" * 90)
+        lines.append("INDIVIDUAL TRAJECTORY ANALYSIS")
+        lines.append("=" * 90)
+        lines.append("")
+
+        # Comparison table
+        lines.append("COMPARISON TABLE (File Averages):")
+        lines.append("-" * 90)
+        lines.append(f"{'File':<18} {'Fish':<5} {'Distance':<12} {'Mean Speed':<12} {'Max Speed':<12} {'Sinuosity':<10}")
+        lines.append("-" * 90)
+
+        all_file_data = []
+
+        for filename in selected_files:
+            loaded_file = self.loaded_files[filename]
+            fish_list = loaded_file.processed_data
+            unit = loaded_file.calibration.unit_name
+
+            if not fish_list:
+                continue
+
+            distances = [f.metrics.get('total_distance', np.nan) for f in fish_list]
+            mean_speeds = [f.metrics.get('mean_speed', np.nan) for f in fish_list]
+            max_speeds = [f.metrics.get('max_speed', np.nan) for f in fish_list]
+            sinuosities = [f.metrics.get('sinuosity', np.nan) for f in fish_list]
+
+            avg_distance = np.nanmean(distances)
+            avg_mean_speed = np.nanmean(mean_speeds)
+            avg_max_speed = np.nanmean(max_speeds)
+            avg_sinuosity = np.nanmean(sinuosities)
+
+            short_name = filename[:17] if len(filename) > 17 else filename
+            lines.append(
+                f"{short_name:<18} {len(fish_list):<5} "
+                f"{avg_distance:<12.1f} {avg_mean_speed:<12.2f} "
+                f"{avg_max_speed:<12.2f} {avg_sinuosity:<10.2f}"
+            )
+
+            all_file_data.append({
+                'filename': filename, 'fish_list': fish_list, 'unit': unit
+            })
+
+        lines.append("-" * 90)
+        lines.append("")
+
+        # Detailed per-fish results
+        lines.append("=" * 90)
+        lines.append("DETAILED RESULTS BY FILE")
+        lines.append("=" * 90)
+
+        for data in all_file_data:
+            filename = data['filename']
+            fish_list = data['fish_list']
+            unit = data['unit']
+            loaded_file = self.loaded_files[filename]
+
+            lines.append("")
+            lines.append(f"FILE: {filename}")
+            lines.append(f"Duration: {loaded_file.duration_minutes:.1f} min | Units: {unit} | Fish: {len(fish_list)}")
+            lines.append("-" * 60)
+
+            for fish in fish_list:
+                m = fish.metrics
+                lines.append(f"  Fish {fish.fish_id} ({fish.identity_label}):")
+                lines.append(f"    Data quality: {fish.valid_percentage:.1%} valid frames")
+                lines.append(f"    Total distance:  {m.get('total_distance', np.nan):.1f} {unit}")
+                lines.append(f"    Mean speed:      {m.get('mean_speed', np.nan):.2f} {unit}/s")
+                lines.append(f"    Sinuosity:       {m.get('sinuosity', np.nan):.2f}")
+                lines.append("")
+
+        self.analysis_summary_text.insert("1.0", "\n".join(lines))
+
+    def _plot_speed_timeseries(self, selected_files: List[str]):
+        """Plot speed over time for selected files."""
+        for widget in self.speed_timeseries_frame.winfo_children():
+            widget.destroy()
+
+        fig = Figure(figsize=(10, 6), dpi=100)
+        ax = fig.add_subplot(111)
+
+        try:
+            smooth_seconds = float(self.analysis_smooth_var.get())
+        except:
+            smooth_seconds = 2.0
+
+        show_individual = self.show_individual_fish_var.get()
+        show_average = self.show_file_average_var.get()
+
+        file_colors = plt.cm.tab10(np.linspace(0, 1, len(selected_files)))
+
+        for file_idx, filename in enumerate(selected_files):
+            loaded_file = self.loaded_files[filename]
+            fish_list = loaded_file.processed_data
+            file_color = file_colors[file_idx]
+            frame_rate = loaded_file.calibration.frame_rate
+            unit = loaded_file.calibration.unit_name
+
+            all_speeds = []
+            all_times = []
+
+            for fish in fish_list:
+                speed_data = fish.metrics.get('speed_time_series')
+                if speed_data is None:
+                    continue
+
+                time = speed_data['time'].copy()
+                speed = speed_data['speed'].copy()
+
+                valid_mask = ~np.isnan(speed)
+                time = time[valid_mask]
+                speed = speed[valid_mask]
+
+                if len(speed) == 0:
+                    continue
+
+                # Apply smoothing to individual fish data
+                if smooth_seconds > 0 and len(speed) > 1:
+                    speed = smooth_time_series(speed, smooth_seconds, frame_rate)
+
+                time_minutes = time / 60.0
+                all_speeds.append(speed)
+                all_times.append(time_minutes)
+
+                if show_individual:
+                    ax.plot(time_minutes, speed, color=file_color, linewidth=0.8, alpha=0.4)
+
+            if show_average and all_speeds:
+                min_time = min(t.min() for t in all_times)
+                max_time = max(t.max() for t in all_times)
+                common_time = np.linspace(min_time, max_time, 1000)
+
+                interpolated_speeds = []
+                for t, s in zip(all_times, all_speeds):
+                    interp_speed = np.interp(common_time, t, s)
+                    interpolated_speeds.append(interp_speed)
+
+                avg_speed = np.nanmean(interpolated_speeds, axis=0)
+                ax.plot(common_time, avg_speed, color=file_color, linewidth=2.5, label=f'{filename}', alpha=0.9)
+
+        ax.set_xlabel('Time (minutes)', fontsize=12)
+        ax.set_ylabel(f'Speed ({unit}/s)', fontsize=12)
+        ax.set_title('Swimming Speed Over Time', fontsize=14, fontweight='bold')
+        ax.legend(loc='best', fontsize=9)
+        ax.grid(True, alpha=0.3)
+        ax.set_ylim(bottom=0)
+        fig.tight_layout()
+
+        canvas = FigureCanvasTkAgg(fig, master=self.speed_timeseries_frame)
+        canvas.draw()
+        canvas.get_tk_widget().pack(fill="both", expand=True)
+
+    def _plot_speed_distribution(self, selected_files: List[str]):
+        """Plot speed distribution histograms with shared axes for comparison."""
+        for widget in self.speed_distribution_frame.winfo_children():
+            widget.destroy()
+
+        try:
+            n_bins = int(self.histogram_bins_var.get())
+        except:
+            n_bins = 30
+
+        # Collect all speed data
+        fish_info = []
+        file_colors = plt.cm.tab10(np.linspace(0, 1, len(selected_files)))
+
+        for file_idx, filename in enumerate(selected_files):
+            loaded_file = self.loaded_files[filename]
+            fish_list = loaded_file.processed_data
+            file_color = file_colors[file_idx]
+            unit = loaded_file.calibration.unit_name
+
+            for fish in fish_list:
+                speed_data = fish.metrics.get('speed_time_series')
+                if speed_data is None:
+                    continue
+                speed = speed_data['speed']
+                speed = speed[~np.isnan(speed)]
+                if len(speed) == 0:
+                    continue
+                fish_info.append((filename, fish, speed, file_color, unit))
+
+        if not fish_info:
+            return
+
+        # Calculate global x-axis limits (speed range) across ALL fish
+        all_speeds_combined = np.concatenate([info[2] for info in fish_info])
+        global_x_min = 0  # Speed shouldn't be negative
+        global_x_max = np.percentile(all_speeds_combined, 99.5)  # Use 99.5th percentile to avoid outliers
+        
+        # Create histograms with same bins for all fish to enable y-axis comparison
+        global_bins = np.linspace(global_x_min, global_x_max, n_bins + 1)
+        
+        # Pre-compute all histograms to find global y-axis max
+        all_hist_counts = []
+        for filename, fish, speed, file_color, unit in fish_info:
+            counts, _ = np.histogram(speed, bins=global_bins)
+            all_hist_counts.append(counts)
+        
+        global_y_max = max(counts.max() for counts in all_hist_counts) * 1.1  # Add 10% headroom
+
+        # Determine grid size
+        total_fish = len(fish_info)
+        n_cols = min(3, total_fish)
+        n_rows = (total_fish + n_cols - 1) // n_cols
+
+        fig = Figure(figsize=(4 * n_cols, 3 * n_rows), dpi=100)
+
+        for plot_idx, (filename, fish, speed, file_color, unit) in enumerate(fish_info):
+            ax = fig.add_subplot(n_rows, n_cols, plot_idx + 1)
+            
+            # Use the pre-computed global bins for consistent comparison
+            ax.hist(speed, bins=global_bins, color=file_color, alpha=0.7, edgecolor='black', linewidth=0.5)
+
+            mean_speed = np.mean(speed)
+            ax.axvline(mean_speed, color='red', linestyle='--', linewidth=1.5, label=f'Mean: {mean_speed:.2f}')
+
+            ax.set_xlabel(f'Speed ({unit}/s)', fontsize=9)
+            ax.set_ylabel('Count', fontsize=9)
+            
+            # Apply shared axis limits
+            ax.set_xlim(global_x_min, global_x_max)
+            ax.set_ylim(0, global_y_max)
+
+            short_name = filename[:8] if len(filename) > 8 else filename
+            ax.set_title(f'{short_name} - Fish {fish.fish_id}', fontsize=10)
+            ax.legend(fontsize=7, loc='upper right')
+
+        fig.tight_layout()
+
+        canvas = FigureCanvasTkAgg(fig, master=self.speed_distribution_frame)
+        canvas.draw()
+        canvas.get_tk_widget().pack(fill="both", expand=True)
+
+    def _plot_distance_comparison(self, selected_files: List[str]):
+        """Plot distance and sinuosity comparison as bar charts."""
+        for widget in self.distance_comparison_frame.winfo_children():
+            widget.destroy()
+
+        fig = Figure(figsize=(12, 5), dpi=100)
+
+        file_names = []
+        avg_distances = []
+        avg_sinuosities = []
+        units = []
+
+        for filename in selected_files:
+            loaded_file = self.loaded_files[filename]
+            fish_list = loaded_file.processed_data
+            unit = loaded_file.calibration.unit_name
+
+            distances = [f.metrics.get('total_distance', np.nan) for f in fish_list]
+            sinuosities = [f.metrics.get('sinuosity', np.nan) for f in fish_list]
+
+            file_names.append(filename[:15] if len(filename) > 15 else filename)
+            avg_distances.append(np.nanmean(distances))
+            avg_sinuosities.append(np.nanmean(sinuosities))
+            units.append(unit)
+
+        x = np.arange(len(file_names))
+        colors = plt.cm.tab10(np.linspace(0, 1, len(file_names)))
+
+        ax1 = fig.add_subplot(1, 2, 1)
+        ax1.bar(x, avg_distances, color=colors, edgecolor='black')
+        ax1.set_xlabel('File', fontsize=12)
+        ax1.set_ylabel(f'Total Distance ({units[0] if units else "units"})', fontsize=12)
+        ax1.set_title('Total Distance Traveled', fontsize=14, fontweight='bold')
+        ax1.set_xticks(x)
+        ax1.set_xticklabels(file_names, rotation=45, ha='right')
+
+        ax2 = fig.add_subplot(1, 2, 2)
+        ax2.bar(x, avg_sinuosities, color=colors, edgecolor='black')
+        ax2.set_xlabel('File', fontsize=12)
+        ax2.set_ylabel('Sinuosity', fontsize=12)
+        ax2.set_title('Path Sinuosity', fontsize=14, fontweight='bold')
+        ax2.set_xticks(x)
+        ax2.set_xticklabels(file_names, rotation=45, ha='right')
+        ax2.axhline(y=1.0, color='gray', linestyle='--', alpha=0.5)
+
+        fig.tight_layout()
+
+        canvas = FigureCanvasTkAgg(fig, master=self.distance_comparison_frame)
+        canvas.draw()
+        canvas.get_tk_widget().pack(fill="both", expand=True)
+
+    def _refresh_trajectory_view(self):
+        """Refresh trajectory view."""
+        selected_indices = self.analysis_files_listbox.curselection()
+        if not selected_indices:
+            return
+        file_keys = list(self.loaded_files.keys())
+        selected_files = [file_keys[i] for i in selected_indices]
+        self._plot_trajectory_view(selected_files)
+
+    def _plot_trajectory_view(self, selected_files: List[str]):
+        """Plot spatial trajectories."""
+        for widget in self.trajectory_view_frame.winfo_children():
+            widget.destroy()
+
+        n_files = len(selected_files)
+        if n_files == 0:
+            return
+
+        view_mode = self.trajectory_view_mode_var.get()
+
+        if view_mode == "spaghetti":
+            n_cols = min(2, n_files)
+            n_rows = (n_files + n_cols - 1) // n_cols
+            fig = Figure(figsize=(6 * n_cols, 5 * n_rows), dpi=100)
+
+            for plot_idx, filename in enumerate(selected_files):
+                ax = fig.add_subplot(n_rows, n_cols, plot_idx + 1)
+
+                loaded_file = self.loaded_files[filename]
+                fish_list = loaded_file.processed_data
+                unit = loaded_file.calibration.unit_name
+
+                colors = plt.cm.tab10(np.linspace(0, 1, len(fish_list)))
+
+                for fish, color in zip(fish_list, colors):
+                    x = fish.trajectory['x'].values
+                    y = fish.trajectory['y'].values
+                    ax.plot(x, y, color=color, linewidth=0.8, alpha=0.7, label=f'Fish {fish.fish_id}')
+
+                ax.set_xlabel(f'X ({unit})', fontsize=10)
+                ax.set_ylabel(f'Y ({unit})', fontsize=10)
+                ax.set_title(f'{filename}', fontsize=12, fontweight='bold')
+                ax.set_aspect('equal')
+                ax.legend(loc='upper right', fontsize=8)
+                ax.grid(True, alpha=0.3)
+
+            fig.tight_layout()
+        else:
+            all_fish_data = []
+            for filename in selected_files:
+                loaded_file = self.loaded_files[filename]
+                if loaded_file.processed_data:
+                    for fish in loaded_file.processed_data:
+                        all_fish_data.append((filename, loaded_file, fish))
+
+            if not all_fish_data:
+                return
+
+            n_fish_total = len(all_fish_data)
+            n_cols = min(4, n_fish_total)
+            n_rows = (n_fish_total + n_cols - 1) // n_cols
+
+            fig = Figure(figsize=(3.5 * n_cols, 3 * n_rows), dpi=100)
+
+            for plot_idx, (filename, loaded_file, fish) in enumerate(all_fish_data):
+                ax = fig.add_subplot(n_rows, n_cols, plot_idx + 1)
+                unit = loaded_file.calibration.unit_name
+
+                x = fish.trajectory['x'].values
+                y = fish.trajectory['y'].values
+
+                file_idx = selected_files.index(filename)
+                file_color = plt.cm.tab10(file_idx / max(1, len(selected_files) - 1))
+
+                ax.plot(x, y, color=file_color, linewidth=0.6, alpha=0.6)
+
+                short_name = filename[:8] if len(filename) > 8 else filename
+                ax.set_title(f'{short_name} - Fish {fish.fish_id}', fontsize=9)
+                ax.set_aspect('equal')
+                ax.tick_params(labelsize=7)
+                ax.grid(True, alpha=0.3)
+
+            fig.tight_layout()
+
+        canvas = FigureCanvasTkAgg(fig, master=self.trajectory_view_frame)
+        canvas.draw()
+        canvas.get_tk_widget().pack(fill="both", expand=True)
+
+    # =========================================================================
+    # SHOALING ANALYSIS METHODS
+    # =========================================================================
+
+    def _run_shoaling_analysis(self):
+        """Run shoaling analysis on selected files."""
+        selected_indices = self.shoaling_files_listbox.curselection()
+        if not selected_indices:
+            messagebox.showerror("No Files Selected", "Please select one or more files.")
+            return
+
+        file_keys = list(self.loaded_files.keys())
+        selected_files = [file_keys[i] for i in selected_indices]
+
+        try:
+            sample_interval = int(self.shoaling_interval_var.get())
+            smooth_window = float(self.shoaling_smooth_var.get())
+            params = ShoalingParameters(
+                sample_interval_frames=sample_interval,
+                smoothing_window_seconds=smooth_window
+            )
+            params.validate()
+            self.shoaling_params = params
+        except ValueError as e:
+            messagebox.showerror("Invalid Parameters", f"Check parameters:\n{e}")
+            return
+
+        all_results = {}
+        for filename in selected_files:
+            loaded_file = self.loaded_files[filename]
+            try:
+                calculator = ShoalingCalculator(loaded_file, params)
+                results = calculator.calculate()
+                loaded_file.shoaling_results = results
+                all_results[filename] = results
+            except Exception as e:
+                messagebox.showwarning("Analysis Warning", f"Failed '{filename}':\n{e}")
+                import traceback
+                traceback.print_exc()
+
+        if not all_results:
+            messagebox.showerror("Analysis Failed", "Could not analyze any files.")
+            return
+
+        self._display_shoaling_comparison(all_results)
+        self._plot_nnd_comparison(all_results)
+        self._plot_iid_comparison(all_results)
+        self._plot_hull_comparison(all_results)
+
+        # Update visualization dropdown
+        self.viz_shoaling_file_dropdown['values'] = list(all_results.keys())
+        if all_results:
+            self.viz_shoaling_file_dropdown.current(0)
+            self._on_viz_shoaling_file_selected()
+
+        messagebox.showinfo("Analysis Complete", f"Shoaling analysis complete for {len(all_results)} file(s).")
+
+    def _display_shoaling_comparison(self, all_results: Dict[str, ShoalingResults]):
+        """Display comparison of shoaling results."""
+        self.shoaling_results_text.delete("1.0", tk.END)
+
+        lines = ["=" * 90, "SHOALING ANALYSIS COMPARISON", "=" * 90, ""]
+
+        lines.append("SUMMARY COMPARISON:")
+        lines.append("-" * 90)
+        lines.append(f"{'File':<20} {'Fish':<6} {'Mean NND':<12} {'Mean IID':<12} {'Mean Hull':<14} {'Complete %':<12}")
+        lines.append("-" * 90)
+
+        for filename, results in all_results.items():
+            short_name = filename[:19] if len(filename) > 19 else filename
+            lines.append(
+                f"{short_name:<20} {results.n_fish:<6} {results.mean_nnd:<12.3f} "
+                f"{results.mean_iid:<12.3f} {results.mean_hull_area:<14.2f} "
+                f"{results.completeness_percentage:<12.1f}"
+            )
+
+        lines.append("-" * 90)
+        lines.append("")
+
+        for filename, results in all_results.items():
+            lines.append(f"\nFILE: {filename}")
+            lines.append(results.summary())
+
+        self.shoaling_results_text.insert("1.0", "\n".join(lines))
+
+    def _plot_nnd_comparison(self, all_results: Dict[str, ShoalingResults]):
+        """Plot NND time series with smoothing."""
+        for widget in self.shoaling_nnd_plot_frame.winfo_children():
+            widget.destroy()
+
+        fig = Figure(figsize=(10, 6), dpi=100)
+        ax = fig.add_subplot(111)
+        colors = plt.cm.tab10(np.linspace(0, 1, len(all_results)))
+
+        # Get smoothing parameter
+        try:
+            smooth_seconds = float(self.shoaling_smooth_var.get())
+        except:
+            smooth_seconds = 5.0
+
+        for (filename, results), color in zip(all_results.items(), colors):
+            time_minutes = results.timestamps / 60.0
+            nnd_data = results.mean_nnd_per_sample.copy()
+            
+            # Apply smoothing
+            if smooth_seconds > 0 and len(nnd_data) > 1:
+                # Calculate effective frame rate for the sampled data
+                effective_fps = 1.0 / (results.sample_interval_frames / results.frame_rate)
+                nnd_data = smooth_time_series(nnd_data, smooth_seconds, effective_fps)
+            
+            ax.plot(time_minutes, nnd_data, color=color, linewidth=2,
+                   label=f'{filename} ({results.mean_nnd:.2f} BL)', alpha=0.9)
+
+        ax.set_xlabel('Time (minutes)', fontsize=12)
+        ax.set_ylabel('Mean Nearest Neighbor Distance (BL)', fontsize=12)
+        ax.set_title('NND Comparison Over Time', fontsize=14, fontweight='bold')
+        ax.legend(loc='best', fontsize=9)
+        ax.grid(True, alpha=0.3)
+        ax.set_ylim(bottom=0)
+        fig.tight_layout()
+
+        canvas = FigureCanvasTkAgg(fig, master=self.shoaling_nnd_plot_frame)
+        canvas.draw()
+        canvas.get_tk_widget().pack(fill="both", expand=True)
+
+    def _plot_iid_comparison(self, all_results: Dict[str, ShoalingResults]):
+        """Plot IID time series with smoothing."""
+        for widget in self.shoaling_iid_plot_frame.winfo_children():
+            widget.destroy()
+
+        fig = Figure(figsize=(10, 6), dpi=100)
+        ax = fig.add_subplot(111)
+        colors = plt.cm.tab10(np.linspace(0, 1, len(all_results)))
+
+        # Get smoothing parameter
+        try:
+            smooth_seconds = float(self.shoaling_smooth_var.get())
+        except:
+            smooth_seconds = 5.0
+
+        for (filename, results), color in zip(all_results.items(), colors):
+            time_minutes = results.timestamps / 60.0
+            iid_data = results.mean_iid_per_sample.copy()
+            
+            # Apply smoothing
+            if smooth_seconds > 0 and len(iid_data) > 1:
+                # Calculate effective frame rate for the sampled data
+                effective_fps = 1.0 / (results.sample_interval_frames / results.frame_rate)
+                iid_data = smooth_time_series(iid_data, smooth_seconds, effective_fps)
+            
+            ax.plot(time_minutes, iid_data, color=color, linewidth=2,
+                   label=f'{filename} ({results.mean_iid:.2f} BL)', alpha=0.9)
+
+        ax.set_xlabel('Time (minutes)', fontsize=12)
+        ax.set_ylabel('Mean Inter-Individual Distance (BL)', fontsize=12)
+        ax.set_title('IID (Group Cohesion) Over Time', fontsize=14, fontweight='bold')
+        ax.legend(loc='best', fontsize=9)
+        ax.grid(True, alpha=0.3)
+        ax.set_ylim(bottom=0)
+        fig.tight_layout()
+
+        canvas = FigureCanvasTkAgg(fig, master=self.shoaling_iid_plot_frame)
+        canvas.draw()
+        canvas.get_tk_widget().pack(fill="both", expand=True)
+
+    def _plot_hull_comparison(self, all_results: Dict[str, ShoalingResults]):
+        """Plot hull area time series with smoothing."""
+        for widget in self.shoaling_hull_plot_frame.winfo_children():
+            widget.destroy()
+
+        fig = Figure(figsize=(10, 6), dpi=100)
+        ax = fig.add_subplot(111)
+        colors = plt.cm.tab10(np.linspace(0, 1, len(all_results)))
+
+        # Get smoothing parameter
+        try:
+            smooth_seconds = float(self.shoaling_smooth_var.get())
+        except:
+            smooth_seconds = 5.0
+
+        for (filename, results), color in zip(all_results.items(), colors):
+            time_minutes = results.timestamps / 60.0
+            hull_data = results.convex_hull_area_per_sample.copy()
+            
+            # Apply smoothing
+            if smooth_seconds > 0 and len(hull_data) > 1:
+                # Calculate effective frame rate for the sampled data
+                effective_fps = 1.0 / (results.sample_interval_frames / results.frame_rate)
+                hull_data = smooth_time_series(hull_data, smooth_seconds, effective_fps)
+            
+            ax.plot(time_minutes, hull_data, color=color, linewidth=2,
+                   label=f'{filename} ({results.mean_hull_area:.1f} BL^2)', alpha=0.9)
+
+        ax.set_xlabel('Time (minutes)', fontsize=12)
+        ax.set_ylabel('Convex Hull Area (BL^2)', fontsize=12)
+        ax.set_title('Group Spread Over Time', fontsize=14, fontweight='bold')
+        ax.legend(loc='best', fontsize=9)
+        ax.grid(True, alpha=0.3)
+        ax.set_ylim(bottom=0)
+        fig.tight_layout()
+
+        canvas = FigureCanvasTkAgg(fig, master=self.shoaling_hull_plot_frame)
+        canvas.draw()
+        canvas.get_tk_widget().pack(fill="both", expand=True)
+
+    # =========================================================================
+    # FRAME SCRUBBER METHODS
+    # =========================================================================
+
+    def _on_viz_shoaling_file_selected(self, event=None):
+        """Update slider range when file is selected."""
+        selected_file = self.viz_shoaling_file_var.get()
+        if not selected_file or selected_file not in self.loaded_files:
+            return
+
+        loaded_file = self.loaded_files[selected_file]
+
+        # Update focus fish dropdown
+        fish_options = [str(i) for i in range(loaded_file.n_fish)]
+        self.iid_focus_fish_dropdown['values'] = fish_options
+        if fish_options:
+            self.iid_focus_fish_dropdown.current(0)
+
+        if loaded_file.shoaling_results is None:
+            self.frame_slider.configure(to=0)
+            self.frame_info_label.config(text="Analysis not yet run for this file")
+            return
+
+        results = loaded_file.shoaling_results
+        max_sample = results.n_samples_used - 1
+        self.frame_slider.configure(to=max_sample)
+        self.frame_slider_var.set(0)
+        self._update_frame_info()
+        self.frame_view_fig = None
+
+    def _on_slider_change(self, value):
+        """Called when slider value changes."""
+        self._update_frame_info()
+        self._update_frame_view_fast()
+
+    def _update_frame_info(self):
+        """Update the frame info label."""
+        selected_file = self.viz_shoaling_file_var.get()
+        if not selected_file or selected_file not in self.loaded_files:
+            return
+
+        loaded_file = self.loaded_files[selected_file]
+        if loaded_file.shoaling_results is None:
+            return
+
+        results = loaded_file.shoaling_results
+        sample_idx = self.frame_slider_var.get()
+
+        if sample_idx < len(results.frame_indices):
+            frame_num = int(results.frame_indices[sample_idx])
+            time_sec = results.timestamps[sample_idx]
+            nnd_val = results.mean_nnd_per_sample[sample_idx]
+            iid_val = results.mean_iid_per_sample[sample_idx]
+            hull_val = results.convex_hull_area_per_sample[sample_idx]
+
+            self.frame_info_label.config(
+                text=f"Frame: {frame_num} | Time: {time_sec:.1f}s | "
+                     f"NND: {nnd_val:.2f} | IID: {iid_val:.2f} | Hull: {hull_val:.1f}"
+            )
+
+            self.jump_frame_var.set(str(frame_num))
+            self.jump_time_var.set(f"{time_sec:.1f}")
+
+    def _jump_to_frame(self, event=None):
+        self._jump_to_input()
+
+    def _jump_to_time(self, event=None):
+        self._jump_to_input()
+
+    def _jump_to_input(self):
+        """Jump to frame or time based on input."""
+        selected_file = self.viz_shoaling_file_var.get()
+        if not selected_file or selected_file not in self.loaded_files:
+            return
+
+        loaded_file = self.loaded_files[selected_file]
+        if loaded_file.shoaling_results is None:
+            return
+
+        results = loaded_file.shoaling_results
+        frame_str = self.jump_frame_var.get().strip()
+        time_str = self.jump_time_var.get().strip()
+
+        target_sample = None
+
+        if frame_str:
+            try:
+                target_frame = int(frame_str)
+                differences = np.abs(results.frame_indices - target_frame)
+                target_sample = int(np.argmin(differences))
+            except ValueError:
+                pass
+
+        if target_sample is None and time_str:
+            try:
+                target_time = float(time_str)
+                differences = np.abs(results.timestamps - target_time)
+                target_sample = int(np.argmin(differences))
+            except ValueError:
+                pass
+
+        if target_sample is not None:
+            target_sample = max(0, min(target_sample, results.n_samples_used - 1))
+            self.frame_slider_var.set(target_sample)
+            self._update_frame_info()
+            self._update_frame_view_fast()
+
+    def _toggle_playback(self):
+        """Toggle animation playback."""
+        if self.animation_running:
+            self._stop_playback()
+        else:
+            self._start_playback()
+
+    def _start_playback(self):
+        """Start animation."""
+        self.animation_running = True
+        self.play_button.config(text="|| Pause", bg="salmon")
+        self._animate_step()
+
+    def _stop_playback(self):
+        """Stop animation."""
+        self.animation_running = False
+        self.play_button.config(text="> Play", bg="lightblue")
+        if self.animation_after_id:
+            self.root.after_cancel(self.animation_after_id)
+            self.animation_after_id = None
+
+    def _animate_step(self):
+        """Advance one step in animation."""
+        if not self.animation_running:
+            return
+
+        current = self.frame_slider_var.get()
+        max_val = self.frame_slider.cget('to')
+
+        if current < max_val:
+            self.frame_slider_var.set(current + 1)
+        else:
+            self.frame_slider_var.set(0)
+
+        self._update_frame_info()
+        self._update_frame_view_fast()
+
+        # Calculate delay
+        delay_ms = 100
+        selected_file = self.viz_shoaling_file_var.get()
+        if selected_file and selected_file in self.loaded_files:
+            loaded_file = self.loaded_files[selected_file]
+            if loaded_file.shoaling_results:
+                results = loaded_file.shoaling_results
+                real_time_per_sample = results.sample_interval_frames / results.frame_rate
+
+                speed_str = self.playback_speed_var.get()
+                try:
+                    speed_mult = float(speed_str.replace('x', ''))
+                except:
+                    speed_mult = 1.0
+
+                delay_ms = max(16, int((real_time_per_sample / speed_mult) * 1000))
+
+        self.animation_after_id = self.root.after(delay_ms, self._animate_step)
+
+    def _update_frame_view_fast(self):
+        """Update frame visualization with cached background to reduce flickering."""
+        selected_file = self.viz_shoaling_file_var.get()
+        if not selected_file or selected_file not in self.loaded_files:
+            return
+
+        loaded_file = self.loaded_files[selected_file]
+        if loaded_file.shoaling_results is None:
+            return
+
+        results = loaded_file.shoaling_results
+        sample_idx = self.frame_slider_var.get()
+
+        if sample_idx >= len(results.frame_indices):
+            return
+
+        frame_idx = int(results.frame_indices[sample_idx])
+        viz_mode = self.viz_mode_var.get()
+
+        # Check if we need to rebuild the figure (first time or file changed)
+        rebuild_needed = (
+            self.frame_view_fig is None or
+            not hasattr(self, '_cached_file') or 
+            self._cached_file != selected_file or
+            not hasattr(self, '_cached_mode') or
+            self._cached_mode != viz_mode
+        )
+
+        if rebuild_needed:
+            # Clear and rebuild the entire figure
+            for widget in self.shoaling_frame_plot.winfo_children():
+                widget.destroy()
+
+            self.frame_view_fig = Figure(figsize=(10, 8), dpi=100)
+            self.frame_view_ax_main = self.frame_view_fig.add_axes([0.1, 0.25, 0.85, 0.7])
+            self.frame_view_ax_time = self.frame_view_fig.add_axes([0.1, 0.05, 0.85, 0.15])
+
+            # Calculate coordinate bounds
+            pixels_to_bl = 1.0 / loaded_file.metadata.body_length
+            width_bl = loaded_file.metadata.video_width * pixels_to_bl
+            height_bl = loaded_file.metadata.video_height * pixels_to_bl
+            self._cached_width_bl = width_bl
+            self._cached_height_bl = height_bl
+            self._cached_pixels_to_bl = pixels_to_bl
+
+            # Load and cache background image
+            self._cached_background = None
+            if loaded_file.background_image_path and loaded_file.background_image_path.exists():
+                try:
+                    self._cached_background = plt.imread(str(loaded_file.background_image_path))
+                except Exception as e:
+                    print(f"Failed to load background: {e}")
+
+            # Display background (only once)
+            if self._cached_background is not None:
+                if len(self._cached_background.shape) == 2:
+                    self.frame_view_ax_main.imshow(self._cached_background, 
+                        extent=[0, width_bl, 0, height_bl],
+                        aspect='equal', origin='upper', alpha=0.7, zorder=0, cmap='gray')
+                else:
+                    self.frame_view_ax_main.imshow(self._cached_background, 
+                        extent=[0, width_bl, 0, height_bl],
+                        aspect='equal', origin='upper', alpha=0.7, zorder=0)
+
+            # Set up main axis (static parts)
+            self.frame_view_ax_main.set_xlim(0, width_bl)
+            self.frame_view_ax_main.set_ylim(0, height_bl)
+            self.frame_view_ax_main.set_xlabel('X Position (BL)', fontsize=10)
+            self.frame_view_ax_main.set_ylabel('Y Position (BL)', fontsize=10)
+            self.frame_view_ax_main.set_aspect('equal')
+            if self._cached_background is None:
+                self.frame_view_ax_main.grid(True, alpha=0.3)
+
+            # Set up time series axis (static parts)
+            time_minutes = results.timestamps / 60.0
+            if viz_mode == 'nnd':
+                self.frame_view_ax_time.plot(time_minutes, results.mean_nnd_per_sample, 'b-', linewidth=1, alpha=0.7)
+                self.frame_view_ax_time.set_ylabel('NND (BL)', fontsize=8)
+            elif viz_mode == 'iid':
+                self.frame_view_ax_time.plot(time_minutes, results.mean_iid_per_sample, 'g-', linewidth=1, alpha=0.7)
+                self.frame_view_ax_time.set_ylabel('IID (BL)', fontsize=8)
+            else:
+                self.frame_view_ax_time.plot(time_minutes, results.convex_hull_area_per_sample, 'r-', linewidth=1, alpha=0.7)
+                self.frame_view_ax_time.set_ylabel('Hull (BL^2)', fontsize=8)
+            self.frame_view_ax_time.set_xlabel('Time (minutes)', fontsize=8)
+            self.frame_view_ax_time.set_xlim(time_minutes[0], time_minutes[-1])
+            self.frame_view_ax_time.grid(True, alpha=0.3)
+
+            # Create the time marker line (will be updated)
+            self.frame_view_time_marker = self.frame_view_ax_time.axvline(x=0, color='red', linewidth=2, linestyle='--')
+
+            # Create canvas
+            self.frame_view_canvas = FigureCanvasTkAgg(self.frame_view_fig, master=self.shoaling_frame_plot)
+            self.frame_view_canvas.get_tk_widget().pack(fill="both", expand=True)
+
+            # Cache state
+            self._cached_file = selected_file
+            self._cached_mode = viz_mode
+            self._dynamic_artists = []  # Track dynamic elements for removal
+
+        # Now update only the dynamic elements
+        ax_main = self.frame_view_ax_main
+        
+        # Remove previous dynamic artists
+        for artist in getattr(self, '_dynamic_artists', []):
+            try:
+                artist.remove()
+            except:
+                pass
+        self._dynamic_artists = []
+
+        # Get positions
+        params = ShoalingParameters(sample_interval_frames=1)
+        calculator = ShoalingCalculator(loaded_file, params)
+        positions_bl, is_complete = calculator.get_positions_at_frame(frame_idx)
+        n_fish = loaded_file.n_fish
+        colors = plt.cm.tab10(np.linspace(0, 1, n_fish))
+
+        # Draw visualization overlays based on mode
+        if viz_mode == 'nnd':
+            for i in range(n_fish):
+                if np.isnan(positions_bl[i, 0]):
+                    continue
+                min_dist = np.inf
+                nn_idx = -1
+                for j in range(n_fish):
+                    if i == j or np.isnan(positions_bl[j, 0]):
+                        continue
+                    dist = np.sqrt((positions_bl[i, 0] - positions_bl[j, 0])**2 + 
+                                  (positions_bl[i, 1] - positions_bl[j, 1])**2)
+                    if dist < min_dist:
+                        min_dist = dist
+                        nn_idx = j
+                if nn_idx >= 0:
+                    line, = ax_main.plot([positions_bl[i, 0], positions_bl[nn_idx, 0]],
+                               [positions_bl[i, 1], positions_bl[nn_idx, 1]],
+                               'b-', linewidth=1.5, alpha=0.5, zorder=2)
+                    self._dynamic_artists.append(line)
+                    # Add distance label
+                    mid_x = (positions_bl[i, 0] + positions_bl[nn_idx, 0]) / 2
+                    mid_y = (positions_bl[i, 1] + positions_bl[nn_idx, 1]) / 2
+                    txt = ax_main.text(mid_x, mid_y, f'{min_dist:.1f}', fontsize=7, 
+                                      color='blue', ha='center', va='center',
+                                      bbox=dict(boxstyle='round,pad=0.2', facecolor='white', alpha=0.7),
+                                      zorder=3)
+                    self._dynamic_artists.append(txt)
+                               
+        elif viz_mode == 'hull':
+            hull_vertices = calculator.get_convex_hull_vertices(frame_idx)
+            if hull_vertices is not None and len(hull_vertices) >= 3:
+                hull_closed = np.vstack([hull_vertices, hull_vertices[0]])
+                fill = ax_main.fill(hull_closed[:, 0], hull_closed[:, 1], 
+                           alpha=0.2, color='green', zorder=1)
+                self._dynamic_artists.extend(fill)
+                line, = ax_main.plot(hull_closed[:, 0], hull_closed[:, 1], 
+                           'g-', linewidth=2, alpha=0.7, zorder=2)
+                self._dynamic_artists.append(line)
+                           
+        elif viz_mode == 'iid':
+            try:
+                focus_fish = int(self.iid_focus_fish_var.get())
+            except:
+                focus_fish = 0
+            if focus_fish < n_fish and not np.isnan(positions_bl[focus_fish, 0]):
+                for j in range(n_fish):
+                    if j == focus_fish or np.isnan(positions_bl[j, 0]):
+                        continue
+                    dist = np.sqrt((positions_bl[focus_fish, 0] - positions_bl[j, 0])**2 + 
+                                  (positions_bl[focus_fish, 1] - positions_bl[j, 1])**2)
+                    line, = ax_main.plot([positions_bl[focus_fish, 0], positions_bl[j, 0]],
+                               [positions_bl[focus_fish, 1], positions_bl[j, 1]],
+                               'g-', linewidth=1.5, alpha=0.4, zorder=2)
+                    self._dynamic_artists.append(line)
+                    # Add distance label
+                    mid_x = (positions_bl[focus_fish, 0] + positions_bl[j, 0]) / 2
+                    mid_y = (positions_bl[focus_fish, 1] + positions_bl[j, 1]) / 2
+                    txt = ax_main.text(mid_x, mid_y, f'{dist:.1f}', fontsize=7, 
+                                      color='darkgreen', ha='center', va='center',
+                                      bbox=dict(boxstyle='round,pad=0.2', facecolor='white', alpha=0.7),
+                                      zorder=3)
+                    self._dynamic_artists.append(txt)
+
+        # Draw fish positions
+        for i in range(n_fish):
+            if not np.isnan(positions_bl[i, 0]):
+                scatter = ax_main.scatter(positions_bl[i, 0], positions_bl[i, 1],
+                              c=[colors[i]], s=200, edgecolors='black', linewidths=2, zorder=5)
+                self._dynamic_artists.append(scatter)
+                txt = ax_main.annotate(str(i), (positions_bl[i, 0], positions_bl[i, 1]),
+                               ha='center', va='center', fontsize=10, fontweight='bold',
+                               color='white', zorder=6)
+                self._dynamic_artists.append(txt)
+
+        # Update title
+        time_sec = results.timestamps[sample_idx]
+        ax_main.set_title(f'Frame {frame_idx} | {time_sec:.1f}s | {viz_mode.upper()}',
+                         fontsize=12, fontweight='bold')
+
+        # Update time marker
+        current_time_min = time_sec / 60.0
+        self.frame_view_time_marker.set_xdata([current_time_min, current_time_min])
+
+        # Redraw only the changed parts
+        self.frame_view_canvas.draw_idle()
+
+    # =========================================================================
+    # SPATIAL ANALYSIS METHODS (REDESIGNED)
+    # =========================================================================
+
+    def _on_spatial_file_selection_changed(self, event=None):
+        """Handle file selection change - load first selected file for arena editing."""
+        selection = self.spatial_files_listbox.curselection()
+        if not selection:
+            self.arena_edit_label.config(text="Select a file to edit arena", fg="gray")
+            self.current_arena_file = None
+            return
+        
+        # Get the first selected file for arena editing
+        file_keys = list(self.loaded_files.keys())
+        first_idx = selection[0]
+        first_file = file_keys[first_idx]
+        
+        self.current_arena_file = first_file
+        self.arena_edit_label.config(text=f"Editing: {first_file}", fg="blue")
+        
+        # Load this file's arena if it exists
+        if first_file in self.file_arena_definitions:
+            self.arena_definition = self.file_arena_definitions[first_file]
+            n_verts = len(self.arena_definition.vertices_bl)
+            self.arena_status_label.config(
+                text=f"Arena loaded ({n_verts} vertices) [âœ“]", fg="green"
+            )
+            # Reconstruct vertices for drawing
+            self.arena_vertices = [tuple(v) for v in self.arena_definition.vertices_bl]
+        else:
+            self.arena_definition = None
+            self.arena_vertices = []
+            self.arena_status_label.config(text="No arena defined for this file", fg="gray")
+        
+        # Setup canvas for this file
+        self._setup_arena_canvas_for_file(first_file)
+
+    def _on_spatial_file_selected(self, event=None):
+        """Handle file selection in spatial analysis tab (backward compatibility)."""
+        selected_file = self.spatial_file_var.get()
+        if not selected_file or selected_file not in self.loaded_files:
+            return
+        
+        self.current_arena_file = selected_file
+        loaded_file = self.loaded_files[selected_file]
+        self._setup_arena_canvas_for_file(selected_file)
+        
+        # Load existing arena if available
+        if selected_file in self.file_arena_definitions:
+            self.arena_definition = self.file_arena_definitions[selected_file]
+            self.arena_vertices = [tuple(v) for v in self.arena_definition.vertices_bl]
+        else:
+            self.arena_vertices = []
+            self.arena_definition = None
+            self.arena_status_label.config(text="No arena defined", fg="gray")
+
+    def _setup_arena_canvas_for_file(self, filename: str):
+        """Set up the arena drawing canvas for a specific file."""
+        if filename not in self.loaded_files:
+            return
+        
+        loaded_file = self.loaded_files[filename]
+        
+        for widget in self.arena_canvas_frame.winfo_children():
+            widget.destroy()
+
+        self.arena_fig = Figure(figsize=(8, 6), dpi=100)
+        self.arena_ax = self.arena_fig.add_subplot(111)
+
+        pixels_to_bl = 1.0 / loaded_file.metadata.body_length
+        width_bl = loaded_file.metadata.video_width * pixels_to_bl
+        height_bl = loaded_file.metadata.video_height * pixels_to_bl
+
+        # Try to load and display background image
+        background_loaded = False
+        if loaded_file.background_image_path and loaded_file.background_image_path.exists():
+            try:
+                background_img = plt.imread(str(loaded_file.background_image_path))
+                if len(background_img.shape) == 2:
+                    self.arena_ax.imshow(background_img, extent=[0, width_bl, 0, height_bl],
+                                        aspect='equal', origin='upper', alpha=0.8, cmap='gray')
+                else:
+                    self.arena_ax.imshow(background_img, extent=[0, width_bl, 0, height_bl],
+                                        aspect='equal', origin='upper', alpha=0.8)
+                background_loaded = True
+            except Exception as e:
+                print(f"Failed to load background image: {e}")
+
+        self.arena_ax.set_xlim(0, width_bl)
+        self.arena_ax.set_ylim(0, height_bl)
+        self.arena_ax.set_xlabel('X (BL)', fontsize=10)
+        self.arena_ax.set_ylabel('Y (BL)', fontsize=10)
+        
+        title = f'Define arena for: {filename}'
+        if background_loaded:
+            title += ' (background loaded)'
+        self.arena_ax.set_title(title, fontsize=11)
+        self.arena_ax.set_aspect('equal')
+        
+        if not background_loaded:
+            self.arena_ax.grid(True, alpha=0.3)
+
+        # If arena exists, draw it
+        if self.arena_vertices:
+            self._redraw_arena_on_canvas()
+
+        self.arena_fig.tight_layout()
+
+        self.arena_canvas = FigureCanvasTkAgg(self.arena_fig, master=self.arena_canvas_frame)
+        self.arena_canvas.draw()
+        self.arena_canvas.get_tk_widget().pack(fill="both", expand=True)
+
+        self.arena_canvas.mpl_connect('button_press_event', self._on_arena_click)
+
+        self._arena_width_bl = width_bl
+        self._arena_height_bl = height_bl
+
+    def _setup_arena_canvas(self, loaded_file):
+        """Set up arena canvas (backward compatibility wrapper)."""
+        # Find the filename for this loaded_file
+        for filename, lf in self.loaded_files.items():
+            if lf is loaded_file:
+                self._setup_arena_canvas_for_file(filename)
+                return
+
+    def _on_arena_click(self, event):
+        """Handle click on arena canvas - add vertex."""
+        if event.inaxes != self.arena_ax or event.button != 1:
+            return
+        
+        if self.current_arena_file is None:
+            messagebox.showwarning("No File", "Please select a file first.")
+            return
+
+        self.arena_vertices.append((event.xdata, event.ydata))
+        self._redraw_arena_on_canvas()
+
+    def _redraw_arena_on_canvas(self):
+        """Redraw the arena polygon on canvas."""
+        if self.arena_ax is None:
+            return
+
+        # Remove previous arena elements
+        for patch in self.arena_ax.patches[:]:
+            patch.remove()
+        for coll in self.arena_ax.collections[:]:
+            if hasattr(coll, '_arena_marker'):
+                coll.remove()
+        for line in self.arena_ax.lines[:]:
+            if hasattr(line, '_arena_line'):
+                line.remove()
+
+        if len(self.arena_vertices) > 0:
+            xs, ys = zip(*self.arena_vertices)
+            scatter = self.arena_ax.scatter(xs, ys, c='red', s=100, zorder=5, marker='o')
+            scatter._arena_marker = True
+
+            if len(self.arena_vertices) > 1:
+                xs_line = list(xs) + [xs[0]]
+                ys_line = list(ys) + [ys[0]]
+                line, = self.arena_ax.plot(xs_line, ys_line, 'r-', linewidth=2, alpha=0.7)
+                line._arena_line = True
+
+        n_verts = len(self.arena_vertices)
+        self.arena_status_label.config(text=f"{n_verts} vertices defined", fg="blue")
+        self.arena_canvas.draw()
+
+    def _redraw_arena(self):
+        """Redraw the arena polygon (backward compatibility wrapper)."""
+        self._redraw_arena_on_canvas()
+
+    def _clear_current_arena(self):
+        """Clear the arena for the current file."""
+        if self.current_arena_file is None:
+            return
+        
+        self.arena_vertices = []
+        self.arena_definition = None
+        
+        # Remove from per-file storage
+        if self.current_arena_file in self.file_arena_definitions:
+            del self.file_arena_definitions[self.current_arena_file]
+        
+        self.arena_status_label.config(text="Arena cleared", fg="gray")
+        
+        if self.arena_ax is not None:
+            for patch in self.arena_ax.patches[:]:
+                patch.remove()
+            for line in self.arena_ax.lines[:]:
+                if hasattr(line, '_arena_line'):
+                    line.remove()
+            for coll in self.arena_ax.collections[:]:
+                if hasattr(coll, '_arena_marker'):
+                    coll.remove()
+            self.arena_canvas.draw()
+        
+        # Update status list
+        self._update_spatial_files_list()
+
+    def _clear_arena(self):
+        """Clear the arena definition (backward compatibility wrapper)."""
+        self._clear_current_arena()
+
+    def _complete_arena(self):
+        """Complete the arena polygon for current file and show zones."""
+        if len(self.arena_vertices) < 3:
+            messagebox.showwarning("Insufficient Vertices", "Please define at least 3 vertices.")
+            return
+        
+        if self.current_arena_file is None or self.current_arena_file not in self.loaded_files:
+            messagebox.showwarning("No File", "Please select a file first.")
+            return
+
+        loaded_file = self.loaded_files[self.current_arena_file]
+        pixels_to_bl = 1.0 / loaded_file.metadata.body_length
+
+        vertices_bl = np.array(self.arena_vertices)
+        vertices_pixels = vertices_bl / pixels_to_bl
+        vertices_pixels[:, 1] = loaded_file.metadata.video_height - vertices_pixels[:, 1]
+
+        self.arena_definition = ArenaDefinition(
+            vertices_pixels=vertices_pixels,
+            vertices_bl=vertices_bl
+        )
+        
+        # Store in per-file dict
+        self.file_arena_definitions[self.current_arena_file] = self.arena_definition
+
+        # Draw the arena with zones
+        if self.arena_ax is not None:
+            for patch in self.arena_ax.patches[:]:
+                patch.remove()
+            for line in self.arena_ax.lines[:]:
+                line.remove()
+
+            # Draw border zone (outer)
+            polygon_outer = MplPolygon(vertices_bl, closed=True,
+                                       fill=True, facecolor='orange', alpha=0.15,
+                                       edgecolor='red', linewidth=2, label='Border Zone')
+            self.arena_ax.add_patch(polygon_outer)
+
+            # Draw center zone (inner)
+            try:
+                border_pct = float(self.border_pct_var.get()) / 100
+                if SHAPELY_AVAILABLE:
+                    from shapely.geometry import Polygon as ShapelyPolygon
+                    arena_poly = ShapelyPolygon(vertices_bl)
+                    arena_bounds = arena_poly.bounds
+                    arena_width = arena_bounds[2] - arena_bounds[0]
+                    arena_height = arena_bounds[3] - arena_bounds[1]
+                    buffer_distance = min(arena_width, arena_height) * border_pct
+                    center_poly = arena_poly.buffer(-buffer_distance)
+                    
+                    if not center_poly.is_empty and center_poly.geom_type == 'Polygon':
+                        inner_coords = np.array(center_poly.exterior.coords)
+                        polygon_inner = MplPolygon(inner_coords, closed=True,
+                                                   fill=True, facecolor='green', alpha=0.2,
+                                                   edgecolor='green', linewidth=2, 
+                                                   linestyle='--', label='Center Zone')
+                        self.arena_ax.add_patch(polygon_inner)
+            except Exception as e:
+                print(f"Could not draw center zone: {e}")
+
+            # Overlay sample trajectories
+            self._overlay_sample_trajectories(loaded_file, pixels_to_bl)
+            
+            self.arena_ax.legend(loc='upper right', fontsize=8)
+            self.arena_canvas.draw()
+
+        self.arena_status_label.config(
+            text=f"Arena defined ({len(self.arena_vertices)} vertices) [âœ“]", fg="green"
+        )
+        
+        # Update status list
+        self._update_spatial_files_list()
+        
+        messagebox.showinfo("Arena Complete", 
+                            f"Arena defined for '{self.current_arena_file}'.\n\n"
+                            f"Use 'Apply Arena to Selected Files' to copy this arena to other files.")
+
+    def _apply_arena_to_selected(self):
+        """Apply the current arena definition to all selected files."""
+        if self.arena_definition is None:
+            messagebox.showwarning("No Arena", "Please define and complete an arena first.")
+            return
+        
+        selection = self.spatial_files_listbox.curselection()
+        if not selection:
+            messagebox.showwarning("No Selection", "Please select files to apply arena to.")
+            return
+        
+        file_keys = list(self.loaded_files.keys())
+        selected_files = [file_keys[i] for i in selection]
+        
+        # Copy arena to each selected file
+        count = 0
+        for filename in selected_files:
+            if filename != self.current_arena_file:  # Don't re-copy to source
+                self.file_arena_definitions[filename] = self.arena_definition.copy()
+                count += 1
+        
+        self._update_spatial_files_list()
+        messagebox.showinfo("Arena Applied", 
+                            f"Arena copied to {count} additional file(s).\n"
+                            f"Total files with arena: {len(self.file_arena_definitions)}")
+
+    def _overlay_sample_trajectories(self, loaded_file, pixels_to_bl):
+        """Overlay downsampled trajectories on the arena canvas."""
+        if self.arena_ax is None:
+            return
+        
+        # Sample every Nth point for performance
+        sample_rate = max(1, loaded_file.n_frames // 500)  # ~500 points per fish
+        
+        for fish_idx in range(loaded_file.n_fish):
+            positions = loaded_file.trajectories[::sample_rate, fish_idx, :]
+            valid_mask = ~np.isnan(positions[:, 0])
+            
+            if np.sum(valid_mask) < 2:
+                continue
+            
+            # Convert to BL coordinates with Y flip
+            x_bl = positions[valid_mask, 0] * pixels_to_bl
+            y_bl = (loaded_file.metadata.video_height - positions[valid_mask, 1]) * pixels_to_bl
+            
+            self.arena_ax.plot(x_bl, y_bl, color='gray', linewidth=0.5, alpha=0.4)
+
+    def _draw_rectangle_arena(self):
+        """Auto-draw a rectangle arena for current file."""
+        if self.current_arena_file is None:
+            messagebox.showwarning("No File", "Please select a file first.")
+            return
+        
+        if self._arena_width_bl is None:
+            messagebox.showwarning("Error", "Arena dimensions not set.")
+            return
+
+        margin = 0.02
+        x_min = self._arena_width_bl * margin
+        x_max = self._arena_width_bl * (1 - margin)
+        y_min = self._arena_height_bl * margin
+        y_max = self._arena_height_bl * (1 - margin)
+
+        self.arena_vertices = [(x_min, y_min), (x_max, y_min), (x_max, y_max), (x_min, y_max)]
+        self._redraw_arena_on_canvas()
+        self._complete_arena()
+
+    def _run_spatial_analysis_batch(self):
+        """Run thigmotaxis analysis on all selected files."""
+        if not SHAPELY_AVAILABLE:
+            messagebox.showerror("Missing Dependency", 
+                                "Shapely is required. Install with: pip install shapely")
+            return
+
+        selection = self.spatial_files_listbox.curselection()
+        if not selection:
+            messagebox.showwarning("No Selection", "Please select files to analyze.")
+            return
+        
+        file_keys = list(self.loaded_files.keys())
+        selected_files = [file_keys[i] for i in selection]
+        
+        # Check which files have arenas
+        files_without_arena = [f for f in selected_files if f not in self.file_arena_definitions]
+        if files_without_arena:
+            missing_str = "\n".join(files_without_arena[:5])
+            if len(files_without_arena) > 5:
+                missing_str += f"\n... and {len(files_without_arena) - 5} more"
+            messagebox.showwarning("Missing Arenas", 
+                                  f"These files need arena definitions:\n\n{missing_str}\n\n"
+                                  "Define arena and use 'Apply Arena to Selected Files'.")
+            return
+        
+        # Get analysis parameters
+        try:
+            border_pct = float(self.border_pct_var.get()) / 100
+            sample_interval = int(self.spatial_sample_var.get())
+        except ValueError as e:
+            messagebox.showerror("Invalid Parameters", f"Check settings: {e}")
+            return
+        
+        # Run analysis on each file
+        success_count = 0
+        results_dict = {}
+        
+        for filename in selected_files:
+            loaded_file = self.loaded_files[filename]
+            arena = self.file_arena_definitions[filename]
+            
+            try:
+                calculator = ThigmotaxisCalculator(
+                    loaded_file, arena,
+                    border_pct=border_pct, 
+                    sample_interval=sample_interval
+                )
+                results = calculator.calculate()
+                loaded_file.thigmotaxis_results = results
+                results_dict[filename] = results
+                success_count += 1
+            except Exception as e:
+                print(f"Error analyzing {filename}: {e}")
+                import traceback
+                traceback.print_exc()
+        
+        # Update displays
+        self._update_spatial_files_list()
+        
+        if results_dict:
+            self._display_combined_thigmotaxis_summary(results_dict)
+            self._plot_combined_thigmotaxis_timeseries(results_dict)
+            self._plot_thigmotaxis_comparison_charts(results_dict)
+            self._generate_comparison_heatmaps(selected_files)
+        
+        messagebox.showinfo("Analysis Complete", 
+                            f"Successfully analyzed {success_count}/{len(selected_files)} files.")
+
+    def _run_thigmotaxis_analysis(self):
+        """Run thigmotaxis analysis (backward compatibility - single file)."""
+        if not SHAPELY_AVAILABLE:
+            messagebox.showerror("Missing Dependency", "Shapely is required. Install with: pip install shapely")
+            return
+
+        # Try new method first
+        if hasattr(self, 'spatial_files_listbox'):
+            selection = self.spatial_files_listbox.curselection()
+            if selection:
+                self._run_spatial_analysis_batch()
+                return
+        
+        # Fall back to old behavior using spatial_file_var
+        selected_file = self.spatial_file_var.get()
+        if not selected_file or selected_file not in self.loaded_files:
+            messagebox.showwarning("No File", "Please select a file first.")
+            return
+
+        if self.arena_definition is None:
+            messagebox.showwarning("No Arena", "Please define the arena boundary first.")
+            return
+
+        loaded_file = self.loaded_files[selected_file]
+
+        try:
+            border_pct = float(self.border_pct_var.get()) / 100
+            sample_interval = int(self.spatial_sample_var.get())
+
+            calculator = ThigmotaxisCalculator(loaded_file, self.arena_definition,
+                                               border_pct=border_pct, sample_interval=sample_interval)
+            results = calculator.calculate()
+            loaded_file.thigmotaxis_results = results
+
+            self._display_thigmotaxis_results(results, selected_file)
+            self._plot_thigmotaxis_timeseries(results, selected_file)
+
+            messagebox.showinfo("Analysis Complete", f"Mean time in border: {results.mean_pct_in_border:.1f}%")
+
+        except Exception as e:
+            messagebox.showerror("Analysis Error", f"Failed:\n{e}")
+            import traceback
+            traceback.print_exc()
+
+    def _update_spatial_visualizations(self):
+        """Update visualizations for files that have been analyzed."""
+        # Gather all analyzed files
+        results_dict = {}
+        analyzed_files = []
+        
+        for filename, loaded_file in self.loaded_files.items():
+            if hasattr(loaded_file, 'thigmotaxis_results') and loaded_file.thigmotaxis_results:
+                results_dict[filename] = loaded_file.thigmotaxis_results
+                analyzed_files.append(filename)
+        
+        if not results_dict:
+            messagebox.showinfo("No Results", "No files have been analyzed yet.")
+            return
+        
+        self._display_combined_thigmotaxis_summary(results_dict)
+        self._plot_combined_thigmotaxis_timeseries(results_dict)
+        self._plot_thigmotaxis_comparison_charts(results_dict)
+        self._generate_comparison_heatmaps(analyzed_files)
+
+    def _display_combined_thigmotaxis_summary(self, results_dict: Dict[str, ThigmotaxisResults]):
+        """Display combined summary of all analyzed files."""
+        self.thigmotaxis_text.delete("1.0", tk.END)
+        
+        lines = [
+            "=" * 70,
+            "THIGMOTAXIS ANALYSIS - ALL FILES",
+            "=" * 70,
+            "",
+        ]
+        
+        # Comparison table
+        lines.append("SUMMARY COMPARISON:")
+        lines.append("-" * 70)
+        lines.append(f"{'File':<20} {'Fish':<6} {'Mean %':<10} {'Std %':<10} {'Samples':<10}")
+        lines.append("-" * 70)
+        
+        for filename, results in results_dict.items():
+            short_name = filename[:19] if len(filename) > 19 else filename
+            lines.append(
+                f"{short_name:<20} {results.n_fish:<6} "
+                f"{results.mean_pct_in_border:<10.1f} {results.std_pct_in_border:<10.1f} "
+                f"{results.n_samples:<10}"
+            )
+        
+        lines.append("-" * 70)
+        lines.append("")
+        
+        # Per-file details
+        for filename, results in results_dict.items():
+            lines.append("")
+            lines.append(f"FILE: {filename}")
+            lines.append(results.summary())
+        
+        self.thigmotaxis_text.insert("1.0", "\n".join(lines))
+
+    def _display_thigmotaxis_results(self, results: ThigmotaxisResults, filename: str):
+        """Display thigmotaxis results (backward compatibility - single file)."""
+        self.thigmotaxis_text.delete("1.0", tk.END)
+        self.thigmotaxis_text.insert("1.0", f"FILE: {filename}\n\n{results.summary()}")
+
+    def _plot_combined_thigmotaxis_timeseries(self, results_dict: Dict[str, ThigmotaxisResults]):
+        """
+        Plot thigmotaxis time series for all files.
+        Shows individual fish as light lines, group average as bold.
+        """
+        for widget in self.thigmotaxis_plot_frame.winfo_children():
+            widget.destroy()
+        
+        if not results_dict:
+            return
+        
+        # Get smoothing parameter
+        try:
+            smooth_seconds = float(self.spatial_smooth_var.get())
+        except:
+            smooth_seconds = 30.0
+        
+        show_individuals = self.show_individual_fish_thig_var.get() if hasattr(self, 'show_individual_fish_thig_var') else True
+        
+        n_files = len(results_dict)
+        file_colors = plt.cm.tab10(np.linspace(0, 1, min(n_files, 10)))
+        
+        # Create figure with subplots if multiple files
+        if n_files == 1:
+            fig = Figure(figsize=(10, 6), dpi=100)
+            axes = [fig.add_subplot(111)]
+        else:
+            n_cols = min(2, n_files)
+            n_rows = (n_files + n_cols - 1) // n_cols
+            fig = Figure(figsize=(6 * n_cols, 4 * n_rows), dpi=100)
+            axes = [fig.add_subplot(n_rows, n_cols, i + 1) for i in range(n_files)]
+        
+        for idx, (filename, results) in enumerate(results_dict.items()):
+            ax = axes[idx]
+            color = file_colors[idx % len(file_colors)]
+            time_minutes = results.timestamps / 60.0
+            
+            # Plot individual fish as light lines
+            if show_individuals and hasattr(results, 'per_fish_in_border_samples'):
+                for fish_idx in range(results.n_fish):
+                    fish_data = results.get_smoothed_fish_timeseries(fish_idx, smooth_seconds)
+                    ax.plot(time_minutes, fish_data, 
+                           color=color, linewidth=0.5, alpha=0.3)
+            
+            # Plot group average as bold line
+            group_data = results.get_smoothed_group_timeseries(smooth_seconds)
+            ax.plot(time_minutes, group_data, 
+                   color=color, linewidth=2.5, alpha=0.9,
+                   label=f'Group avg: {results.mean_pct_in_border:.1f}%')
+            
+            # Add mean line
+            ax.axhline(y=results.mean_pct_in_border, color='gray', 
+                      linestyle='--', linewidth=1, alpha=0.5)
+            
+            ax.set_xlabel('Time (minutes)', fontsize=10)
+            ax.set_ylabel('% in Border Zone', fontsize=10)
+            ax.set_title(f'{filename}', fontsize=11, fontweight='bold')
+            ax.set_ylim(0, 100)
+            ax.legend(loc='best', fontsize=8)
+            ax.grid(True, alpha=0.3)
+        
+        fig.tight_layout()
+        
+        canvas = FigureCanvasTkAgg(fig, master=self.thigmotaxis_plot_frame)
+        canvas.draw()
+        canvas.get_tk_widget().pack(fill="both", expand=True)
+
+    def _plot_thigmotaxis_timeseries(self, results: ThigmotaxisResults, filename: str):
+        """Plot thigmotaxis over time (backward compatibility - single file)."""
+        results_dict = {filename: results}
+        self._plot_combined_thigmotaxis_timeseries(results_dict)
+
+    def _plot_thigmotaxis_comparison_charts(self, results_dict: Dict[str, ThigmotaxisResults]):
+        """Plot comparison bar charts and summary statistics."""
+        for widget in self.thigmotaxis_compare_frame.winfo_children():
+            widget.destroy()
+        
+        if not results_dict:
+            return
+        
+        fig = Figure(figsize=(12, 5), dpi=100)
+        
+        # Left: Time series overlay (smoothed)
+        ax1 = fig.add_subplot(1, 2, 1)
+        
+        # Right: Bar chart comparison
+        ax2 = fig.add_subplot(1, 2, 2)
+        
+        file_colors = plt.cm.tab10(np.linspace(0, 1, len(results_dict)))
+        
+        try:
+            smooth_seconds = float(self.spatial_smooth_var.get())
+        except:
+            smooth_seconds = 30.0
+        
+        # Time series overlay
+        for (filename, results), color in zip(results_dict.items(), file_colors):
+            time_minutes = results.timestamps / 60.0
+            smoothed_data = results.get_smoothed_group_timeseries(smooth_seconds)
+            ax1.plot(time_minutes, smoothed_data, color=color, linewidth=2,
+                    label=f'{filename[:15]} ({results.mean_pct_in_border:.1f}%)')
+        
+        ax1.set_xlabel('Time (minutes)', fontsize=11)
+        ax1.set_ylabel('% Fish in Border Zone', fontsize=11)
+        ax1.set_title('Thigmotaxis Over Time (Smoothed)', fontsize=12, fontweight='bold')
+        ax1.set_ylim(0, 100)
+        ax1.legend(loc='best', fontsize=8)
+        ax1.grid(True, alpha=0.3)
+        
+        # Bar chart
+        file_names = [f[:12] if len(f) > 12 else f for f in results_dict.keys()]
+        means = [r.mean_pct_in_border for r in results_dict.values()]
+        stds = [r.std_pct_in_border for r in results_dict.values()]
+        x = np.arange(len(file_names))
+        
+        bars = ax2.bar(x, means, color=file_colors[:len(means)], 
+                       edgecolor='black', yerr=stds, capsize=5)
+        ax2.set_xlabel('File', fontsize=11)
+        ax2.set_ylabel('Mean % Time in Border Zone', fontsize=11)
+        ax2.set_title('Thigmotaxis Comparison', fontsize=12, fontweight='bold')
+        ax2.set_xticks(x)
+        ax2.set_xticklabels(file_names, rotation=45, ha='right')
+        ax2.set_ylim(0, 100)
+        
+        # Add value labels on bars
+        for bar, mean in zip(bars, means):
+            ax2.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 2,
+                    f'{mean:.1f}%', ha='center', va='bottom', fontsize=9)
+        
+        fig.tight_layout()
+        
+        canvas = FigureCanvasTkAgg(fig, master=self.thigmotaxis_compare_frame)
+        canvas.draw()
+        canvas.get_tk_widget().pack(fill="both", expand=True)
+
+    def _compare_thigmotaxis(self):
+        """Compare thigmotaxis across files (backward compatibility)."""
+        # Try using the new listbox first
+        if hasattr(self, 'spatial_files_listbox'):
+            selection = self.spatial_files_listbox.curselection()
+            if selection:
+                file_keys = list(self.loaded_files.keys())
+                selected_files = [file_keys[i] for i in selection]
+                
+                results_dict = {}
+                for filename in selected_files:
+                    loaded_file = self.loaded_files[filename]
+                    if hasattr(loaded_file, 'thigmotaxis_results') and loaded_file.thigmotaxis_results:
+                        results_dict[filename] = loaded_file.thigmotaxis_results
+                
+                if results_dict:
+                    self._plot_thigmotaxis_comparison_charts(results_dict)
+                    return
+        
+        # Fall back to old behavior
+        selected_indices = self.spatial_compare_listbox.curselection()
+        if len(selected_indices) < 1:
+            messagebox.showinfo("No Selection", "Please select files to compare.")
+            return
+
+        file_keys = list(self.loaded_files.keys())
+        selected_files = [file_keys[i] for i in selected_indices]
+
+        all_results = {}
+        missing = []
+        for filename in selected_files:
+            loaded_file = self.loaded_files[filename]
+            if hasattr(loaded_file, 'thigmotaxis_results') and loaded_file.thigmotaxis_results:
+                all_results[filename] = loaded_file.thigmotaxis_results
+            else:
+                missing.append(filename)
+
+        if missing:
+            messagebox.showwarning("Missing Analysis", f"Run thigmotaxis first on:\n" + "\n".join(missing))
+            return
+
+        if all_results:
+            self._plot_thigmotaxis_comparison_charts(all_results)
+
+    def _generate_comparison_heatmaps(self, selected_files: List[str]):
+        """Generate heatmaps for selected files with shared color scale option."""
+        for widget in self.heatmap_frame.winfo_children():
+            widget.destroy()
+        
+        # Filter to valid files
+        valid_files = [f for f in selected_files if f in self.loaded_files]
+        if not valid_files:
+            return
+        
+        try:
+            grid_size = int(self.heatmap_grid_var.get())
+        except:
+            grid_size = 50
+        
+        mode = self.heatmap_mode_var.get()
+        use_shared_scale = self.shared_colorscale_var.get() if hasattr(self, 'shared_colorscale_var') else True
+        
+        if mode == "combined":
+            # Combined heatmap per file
+            self._plot_combined_heatmaps(valid_files, grid_size, use_shared_scale)
+        else:
+            # Individual fish heatmaps (for first selected file only)
+            self._plot_individual_fish_heatmaps(valid_files[0], grid_size, use_shared_scale)
+
+    def _plot_combined_heatmaps(self, filenames: List[str], grid_size: int, use_shared_scale: bool):
+        """Plot combined (all fish) heatmaps for multiple files."""
+        n_files = len(filenames)
+        
+        # Generate all heatmaps first
+        heatmaps = []
+        edges_list = []
+        dimensions = []
+        
+        for filename in filenames:
+            loaded_file = self.loaded_files[filename]
+            generator = HeatmapGenerator(loaded_file, grid_size=grid_size)
+            hm, xe, ye = generator.generate_combined_heatmap()
+            heatmaps.append(hm)
+            edges_list.append((xe, ye))
+            
+            pixels_to_bl = 1.0 / loaded_file.metadata.body_length
+            width_bl = loaded_file.metadata.video_width * pixels_to_bl
+            height_bl = loaded_file.metadata.video_height * pixels_to_bl
+            dimensions.append((width_bl, height_bl))
+        
+        # Calculate shared color scale if requested
+        if use_shared_scale and len(heatmaps) > 1:
+            vmin, vmax = compute_shared_heatmap_scale(heatmaps)
+        else:
+            vmin, vmax = None, None
+        
+        # Create figure
+        n_cols = min(3, n_files)
+        n_rows = (n_files + n_cols - 1) // n_cols
+        fig = Figure(figsize=(5 * n_cols, 4 * n_rows), dpi=100)
+        
+        im = None
+        for idx, (filename, hm, (xe, ye), (w, h)) in enumerate(
+                zip(filenames, heatmaps, edges_list, dimensions)):
+            ax = fig.add_subplot(n_rows, n_cols, idx + 1)
+            
+            if vmin is not None:
+                im = ax.imshow(hm, extent=[xe[0], xe[-1], ye[0], ye[-1]],
+                              origin='lower', aspect='equal', cmap='hot', 
+                              alpha=0.8, vmin=vmin, vmax=vmax)
+            else:
+                im = ax.imshow(hm, extent=[xe[0], xe[-1], ye[0], ye[-1]],
+                              origin='lower', aspect='equal', cmap='hot', alpha=0.8)
+            
+            ax.set_xlim(0, w)
+            ax.set_ylim(0, h)
+            ax.set_xlabel('X (BL)', fontsize=9)
+            ax.set_ylabel('Y (BL)', fontsize=9)
+            ax.set_title(filename[:20], fontsize=10)
+        
+        # Add single colorbar if using shared scale
+        if use_shared_scale and len(heatmaps) > 1 and im is not None:
+            fig.subplots_adjust(right=0.9)
+            cbar_ax = fig.add_axes([0.92, 0.15, 0.02, 0.7])
+            cbar = fig.colorbar(im, cax=cbar_ax)
+            cbar.set_label('% Time', fontsize=9)
+        
+        fig.tight_layout()
+        if use_shared_scale and len(heatmaps) > 1:
+            fig.subplots_adjust(right=0.9)
+        
+        canvas = FigureCanvasTkAgg(fig, master=self.heatmap_frame)
+        canvas.draw()
+        canvas.get_tk_widget().pack(fill="both", expand=True)
+
+    def _plot_individual_fish_heatmaps(self, filename: str, grid_size: int, use_shared_scale: bool):
+        """Plot individual fish heatmaps for a single file."""
+        if filename not in self.loaded_files:
+            return
+        
+        loaded_file = self.loaded_files[filename]
+        generator = HeatmapGenerator(loaded_file, grid_size=grid_size)
+        
+        heatmaps, x_edges, y_edges = generator.generate_all_individual_heatmaps()
+        
+        pixels_to_bl = 1.0 / loaded_file.metadata.body_length
+        width_bl = loaded_file.metadata.video_width * pixels_to_bl
+        height_bl = loaded_file.metadata.video_height * pixels_to_bl
+        
+        # Calculate shared scale
+        if use_shared_scale:
+            vmin, vmax = compute_shared_heatmap_scale(heatmaps)
+        else:
+            vmin, vmax = None, None
+        
+        n_fish = len(heatmaps)
+        n_cols = min(3, n_fish)
+        n_rows = (n_fish + n_cols - 1) // n_cols
+        
+        fig = Figure(figsize=(4 * n_cols, 3.5 * n_rows), dpi=100)
+        
+        im = None
+        for fish_idx, hm in enumerate(heatmaps):
+            ax = fig.add_subplot(n_rows, n_cols, fish_idx + 1)
+            
+            if vmin is not None:
+                im = ax.imshow(hm, extent=[x_edges[0], x_edges[-1], y_edges[0], y_edges[-1]],
+                              origin='lower', aspect='equal', cmap='hot', 
+                              alpha=0.8, vmin=vmin, vmax=vmax)
+            else:
+                im = ax.imshow(hm, extent=[x_edges[0], x_edges[-1], y_edges[0], y_edges[-1]],
+                              origin='lower', aspect='equal', cmap='hot', alpha=0.8)
+            
+            ax.set_xlim(0, width_bl)
+            ax.set_ylim(0, height_bl)
+            ax.set_title(f'Fish {fish_idx}', fontsize=10)
+            ax.tick_params(labelsize=7)
+        
+        # Add colorbar if shared scale
+        if use_shared_scale and im is not None:
+            fig.subplots_adjust(right=0.9)
+            cbar_ax = fig.add_axes([0.92, 0.15, 0.02, 0.7])
+            cbar = fig.colorbar(im, cax=cbar_ax)
+            cbar.set_label('% Time', fontsize=9)
+        
+        fig.suptitle(f'Individual Fish Heatmaps - {filename}', fontsize=12, fontweight='bold')
+        fig.tight_layout()
+        if use_shared_scale:
+            fig.subplots_adjust(right=0.9, top=0.92)
+        
+        canvas = FigureCanvasTkAgg(fig, master=self.heatmap_frame)
+        canvas.draw()
+        canvas.get_tk_widget().pack(fill="both", expand=True)
+
+    def _generate_heatmap(self):
+        """Generate and display heatmap (backward compatibility)."""
+        # Try using selected files from the listbox
+        if hasattr(self, 'spatial_files_listbox'):
+            selection = self.spatial_files_listbox.curselection()
+            if selection:
+                file_keys = list(self.loaded_files.keys())
+                selected_files = [file_keys[i] for i in selection]
+                self._generate_comparison_heatmaps(selected_files)
+                return
+        
+        # Fall back to single file
+        selected_file = self.spatial_file_var.get()
+        if not selected_file or selected_file not in self.loaded_files:
+            messagebox.showwarning("No File", "Please select a file first.")
+            return
+
+        self._generate_comparison_heatmaps([selected_file])
+
+    # =========================================================================
+    # MAIN ENTRY POINT
+    # =========================================================================
+
+    def run(self):
+        """Start the application main loop."""
+        self.root.mainloop()
