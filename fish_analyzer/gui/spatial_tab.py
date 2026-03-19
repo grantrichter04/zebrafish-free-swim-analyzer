@@ -283,6 +283,23 @@ class SpatialTabMixin:
         self.heatmap_frame = tk.Frame(heatmap_tab, bg="white")
         self.heatmap_frame.pack(fill="both", expand=True)
 
+        # Methods tab
+        methods_tab = ttk.Frame(results_notebook)
+        results_notebook.add(methods_tab, text="Methods")
+        methods_scroll = tk.Scrollbar(methods_tab)
+        methods_scroll.pack(side="right", fill="y")
+        self.spatial_methods_text = tk.Text(
+            methods_tab, wrap=tk.WORD, font=("Courier", 10),
+            yscrollcommand=methods_scroll.set
+        )
+        self.spatial_methods_text.pack(side="left", fill="both", expand=True)
+        methods_scroll.config(command=self.spatial_methods_text.yview)
+        self.spatial_methods_text.insert("1.0",
+            "Methods text will appear here after running spatial analysis.\n\n"
+            "This provides a draft paragraph describing the thigmotaxis\n"
+            "methods and parameters used, suitable for a manuscript methods section."
+        )
+
     # =========================================================================
     # FILE LIST UPDATE
     # =========================================================================
@@ -688,8 +705,9 @@ class SpatialTabMixin:
             self._plot_combined_thigmotaxis_timeseries(results_dict)
             self._plot_thigmotaxis_comparison_charts(results_dict)
             self._generate_comparison_heatmaps(selected_files)
-        
-        messagebox.showinfo("Analysis Complete", 
+            self._update_spatial_methods_text(results_dict, border_pct, sample_interval)
+
+        messagebox.showinfo("Analysis Complete",
                             f"Successfully analyzed {success_count}/{len(selected_files)} files.")
 
     def _update_spatial_visualizations(self):
@@ -1022,6 +1040,65 @@ class SpatialTabMixin:
         canvas = FigureCanvasTkAgg(fig, master=self.heatmap_frame)
         canvas.draw()
         canvas.get_tk_widget().pack(fill="both", expand=True)
+
+    # =========================================================================
+    # METHODS TEXT
+    # =========================================================================
+
+    def _update_spatial_methods_text(self, results_dict, border_pct, sample_interval):
+        """Generate a methods paragraph for the spatial/thigmotaxis analysis."""
+        self.spatial_methods_text.delete("1.0", tk.END)
+
+        first_file = None
+        for filename in results_dict:
+            if filename in self.loaded_files:
+                first_file = self.loaded_files[filename]
+                break
+        if first_file is None:
+            return
+
+        cal = first_file.calibration
+        fps = cal.frame_rate
+        n_files = len(results_dict)
+        interval_s = sample_interval / fps
+        border_pct_display = border_pct * 100
+
+        text = (
+            "METHODS \u2014 Spatial Analysis (Thigmotaxis)\n"
+            "==========================================\n\n"
+            "The following is a draft methods paragraph. Edit as needed.\n\n"
+            "---\n\n"
+            f"Thigmotaxis (wall-hugging behavior) was assessed using the "
+            f"Zebrafish Free Swim Analyzer (v2.1). The arena boundary was "
+            f"manually defined as a polygon on the background image for each "
+            f"recording. A border zone was defined by insetting the arena "
+            f"polygon by {border_pct_display:.0f}% of its width (using "
+            f"Shapely polygon buffering), creating an outer annular region "
+            f"representing the wall-proximal area and an inner region "
+            f"representing the center.\n\n"
+            f"Fish positions were sampled every {sample_interval} frames "
+            f"({interval_s:.2f} s at {fps:.1f} fps). At each sample, each "
+            f"fish's position was classified as either in the border zone "
+            f"or center zone using Shapely point-in-polygon testing. "
+            f"Fish with missing (NaN) position data at a given sample were "
+            f"excluded from that sample's calculation. "
+            f"The percentage of samples in the border zone was computed per "
+            f"fish and averaged across fish for each file.\n\n"
+            f"Position density heatmaps were generated using 2D histogram "
+            f"binning of all valid fish positions, with NaN gaps linearly "
+            f"interpolated prior to binning.\n\n"
+            f"Analysis included {n_files} file(s).\n\n"
+            "---\n\n"
+            "KEY PARAMETERS:\n"
+            f"  Border zone:           {border_pct_display:.0f}% of arena width (inset)\n"
+            f"  Sample interval:       {sample_interval} frames ({interval_s:.2f} s)\n"
+            f"  Distance unit:         {cal.unit_name}\n"
+            f"  Frame rate:            {fps:.1f} fps\n"
+            f"  Calibration:           {cal.scale_factor:.6f} {cal.unit_name}/px\n"
+            f"  Arena type:            manually defined polygon\n"
+        )
+
+        self.spatial_methods_text.insert("1.0", text)
 
     # =========================================================================
     # EXPORT METHODS

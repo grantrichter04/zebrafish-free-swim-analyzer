@@ -67,6 +67,11 @@ def export_individual_metrics_csv(loaded_files: Dict, output_path: Path) -> int:
                 'MeanAngularVelocity_deg_s': round(m.get('mean_angular_velocity_deg_s', float('nan')), 2),
                 'ErraticMovementCount': m.get('erratic_movement_count', 0),
                 'ErraticMovements_per_min': round(m.get('erratic_movements_per_min', 0), 2),
+                'LateralityIndex': round(m.get('laterality_index', float('nan')), 4),
+                'RightTurns_CW': m.get('n_right_turns', 0),
+                'LeftTurns_CCW': m.get('n_left_turns', 0),
+                'CumulativeHeading_deg': round(m.get('cumulative_heading_change_deg', float('nan')), 1),
+                'MeanSignedAngVel_deg_s': round(m.get('mean_signed_angular_velocity_deg_s', float('nan')), 2),
             })
 
     if not rows:

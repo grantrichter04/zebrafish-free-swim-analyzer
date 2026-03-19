@@ -256,7 +256,7 @@ class DataTabMixin:
         tk.Label(params_col, text="Processing Settings:", font=("Arial", 10, "bold")).pack(anchor="w", pady=(0, 5))
 
         # Smoothing checkbox
-        self.apply_smoothing_var = tk.BooleanVar(value=True)
+        self.apply_smoothing_var = tk.BooleanVar(value=False)
         tk.Checkbutton(params_col, text="Apply Savitzky-Golay smoothing",
                       variable=self.apply_smoothing_var).pack(anchor="w")
 
@@ -278,8 +278,10 @@ class DataTabMixin:
         self.rest_unit_label.pack(side="left")
 
         # Help text
-        help_text = ("Smoothing reduces noise in position data. "
-                    "Rest threshold defines the speed below which fish are considered inactive.")
+        help_text = ("Smoothing: OFF by default. Reduces tracking jitter but also dampens "
+                    "real movement — can reduce measured speed by 20-40% for larval bout-based "
+                    "locomotion at 30fps. Only enable for continuous adult swimming or high-fps data.\n"
+                    "Rest threshold: speed below which fish are considered inactive.")
         tk.Label(params_frame, text=help_text, font=("Arial", 8), fg="gray",
                 wraplength=600, justify=tk.LEFT).pack(anchor="w", padx=10, pady=5)
 

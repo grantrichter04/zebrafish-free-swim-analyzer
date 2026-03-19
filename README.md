@@ -138,12 +138,22 @@ Quantifies anxiety-like wall-hugging behavior. The arena boundary is defined by 
 
 ### What's New in 2.1
 
+**New Bout Analysis tab:**
+- Detects individual swim bouts (darts) from speed traces — works for both larvae and adults
+- Per-bout metrics: duration, peak speed, displacement, distance, heading change
+- Summary stats: bout rate, inter-bout interval, duration/speed distributions
+- Per-bout laterality analysis with turn direction counts and laterality index
+- Distribution plots (bout duration, IBI, peak speed, heading change histograms)
+- Per-fish laterality bar charts
+- CSV export of every detected bout with all metrics
+
 **New behavioral metrics** replacing sinuosity and turn angles:
 - **Freeze analysis** — episode count, mean duration, total time frozen (anxiety indicator)
 - **Burst analysis** — burst count, peak speed, frequency per minute (locomotor vigor)
 - **Angular velocity** — mean turning rate in degrees/second
 - **Erratic movements** — count of sudden large direction changes per minute (startle/stress)
 - **Path straightness** — sliding-window displacement/distance ratio (0 = circling, 1 = straight)
+- **Turning bias** — laterality index, cumulative heading change, signed angular velocity
 
 **Bug fixes:**
 - Thigmotaxis border percentage now correctly handles missing fish data
@@ -151,7 +161,8 @@ Quantifies anxiety-like wall-hugging behavior. The arena boundary is defined by 
 - NND calculation optimized with scipy cdist
 - Minimum valid data threshold raised to prevent metrics from near-empty trajectories
 
-**UX improvements (from 2.0.1):**
+**UX improvements:**
+- Trajectory trail slider on the frame viewer — see where each fish has been
 - CSV export buttons on all analysis tabs
 - Progress bar during batch processing
 - Clearer error messages with auto-reset to defaults

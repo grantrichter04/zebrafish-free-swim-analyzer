@@ -21,6 +21,7 @@ METRICS CALCULATED:
 - Angular velocity: mean angular velocity (degrees/second)
 - Erratic movements: count of sudden large direction changes
 - Path straightness: sliding-window displacement/distance ratio
+- Turning bias: laterality index, cumulative heading change, signed angular velocity
 """
 
 from dataclasses import dataclass, field
@@ -65,7 +66,7 @@ class ProcessingParameters:
     window: straightness = net displacement / path distance. Values near 1.0
     indicate straight swimming; values near 0 indicate circling or meandering.
     """
-    apply_smoothing: bool = True
+    apply_smoothing: bool = False
     smoothing_window: int = 5
     smoothing_polynomial_order: int = 3
     min_valid_points: int = 10
@@ -100,7 +101,7 @@ class ProcessingParameters:
     def default_for_fish(cls) -> 'ProcessingParameters':
         """Get default parameters that work well for fish tracking."""
         return cls(
-            apply_smoothing=True,
+            apply_smoothing=False,
             smoothing_window=5,
             smoothing_polynomial_order=3,
             min_valid_points=10,
@@ -215,11 +216,29 @@ class TrajectoryProcessor:
 
         if self.params.apply_smoothing:
             try:
+                # Interpolate NaN gaps before smoothing to prevent
+                # traja.smooth_sg from zero-filling them (which creates
+                # large artificial spikes that corrupt neighboring frames).
+                nan_mask = trj['x'].isna() | trj['y'].isna()
+                if nan_mask.any():
+                    valid_idx = np.where(~nan_mask)[0]
+                    nan_idx = np.where(nan_mask)[0]
+                    trj.loc[nan_mask, 'x'] = np.interp(
+                        nan_idx, valid_idx, trj['x'].values[valid_idx])
+                    trj.loc[nan_mask, 'y'] = np.interp(
+                        nan_idx, valid_idx, trj['y'].values[valid_idx])
+
                 trj = traja.smooth_sg(
                     trj,
                     w=self.params.smoothing_window,
                     p=self.params.smoothing_polynomial_order
                 )
+
+                # Restore NaN positions (smoothed values at gaps are
+                # interpolation artifacts, not real data)
+                if nan_mask.any():
+                    trj.loc[nan_mask, 'x'] = np.nan
+                    trj.loc[nan_mask, 'y'] = np.nan
             except Exception:
                 print(f"    Note: Smoothing failed for fish {fish_idx}, using raw trajectory")
 
@@ -504,7 +523,7 @@ class MetricsCalculator:
                                           speed_series: np.ndarray,
                                           frame_rate: float) -> Dict[str, float]:
         """
-        Calculate angular velocity and erratic movement count.
+        Calculate angular velocity, erratic movement count, and turning bias.
 
         Angular velocity: mean absolute rate of heading change (degrees/second).
         Computed only when the fish is moving (speed > threshold) to avoid
@@ -512,6 +531,18 @@ class MetricsCalculator:
 
         Erratic movement count: number of frames where the heading change
         exceeds erratic_turn_threshold degrees AND the fish is moving.
+
+        Turning bias (laterality):
+        - Laterality index: (right turns - left turns) / total turns.
+          Ranges from -1 (all left/CCW) to +1 (all right/CW). Near 0 = no bias.
+        - Cumulative heading change: total signed heading change in degrees.
+          Positive = net CCW rotation, negative = net CW rotation.
+        - Mean signed angular velocity: mean turning rate with direction preserved.
+          Positive = CCW, negative = CW.
+
+        All turning metrics only count frames where the fish is actively moving,
+        which makes them robust for both adult continuous swimming and larval
+        bout-based locomotion (dart-glide).
 
         Heading is computed frame-to-frame (diff of 1) for consistency.
         """
@@ -533,7 +564,7 @@ class MetricsCalculator:
             dheading = (dheading + np.pi) % (2 * np.pi) - np.pi
             dheading_deg = np.degrees(dheading)
 
-            # Angular velocity in degrees/second
+            # Angular velocity in degrees/second (absolute)
             angular_velocity = np.abs(dheading_deg) * frame_rate
 
             # Only consider frames where the fish is actually moving
@@ -545,7 +576,8 @@ class MetricsCalculator:
                 return self._empty_direction_metrics()
 
             angular_vel_aligned = angular_velocity[:min_len]
-            dheading_aligned = np.abs(dheading_deg[:min_len])
+            dheading_aligned_abs = np.abs(dheading_deg[:min_len])
+            dheading_signed = dheading_deg[:min_len]
             speed_aligned = speed_series[1:min_len + 1]
 
             # Mask: fish must be moving and values must be valid
@@ -555,23 +587,48 @@ class MetricsCalculator:
                 ~np.isnan(angular_vel_aligned)
             )
 
-            if np.sum(moving_mask) == 0:
+            n_moving = int(np.sum(moving_mask))
+            if n_moving == 0:
                 return self._empty_direction_metrics()
 
             mean_angular_velocity = float(np.mean(angular_vel_aligned[moving_mask]))
 
             # Erratic movements: large turns while moving
             erratic_mask = (
-                moving_mask & (dheading_aligned > self.params.erratic_turn_threshold)
+                moving_mask & (dheading_aligned_abs > self.params.erratic_turn_threshold)
             )
             erratic_count = int(np.sum(erratic_mask))
             total_time_s = len(speed_series) / frame_rate
             erratic_per_min = (erratic_count / total_time_s * 60) if total_time_s > 0 else 0.0
 
+            # --- Turning bias / laterality ---
+            # Convention: positive dheading = counterclockwise (left turn in standard coords)
+            #             negative dheading = clockwise (right turn)
+            # We define laterality index as (right - left) / total,
+            # so CW-biased fish → positive, CCW-biased → negative.
+            signed_turns = dheading_signed[moving_mask]
+            n_right = int(np.sum(signed_turns < 0))  # CW = right
+            n_left = int(np.sum(signed_turns > 0))    # CCW = left
+            n_turns = n_right + n_left
+            laterality_index = (
+                (n_right - n_left) / n_turns if n_turns > 0 else 0.0
+            )
+
+            # Cumulative heading change (only during movement)
+            cumulative_heading_deg = float(np.sum(signed_turns))
+
+            # Mean signed angular velocity (direction-preserving)
+            mean_signed_angular_vel = float(np.mean(signed_turns)) * frame_rate
+
             return {
                 'mean_angular_velocity_deg_s': mean_angular_velocity,
                 'erratic_movement_count': erratic_count,
                 'erratic_movements_per_min': erratic_per_min,
+                'laterality_index': float(laterality_index),
+                'cumulative_heading_change_deg': cumulative_heading_deg,
+                'mean_signed_angular_velocity_deg_s': mean_signed_angular_vel,
+                'n_right_turns': n_right,
+                'n_left_turns': n_left,
             }
 
         except Exception as e:
@@ -584,6 +641,11 @@ class MetricsCalculator:
             'mean_angular_velocity_deg_s': np.nan,
             'erratic_movement_count': 0,
             'erratic_movements_per_min': 0.0,
+            'laterality_index': np.nan,
+            'cumulative_heading_change_deg': np.nan,
+            'mean_signed_angular_velocity_deg_s': np.nan,
+            'n_right_turns': 0,
+            'n_left_turns': 0,
         }
 
     # =========================================================================

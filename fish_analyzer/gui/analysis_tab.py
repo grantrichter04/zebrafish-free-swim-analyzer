@@ -190,6 +190,23 @@ class AnalysisTabMixin:
         self.trajectory_view_frame = tk.Frame(traj_tab, bg="white")
         self.trajectory_view_frame.pack(fill="both", expand=True)
 
+        # Methods tab
+        methods_tab = ttk.Frame(results_notebook)
+        results_notebook.add(methods_tab, text="Methods")
+        methods_scroll = tk.Scrollbar(methods_tab)
+        methods_scroll.pack(side="right", fill="y")
+        self.analysis_methods_text = tk.Text(
+            methods_tab, wrap=tk.WORD, font=("Courier", 10),
+            yscrollcommand=methods_scroll.set
+        )
+        self.analysis_methods_text.pack(side="left", fill="both", expand=True)
+        methods_scroll.config(command=self.analysis_methods_text.yview)
+        self.analysis_methods_text.insert("1.0",
+            "Methods text will appear here after running analysis.\n\n"
+            "This provides a draft paragraph describing the analysis methods\n"
+            "and parameters used, suitable for a manuscript methods section."
+        )
+
     # =========================================================================
     # HELPER METHODS
     # =========================================================================
@@ -226,6 +243,7 @@ class AnalysisTabMixin:
         self._plot_speed_distribution(selected_files)
         self._plot_behavioral_comparison(selected_files)
         self._plot_trajectory_view(selected_files)
+        self._update_analysis_methods_text(selected_files)
 
     def _update_analysis_summary(self, selected_files: List[str]):
         """Update the text summary of individual analysis."""
@@ -249,16 +267,16 @@ class AnalysisTabMixin:
             f"{'Distance':>10} {'MeanSpd':>9} {'MaxSpd':>9} "
             f"{'Freeze#':>8} {'FreezePct':>10} "
             f"{'Burst#':>8} {'Erratic#':>9} "
-            f"{'Straight':>9}"
+            f"{'Straight':>9} {'Lateral':>8}"
         )
         lines.append(
             f"{'':22} {'':5} "
             f"{'(' + u + ')':>10} {'(' + u + '/s)':>9} {'(' + u + '/s)':>9} "
             f"{'':>8} {'(%)':>10} "
             f"{'':>8} {'(/min)':>9} "
-            f"{'(0-1)':>9}"
+            f"{'(0-1)':>9} {'(-1..1)':>8}"
         )
-        lines.append("-" * 100)
+        lines.append("-" * 110)
 
         all_file_data = []
 
@@ -278,6 +296,7 @@ class AnalysisTabMixin:
             burst_counts = [f.metrics.get('burst_count', 0) for f in fish_list]
             erratic_rates = [f.metrics.get('erratic_movements_per_min', 0) for f in fish_list]
             straightness = [f.metrics.get('mean_path_straightness', np.nan) for f in fish_list]
+            laterality = [f.metrics.get('laterality_index', np.nan) for f in fish_list]
 
             short_name = filename[:21] if len(filename) > 21 else filename
             lines.append(
@@ -285,18 +304,18 @@ class AnalysisTabMixin:
                 f"{np.nanmean(distances):>10.1f} {np.nanmean(mean_speeds):>9.2f} {np.nanmean(max_speeds):>9.2f} "
                 f"{np.mean(freeze_counts):>8.1f} {np.mean(freeze_pcts):>10.1f} "
                 f"{np.mean(burst_counts):>8.1f} {np.mean(erratic_rates):>9.1f} "
-                f"{np.nanmean(straightness):>9.2f}"
+                f"{np.nanmean(straightness):>9.2f} {np.nanmean(laterality):>8.2f}"
             )
 
             all_file_data.append({
                 'filename': filename, 'fish_list': fish_list, 'unit': unit
             })
 
-        lines.append("-" * 100)
+        lines.append("-" * 110)
         lines.append("")
 
         # Detailed per-fish results
-        lines.append("=" * 100)
+        lines.append("=" * 110)
         lines.append("DETAILED RESULTS BY FILE")
         lines.append("=" * 100)
 
@@ -330,6 +349,20 @@ class AnalysisTabMixin:
                 lines.append(f"    Angular velocity:   {m.get('mean_angular_velocity_deg_s', np.nan):.1f} °/s")
                 lines.append(f"    Erratic movements:  {m.get('erratic_movement_count', 0)} "
                              f"({m.get('erratic_movements_per_min', 0):.1f}/min)")
+                lines.append(f"    ---")
+                lat = m.get('laterality_index', np.nan)
+                lat_label = "no bias"
+                if not np.isnan(lat):
+                    if lat > 0.1:
+                        lat_label = "CW (right) bias"
+                    elif lat < -0.1:
+                        lat_label = "CCW (left) bias"
+                lines.append(f"    Laterality index:   {lat:.3f} ({lat_label})")
+                lines.append(f"    Turns:              {m.get('n_right_turns', 0)} right (CW), "
+                             f"{m.get('n_left_turns', 0)} left (CCW)")
+                lines.append(f"    Cumulative heading: {m.get('cumulative_heading_change_deg', np.nan):.1f}°")
+                lines.append(f"    Signed ang. vel.:   {m.get('mean_signed_angular_velocity_deg_s', np.nan):.1f} °/s "
+                             f"(+CCW / -CW)")
                 lines.append("")
 
         self.analysis_summary_text.insert("1.0", "\n".join(lines))
@@ -669,6 +702,92 @@ class AnalysisTabMixin:
         canvas = FigureCanvasTkAgg(fig, master=self.trajectory_view_frame)
         canvas.draw()
         canvas.get_tk_widget().pack(fill="both", expand=True)
+
+    # =========================================================================
+    # METHODS TEXT
+    # =========================================================================
+
+    def _update_analysis_methods_text(self, selected_files: List[str]):
+        """Generate a methods paragraph for the individual trajectory analysis."""
+        self.analysis_methods_text.delete("1.0", tk.END)
+
+        # Gather parameters from the first analyzed file
+        first_file = None
+        for f in selected_files:
+            if f in self.loaded_files and self.loaded_files[f].processed_data:
+                first_file = self.loaded_files[f]
+                break
+        if first_file is None:
+            return
+
+        cal = first_file.calibration
+        p = self.processing_params
+        n_files = len(selected_files)
+        total_fish = sum(len(self.loaded_files[f].processed_data)
+                         for f in selected_files
+                         if f in self.loaded_files and self.loaded_files[f].processed_data)
+
+        smooth_text = (
+            f"Position data were smoothed using a Savitzky-Golay filter "
+            f"(window = {p.smoothing_window} frames, polynomial order = "
+            f"{p.smoothing_polynomial_order}) prior to metric computation. "
+            f"NaN gaps were linearly interpolated before smoothing and restored after."
+        ) if p.apply_smoothing else (
+            "No position smoothing was applied to preserve the temporal "
+            "resolution of bout-based locomotion."
+        )
+
+        text = (
+            "METHODS — Individual Trajectory Analysis\n"
+            "========================================\n\n"
+            "The following is a draft methods paragraph. Edit as needed.\n\n"
+            "---\n\n"
+            f"Zebrafish trajectories were tracked using idtracker.ai and "
+            f"analyzed using the Zebrafish Free Swim Analyzer (v2.1). "
+            f"Trajectory coordinates were converted from pixels to "
+            f"{cal.unit_name} using a calibration factor of "
+            f"{cal.scale_factor:.6f} {cal.unit_name}/pixel "
+            f"(frame rate: {cal.frame_rate:.1f} fps). "
+            f"{smooth_text} "
+            f"Fish with fewer than {p.min_valid_points} valid position "
+            f"frames were excluded from analysis.\n\n"
+            f"For each fish, the following metrics were computed: total "
+            f"distance traveled (sum of frame-to-frame displacements), "
+            f"mean and maximum speed, and path straightness (ratio of "
+            f"net displacement to path distance over sliding "
+            f"{p.straightness_window_seconds:.1f}-second windows; "
+            f"1.0 = straight, 0.0 = circling). "
+            f"Freezing episodes were defined as consecutive periods where "
+            f"speed remained below {p.rest_speed_threshold} {cal.unit_name}/s "
+            f"for at least {p.min_freeze_frames} frames "
+            f"({p.min_freeze_frames / cal.frame_rate * 1000:.0f} ms). "
+            f"Burst events were detected when frame-to-frame acceleration "
+            f"exceeded {p.burst_accel_threshold} {cal.unit_name}/s\u00b2. "
+            f"Angular velocity was computed as the absolute frame-to-frame "
+            f"heading change (degrees/second), restricted to frames where "
+            f"the fish was actively moving. Erratic movements were counted "
+            f"as heading changes exceeding {p.erratic_turn_threshold}\u00b0 "
+            f"during active movement. "
+            f"Turning bias was quantified using a laterality index "
+            f"(right turns \u2212 left turns) / total turns, where positive "
+            f"values indicate clockwise bias and negative values indicate "
+            f"counterclockwise bias.\n\n"
+            f"Analysis included {n_files} file(s) with {total_fish} fish total.\n\n"
+            "---\n\n"
+            "KEY PARAMETERS:\n"
+            f"  Calibration unit:          {cal.unit_name}\n"
+            f"  Scale factor:              {cal.scale_factor:.6f} {cal.unit_name}/px\n"
+            f"  Frame rate:                {cal.frame_rate:.1f} fps\n"
+            f"  Smoothing:                 {'ON (window=' + str(p.smoothing_window) + ')' if p.apply_smoothing else 'OFF'}\n"
+            f"  Rest speed threshold:      {p.rest_speed_threshold} {cal.unit_name}/s\n"
+            f"  Min freeze duration:       {p.min_freeze_frames} frames ({p.min_freeze_frames / cal.frame_rate * 1000:.0f} ms)\n"
+            f"  Burst accel threshold:     {p.burst_accel_threshold} {cal.unit_name}/s\u00b2\n"
+            f"  Erratic turn threshold:    {p.erratic_turn_threshold}\u00b0\n"
+            f"  Path straightness window:  {p.straightness_window_seconds} s\n"
+            f"  Min valid frames:          {p.min_valid_points}\n"
+        )
+
+        self.analysis_methods_text.insert("1.0", text)
 
     # =========================================================================
     # EXPORT METHODS

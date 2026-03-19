@@ -108,13 +108,6 @@ class GUIBase:
         self.file_arena_definitions: Dict[str, Any] = {}
         self.current_arena_file: Optional[str] = None
 
-        # Frame viewer state
-        self.frame_view_fig = None
-        self.frame_view_canvas = None
-        self.frame_view_ax_main = None
-        self.frame_view_ax_time = None
-        self.frame_view_time_marker = None
-
         # Create the main window
         self.root = tk.Tk()
         self.root.title("Fish Trajectory Analyzer")
@@ -151,8 +144,10 @@ class GUIBase:
         # Create each tab (methods provided by mixins)
         self._create_data_tab()
         self._create_analysis_tab()
+        self._create_bout_tab()
         self._create_shoaling_tab()
         self._create_spatial_tab()
+        self._create_inspector_tab()
 
     def _setup_log_redirect(self):
         """Redirect print() output to the GUI status bar."""
