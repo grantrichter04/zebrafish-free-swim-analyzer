@@ -21,6 +21,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import matplotlib.pyplot as plt
 
 from ..shoaling import ShoalingParameters, ShoalingResults, ShoalingCalculator
+from ..export import export_shoaling_metrics_csv, export_shoaling_summary_csv
 from .utils import smooth_time_series
 
 
@@ -107,6 +108,12 @@ class ShoalingTabMixin:
             command=self._run_shoaling_analysis,
             bg="lightgreen", font=("Arial", 12, "bold"), height=2
         ).pack(fill="x", padx=10, pady=10)
+
+        tk.Button(
+            parent, text="Export Shoaling Results to CSV",
+            command=self._export_shoaling_csv,
+            font=("Arial", 10)
+        ).pack(fill="x", padx=10, pady=(0, 10))
 
         # Frame scrubber section
         self._create_frame_scrubber_controls(parent)
@@ -419,8 +426,9 @@ class ShoalingTabMixin:
 
         try:
             smooth_seconds = float(self.shoaling_smooth_var.get())
-        except:
+        except ValueError:
             smooth_seconds = 5.0
+            self.shoaling_smooth_var.set("5.0")
 
         for (filename, results), color in zip(all_results.items(), colors):
             time_minutes = results.timestamps / 60.0
@@ -456,8 +464,9 @@ class ShoalingTabMixin:
 
         try:
             smooth_seconds = float(self.shoaling_smooth_var.get())
-        except:
+        except ValueError:
             smooth_seconds = 5.0
+            self.shoaling_smooth_var.set("5.0")
 
         for (filename, results), color in zip(all_results.items(), colors):
             time_minutes = results.timestamps / 60.0
@@ -493,8 +502,9 @@ class ShoalingTabMixin:
 
         try:
             smooth_seconds = float(self.shoaling_smooth_var.get())
-        except:
+        except ValueError:
             smooth_seconds = 5.0
+            self.shoaling_smooth_var.set("5.0")
 
         for (filename, results), color in zip(all_results.items(), colors):
             time_minutes = results.timestamps / 60.0
@@ -505,10 +515,10 @@ class ShoalingTabMixin:
                 hull_data = smooth_time_series(hull_data, smooth_seconds, effective_fps)
             
             ax.plot(time_minutes, hull_data, color=color, linewidth=2,
-                   label=f'{filename} ({results.mean_hull_area:.1f} BL^2)', alpha=0.9)
+                   label=f'{filename} ({results.mean_hull_area:.1f} BL\u00b2)', alpha=0.9)
 
         ax.set_xlabel('Time (minutes)', fontsize=12)
-        ax.set_ylabel('Convex Hull Area (BL^2)', fontsize=12)
+        ax.set_ylabel('Convex Hull Area (BL\u00b2)', fontsize=12)
         ax.set_title('Group Spread Over Time', fontsize=14, fontweight='bold')
         ax.legend(loc='best', fontsize=9)
         ax.grid(True, alpha=0.3)
@@ -690,7 +700,7 @@ class ShoalingTabMixin:
                 speed_str = self.playback_speed_var.get()
                 try:
                     speed_mult = float(speed_str.replace('x', ''))
-                except:
+                except ValueError:
                     speed_mult = 1.0
 
                 delay_ms = max(16, int((real_time_per_sample / speed_mult) * 1000))
@@ -790,7 +800,7 @@ class ShoalingTabMixin:
             self.frame_view_ax_time.set_ylabel('IID (BL)', fontsize=8)
         else:
             self.frame_view_ax_time.plot(time_minutes, results.convex_hull_area_per_sample, 'r-', linewidth=1, alpha=0.7)
-            self.frame_view_ax_time.set_ylabel('Hull (BL^2)', fontsize=8)
+            self.frame_view_ax_time.set_ylabel('Hull (BL\u00b2)', fontsize=8)
         self.frame_view_ax_time.set_xlabel('Time (minutes)', fontsize=8)
         self.frame_view_ax_time.set_xlim(time_minutes[0], time_minutes[-1])
         self.frame_view_ax_time.grid(True, alpha=0.3)
@@ -815,8 +825,8 @@ class ShoalingTabMixin:
         for artist in getattr(self, '_dynamic_artists', []):
             try:
                 artist.remove()
-            except:
-                pass
+            except (ValueError, AttributeError):
+                pass  # Artist may already have been removed
         self._dynamic_artists = []
 
         # Update video frame if using video
@@ -889,8 +899,8 @@ class ShoalingTabMixin:
             if hasattr(self, '_video_background_artist') and self._video_background_artist is not None:
                 try:
                     self._video_background_artist.remove()
-                except:
-                    pass
+                except (ValueError, AttributeError):
+                    pass  # Artist may already have been removed
             
             self._video_background_artist = ax_main.imshow(
                 video_frame,
@@ -942,7 +952,7 @@ class ShoalingTabMixin:
         elif viz_mode == 'iid':
             try:
                 focus_fish = int(self.iid_focus_fish_var.get())
-            except:
+            except (ValueError, TypeError):
                 focus_fish = 0
             if focus_fish < n_fish and not np.isnan(positions_bl[focus_fish, 0]):
                 for j in range(n_fish):
@@ -1028,6 +1038,45 @@ class ShoalingTabMixin:
             messagebox.showerror("Error Loading Video", f"Failed to load video:\n\n{str(e)}")
             import traceback
             traceback.print_exc()
+
+    # =========================================================================
+    # EXPORT METHODS
+    # =========================================================================
+
+    def _export_shoaling_csv(self):
+        """Export shoaling analysis results to CSV files."""
+        analyzed = {k: v for k, v in self.loaded_files.items()
+                    if getattr(v, 'shoaling_results', None) is not None}
+        if not analyzed:
+            messagebox.showwarning("No Data",
+                                   "No files have shoaling results yet.\n"
+                                   "Run 'Run Shoaling Analysis' first.")
+            return
+
+        output_path = filedialog.asksaveasfilename(
+            title="Export Shoaling Results CSV",
+            defaultextension=".csv",
+            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
+            initialfile="shoaling_timeseries.csv"
+        )
+        if not output_path:
+            return
+
+        try:
+            out = Path(output_path)
+            # Export both timeseries and summary
+            n_ts = export_shoaling_metrics_csv(analyzed, out)
+            summary_path = out.with_name(out.stem + "_summary.csv")
+            n_sum = export_shoaling_summary_csv(analyzed, summary_path)
+
+            self.set_status(f"Exported shoaling data to {out.name}")
+            messagebox.showinfo(
+                "Export Complete",
+                f"Exported shoaling data:\n\n"
+                f"Time series: {n_ts} rows \u2192 {out.name}\n"
+                f"Summary: {n_sum} rows \u2192 {summary_path.name}")
+        except Exception as e:
+            messagebox.showerror("Export Error", f"Failed to export:\n{e}")
 
     def _on_video_toggle(self):
         """Handle video frame toggle checkbox."""

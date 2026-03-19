@@ -381,6 +381,7 @@ class ThigmotaxisCalculator:
         # Track per-fish overall statistics
         frames_in_border = np.zeros(n_fish)
         frames_in_center = np.zeros(n_fish)
+        frames_outside_arena = np.zeros(n_fish)
         frames_valid = np.zeros(n_fish)
 
         # Sample frames for time series
@@ -425,6 +426,8 @@ class ThigmotaxisCalculator:
                     else:
                         frames_in_border[fish_idx] += 1
                         in_border = True
+                else:
+                    frames_outside_arena[fish_idx] += 1
                 
                 # Record per-fish state at sample frames
                 if is_sample_frame:
@@ -437,6 +440,22 @@ class ThigmotaxisCalculator:
             if np.any(valid_mask):
                 fish_in_border_per_sample[sample_idx] = np.sum(fish_states[valid_mask])
 
+        # Warn if significant data falls outside the arena
+        total_outside = np.sum(frames_outside_arena)
+        total_valid = np.sum(frames_valid)
+        if total_valid > 0:
+            outside_pct = (total_outside / (total_valid + total_outside)) * 100
+            if outside_pct > 5:
+                import warnings
+                warnings.warn(
+                    f"  WARNING: {outside_pct:.1f}% of valid fish positions fall outside "
+                    f"the arena boundary. The arena polygon may be misaligned or too small. "
+                    f"Thigmotaxis results may be unreliable."
+                )
+                print(f"  ⚠ {outside_pct:.1f}% of positions outside arena — check arena alignment!")
+            elif outside_pct > 0:
+                print(f"  Note: {outside_pct:.1f}% of positions outside arena (minor — likely tracking noise)")
+
         # Calculate overall percentages
         time_in_border_pct = np.zeros(n_fish)
         time_in_center_pct = np.zeros(n_fish)
@@ -446,7 +465,16 @@ class ThigmotaxisCalculator:
                 time_in_border_pct[i] = (frames_in_border[i] / frames_valid[i]) * 100
                 time_in_center_pct[i] = (frames_in_center[i] / frames_valid[i]) * 100
 
-        pct_in_border_per_sample = (fish_in_border_per_sample / n_fish) * 100
+        # Calculate group time series percentage using only fish with valid data
+        pct_in_border_per_sample = np.zeros(n_samples)
+        for sample_idx in range(n_samples):
+            fish_states = per_fish_in_border_samples[sample_idx, :]
+            valid_mask = ~np.isnan(fish_states)
+            n_valid_at_sample = np.sum(valid_mask)
+            if n_valid_at_sample > 0:
+                pct_in_border_per_sample[sample_idx] = (
+                    np.sum(fish_states[valid_mask]) / n_valid_at_sample
+                ) * 100
 
         mean_pct = np.mean(time_in_border_pct)
         std_pct = np.std(time_in_border_pct)

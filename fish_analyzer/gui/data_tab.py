@@ -58,7 +58,9 @@ class DataTabMixin:
 
         def _on_mousewheel(event):
             canvas.yview_scroll(int(-1*(event.delta/120)), "units")
-        canvas.bind_all("<MouseWheel>", _on_mousewheel)
+        # Bind mousewheel only when cursor is over this canvas (not globally)
+        canvas.bind("<Enter>", lambda e: canvas.bind_all("<MouseWheel>", _on_mousewheel))
+        canvas.bind("<Leave>", lambda e: canvas.unbind_all("<MouseWheel>"))
 
         # Add sections to the scrollable frame
         self._create_file_section(self.scrollable_frame)
@@ -70,14 +72,22 @@ class DataTabMixin:
         analyze_frame.pack(fill="x", padx=20, pady=20)
 
         tk.Button(
-            analyze_frame, text="Analyze All Files",
+            analyze_frame, text="Run Individual Trajectory Analysis",
             command=self._run_analysis_and_switch_tab,
             bg="lightgreen", font=("Arial", 14, "bold"), height=2
         ).pack()
 
+        # Progress bar (hidden until analysis runs)
+        self.analysis_progress = ttk.Progressbar(
+            analyze_frame, orient="horizontal", mode="determinate", length=400
+        )
+        self.analysis_progress.pack(pady=(5, 0))
+        self.analysis_progress.pack_forget()  # Hide initially
+
         tk.Label(
-            analyze_frame, text="Process all loaded files and display results",
-            font=("Arial", 9), fg="gray"
+            analyze_frame, text="Calculates speed, distance, freezing, bursting, and path straightness for each fish.\n"
+                               "Shoaling and spatial analyses are run separately from their own tabs.",
+            font=("Arial", 9), fg="gray", justify=tk.CENTER
         ).pack(pady=5)
 
     def _create_file_section(self, parent):
@@ -257,14 +267,6 @@ class DataTabMixin:
         self.smoothing_window_var = tk.StringVar(value="5")
         tk.Entry(smooth_frame, textvariable=self.smoothing_window_var, width=5).pack(side="left", padx=5)
         tk.Label(smooth_frame, text="frames (must be odd)").pack(side="left")
-
-        # Turn angle lag
-        turn_frame = tk.Frame(params_col)
-        turn_frame.pack(anchor="w", pady=(10, 2))
-        tk.Label(turn_frame, text="Turn angle lag:").pack(side="left")
-        self.turn_lag_var = tk.StringVar(value="10")
-        tk.Entry(turn_frame, textvariable=self.turn_lag_var, width=5).pack(side="left", padx=5)
-        tk.Label(turn_frame, text="frames").pack(side="left")
 
         # Rest speed threshold
         rest_frame = tk.Frame(params_col)
@@ -581,11 +583,19 @@ class DataTabMixin:
 
         self.analysis_summary_text.delete("1.0", tk.END)
         self.analysis_summary_text.insert("1.0", f"Processing {len(self.loaded_files)} file(s)...\n\n")
+
+        # Show and configure progress bar
+        total = len(self.loaded_files)
+        self.analysis_progress.pack(pady=(5, 0))
+        self.analysis_progress['maximum'] = total
+        self.analysis_progress['value'] = 0
         self.root.update()
 
         try:
-            for nickname, loaded_file in self.loaded_files.items():
+            for idx, (nickname, loaded_file) in enumerate(self.loaded_files.items(), 1):
+                self.set_status(f"Processing {idx}/{total}: {nickname}...")
                 self.analysis_summary_text.insert(tk.END, f"Processing: {nickname}...\n")
+                self.analysis_progress['value'] = idx - 1
                 self.root.update()
 
                 fish_list = process_and_analyze_file(loaded_file, params)
@@ -593,6 +603,7 @@ class DataTabMixin:
 
                 self.analysis_summary_text.insert(tk.END,
                     f"  [OK] Analyzed {len(fish_list)}/{loaded_file.n_fish} fish\n")
+                self.analysis_progress['value'] = idx
                 self.root.update()
 
             # Update file lists and auto-select all
@@ -602,29 +613,32 @@ class DataTabMixin:
 
             self._update_analysis_visualizations()
 
-            messagebox.showinfo("Complete", f"Processed {len(self.loaded_files)} file(s).\n"
+            self.set_status(f"Analysis complete \u2014 {total} file(s) processed")
+            messagebox.showinfo("Complete", f"Processed {total} file(s).\n"
                               "View results in the Individual Analysis tab.")
         except Exception as e:
             self.analysis_summary_text.delete("1.0", tk.END)
             self.analysis_summary_text.insert("1.0", f"Error: {str(e)}")
+            self.set_status(f"Analysis failed: {e}")
             import traceback
             traceback.print_exc()
+        finally:
+            # Hide progress bar when done
+            self.analysis_progress.pack_forget()
 
     def _get_processing_parameters_from_gui(self) -> ProcessingParameters:
         """Read processing parameters from the GUI inputs."""
         apply_smoothing = self.apply_smoothing_var.get()
         smoothing_window = int(self.smoothing_window_var.get())
-        turn_lag = int(self.turn_lag_var.get())
         rest_threshold = float(self.rest_threshold_var.get())
 
         params = ProcessingParameters(
             apply_smoothing=apply_smoothing,
             smoothing_window=smoothing_window,
             smoothing_polynomial_order=3,
-            min_valid_points=1,
+            min_valid_points=10,
             min_valid_percentage=0.01,
-            turn_angle_lag=turn_lag,
-            rest_speed_threshold=rest_threshold
+            rest_speed_threshold=rest_threshold,
         )
         params.validate()
         return params

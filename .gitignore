@@ -6,3 +6,7 @@ build/
 dist/
 *.egg-info/
 .DS_Store
+
+# Claude Code
+.claude/
+CLAUDE.md

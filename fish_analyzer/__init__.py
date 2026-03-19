@@ -3,7 +3,7 @@ fish_analyzer - A modular tool for analyzing fish trajectory data from idtracker
 
 This package provides tools for:
 - Loading and calibrating trajectory data
-- Individual behavior metrics (speed, distance, sinuosity, turns)
+- Individual behavior metrics (speed, distance, freezing, bursting, path straightness)
 - Shoaling analysis (NND, IID, convex hull)
 - Spatial analysis (thigmotaxis, heatmaps)
 
@@ -65,6 +65,13 @@ except ImportError as e:
     import warnings
     warnings.warn(f"GUI not available: {e}. Install tkinter to use the GUI.")
 
+from .export import (
+    export_individual_metrics_csv,
+    export_shoaling_metrics_csv,
+    export_shoaling_summary_csv,
+    export_thigmotaxis_csv,
+)
+
 from .video_utils import (
     VideoFrameReader,
     VideoFrameCache,
@@ -72,5 +79,5 @@ from .video_utils import (
 )
 
 # Package metadata
-__version__ = "2.0.0"
+__version__ = "2.1.0"
 __author__ = "Fish Trajectory Analyzer"

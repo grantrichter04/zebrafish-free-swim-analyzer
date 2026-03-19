@@ -27,7 +27,7 @@ METRICS CALCULATED:
 from dataclasses import dataclass
 from typing import Optional, Tuple
 import numpy as np
-from scipy.spatial.distance import pdist
+from scipy.spatial.distance import pdist, cdist
 from scipy.spatial import ConvexHull
 
 # Import from our package
@@ -332,11 +332,7 @@ class ShoalingCalculator:
         """
         Calculate nearest neighbor distance for each fish at one frame.
 
-        ALGORITHM:
-        For each fish i:
-            1. Calculate Euclidean distance to every other fish j
-            2. Find the minimum distance (excluding self, which would be 0)
-            3. That minimum is the NND for fish i
+        Uses scipy.spatial.distance.cdist for efficient vectorized computation.
 
         Parameters
         ----------
@@ -348,17 +344,10 @@ class ShoalingCalculator:
         np.ndarray
             Shape (n_fish,) with NND for each fish in PIXELS
         """
-        n_fish = positions.shape[0]
-        distances = np.full((n_fish, n_fish), np.inf)
-        
-        for i in range(n_fish):
-            for j in range(n_fish):
-                if i != j:
-                    dx = positions[i, 0] - positions[j, 0]
-                    dy = positions[i, 1] - positions[j, 1]
-                    distances[i, j] = np.sqrt(dx**2 + dy**2)
-        
-        return np.min(distances, axis=1)
+        dist_matrix = cdist(positions, positions, metric='euclidean')
+        # Set self-distances to inf so they're not selected as minimum
+        np.fill_diagonal(dist_matrix, np.inf)
+        return np.min(dist_matrix, axis=1)
 
     def _calculate_iid_at_frame(self, positions: np.ndarray) -> float:
         """

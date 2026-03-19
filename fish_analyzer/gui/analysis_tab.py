@@ -6,25 +6,27 @@ Analysis Tab Mixin - Individual trajectory metrics and visualizations.
 This mixin provides all methods related to:
 - Speed time series plots
 - Speed distribution histograms
-- Distance and sinuosity comparison
+- Distance and behavioral comparison
 - Trajectory view (spaghetti and grid modes)
 """
 
 from typing import List
+from pathlib import Path
 import numpy as np
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, filedialog
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import matplotlib.pyplot as plt
 
 from .utils import smooth_time_series
+from ..export import export_individual_metrics_csv
 
 
 class AnalysisTabMixin:
     """
     Mixin providing Individual Analysis Tab functionality.
-    
+
     Expects the following attributes from base class:
     - self.root: tk.Tk
     - self.notebook: ttk.Notebook
@@ -99,6 +101,12 @@ class AnalysisTabMixin:
             bg="lightblue", font=("Arial", 11, "bold")
         ).pack(fill="x", padx=10, pady=10)
 
+        tk.Button(
+            parent, text="Export Results to CSV",
+            command=self._export_individual_csv,
+            font=("Arial", 10)
+        ).pack(fill="x", padx=10, pady=(0, 10))
+
         # Distribution settings
         dist_frame = tk.LabelFrame(parent, text="Distribution Settings", font=("Arial", 11, "bold"))
         dist_frame.pack(fill="x", padx=10, pady=10)
@@ -132,14 +140,16 @@ class AnalysisTabMixin:
             "Individual trajectory analysis results will appear here.\n\n"
             "To run analysis:\n"
             "1. Load trajectory files in the 'Data Setup' tab\n"
-            "2. Click 'Analyze All Files' to process\n"
+            "2. Click 'Run Individual Trajectory Analysis' to process\n"
             "3. Select files from the list and click 'Update Visualizations'\n\n"
             "Metrics calculated:\n"
             "- Total distance traveled\n"
             "- Mean/max speed\n"
-            "- Net displacement (start to end)\n"
-            "- Sinuosity (path tortuosity)\n"
-            "- Turn angle statistics\n"
+            "- Freeze count and duration (anxiety indicator)\n"
+            "- Burst count and speed (locomotor vigor)\n"
+            "- Angular velocity (turning rate)\n"
+            "- Erratic movements (sudden direction changes)\n"
+            "- Path straightness (how direct the swimming path is)\n"
         )
 
         # Speed Time Series tab
@@ -154,10 +164,10 @@ class AnalysisTabMixin:
         self.speed_distribution_frame = tk.Frame(speed_dist_tab, bg="white")
         self.speed_distribution_frame.pack(fill="both", expand=True)
 
-        # Distance Comparison tab
-        distance_tab = ttk.Frame(results_notebook)
-        results_notebook.add(distance_tab, text="Distance & Sinuosity")
-        self.distance_comparison_frame = tk.Frame(distance_tab, bg="white")
+        # Behavioral Comparison tab (replaces "Distance & Sinuosity")
+        behavior_tab = ttk.Frame(results_notebook)
+        results_notebook.add(behavior_tab, text="Behavioral Comparison")
+        self.distance_comparison_frame = tk.Frame(behavior_tab, bg="white")
         self.distance_comparison_frame.pack(fill="both", expand=True)
 
         # Trajectory View tab
@@ -207,14 +217,14 @@ class AnalysisTabMixin:
             if not loaded_file.processed_data:
                 messagebox.showwarning("Not Analyzed",
                                       f"'{filename}' has not been analyzed yet.\n"
-                                      "Please run 'Analyze All Files' first.")
+                                      "Please run 'Run Individual Trajectory Analysis' from the Data Setup tab first.")
                 return
 
         # Update all visualizations
         self._update_analysis_summary(selected_files)
         self._plot_speed_timeseries(selected_files)
         self._plot_speed_distribution(selected_files)
-        self._plot_distance_comparison(selected_files)
+        self._plot_behavioral_comparison(selected_files)
         self._plot_trajectory_view(selected_files)
 
     def _update_analysis_summary(self, selected_files: List[str]):
@@ -222,16 +232,33 @@ class AnalysisTabMixin:
         self.analysis_summary_text.delete("1.0", tk.END)
 
         lines = []
-        lines.append("=" * 90)
+        lines.append("=" * 100)
         lines.append("INDIVIDUAL TRAJECTORY ANALYSIS")
-        lines.append("=" * 90)
+        lines.append("=" * 100)
         lines.append("")
+
+        # Determine unit from first file
+        first_file = self.loaded_files[selected_files[0]]
+        u = first_file.calibration.unit_name
 
         # Comparison table
         lines.append("COMPARISON TABLE (File Averages):")
-        lines.append("-" * 90)
-        lines.append(f"{'File':<18} {'Fish':<5} {'Distance':<12} {'Mean Speed':<12} {'Max Speed':<12} {'Sinuosity':<10}")
-        lines.append("-" * 90)
+        lines.append("-" * 100)
+        lines.append(
+            f"{'File':<22} {'Fish':<5} "
+            f"{'Distance':>10} {'MeanSpd':>9} {'MaxSpd':>9} "
+            f"{'Freeze#':>8} {'FreezePct':>10} "
+            f"{'Burst#':>8} {'Erratic#':>9} "
+            f"{'Straight':>9}"
+        )
+        lines.append(
+            f"{'':22} {'':5} "
+            f"{'(' + u + ')':>10} {'(' + u + '/s)':>9} {'(' + u + '/s)':>9} "
+            f"{'':>8} {'(%)':>10} "
+            f"{'':>8} {'(/min)':>9} "
+            f"{'(0-1)':>9}"
+        )
+        lines.append("-" * 100)
 
         all_file_data = []
 
@@ -246,31 +273,32 @@ class AnalysisTabMixin:
             distances = [f.metrics.get('total_distance', np.nan) for f in fish_list]
             mean_speeds = [f.metrics.get('mean_speed', np.nan) for f in fish_list]
             max_speeds = [f.metrics.get('max_speed', np.nan) for f in fish_list]
-            sinuosities = [f.metrics.get('sinuosity', np.nan) for f in fish_list]
+            freeze_counts = [f.metrics.get('freeze_count', 0) for f in fish_list]
+            freeze_pcts = [f.metrics.get('freeze_fraction_pct', 0) for f in fish_list]
+            burst_counts = [f.metrics.get('burst_count', 0) for f in fish_list]
+            erratic_rates = [f.metrics.get('erratic_movements_per_min', 0) for f in fish_list]
+            straightness = [f.metrics.get('mean_path_straightness', np.nan) for f in fish_list]
 
-            avg_distance = np.nanmean(distances)
-            avg_mean_speed = np.nanmean(mean_speeds)
-            avg_max_speed = np.nanmean(max_speeds)
-            avg_sinuosity = np.nanmean(sinuosities)
-
-            short_name = filename[:17] if len(filename) > 17 else filename
+            short_name = filename[:21] if len(filename) > 21 else filename
             lines.append(
-                f"{short_name:<18} {len(fish_list):<5} "
-                f"{avg_distance:<12.1f} {avg_mean_speed:<12.2f} "
-                f"{avg_max_speed:<12.2f} {avg_sinuosity:<10.2f}"
+                f"{short_name:<22} {len(fish_list):<5} "
+                f"{np.nanmean(distances):>10.1f} {np.nanmean(mean_speeds):>9.2f} {np.nanmean(max_speeds):>9.2f} "
+                f"{np.mean(freeze_counts):>8.1f} {np.mean(freeze_pcts):>10.1f} "
+                f"{np.mean(burst_counts):>8.1f} {np.mean(erratic_rates):>9.1f} "
+                f"{np.nanmean(straightness):>9.2f}"
             )
 
             all_file_data.append({
                 'filename': filename, 'fish_list': fish_list, 'unit': unit
             })
 
-        lines.append("-" * 90)
+        lines.append("-" * 100)
         lines.append("")
 
         # Detailed per-fish results
-        lines.append("=" * 90)
+        lines.append("=" * 100)
         lines.append("DETAILED RESULTS BY FILE")
-        lines.append("=" * 90)
+        lines.append("=" * 100)
 
         for data in all_file_data:
             filename = data['filename']
@@ -281,15 +309,27 @@ class AnalysisTabMixin:
             lines.append("")
             lines.append(f"FILE: {filename}")
             lines.append(f"Duration: {loaded_file.duration_minutes:.1f} min | Units: {unit} | Fish: {len(fish_list)}")
-            lines.append("-" * 60)
+            lines.append("-" * 70)
 
             for fish in fish_list:
                 m = fish.metrics
                 lines.append(f"  Fish {fish.fish_id} ({fish.identity_label}):")
-                lines.append(f"    Data quality: {fish.valid_percentage:.1%} valid frames")
-                lines.append(f"    Total distance:  {m.get('total_distance', np.nan):.1f} {unit}")
-                lines.append(f"    Mean speed:      {m.get('mean_speed', np.nan):.2f} {unit}/s")
-                lines.append(f"    Sinuosity:       {m.get('sinuosity', np.nan):.2f}")
+                lines.append(f"    Data quality:       {fish.valid_percentage:.1%} valid frames")
+                lines.append(f"    Total distance:     {m.get('total_distance', np.nan):.1f} {unit}")
+                lines.append(f"    Mean speed:         {m.get('mean_speed', np.nan):.2f} {unit}/s")
+                lines.append(f"    Max speed:          {m.get('max_speed', np.nan):.2f} {unit}/s")
+                lines.append(f"    Path straightness:  {m.get('mean_path_straightness', np.nan):.2f} (1.0 = perfectly straight)")
+                lines.append(f"    ---")
+                lines.append(f"    Freeze episodes:    {m.get('freeze_count', 0)} "
+                             f"(total {m.get('freeze_total_duration_s', 0):.1f}s, "
+                             f"mean {m.get('freeze_mean_duration_s', 0):.1f}s, "
+                             f"{m.get('freeze_fraction_pct', 0):.1f}% of time)")
+                lines.append(f"    Burst events:       {m.get('burst_count', 0)} "
+                             f"({m.get('burst_frequency_per_min', 0):.1f}/min, "
+                             f"mean peak {m.get('burst_mean_speed', 0):.2f} {unit}/s)")
+                lines.append(f"    Angular velocity:   {m.get('mean_angular_velocity_deg_s', np.nan):.1f} °/s")
+                lines.append(f"    Erratic movements:  {m.get('erratic_movement_count', 0)} "
+                             f"({m.get('erratic_movements_per_min', 0):.1f}/min)")
                 lines.append("")
 
         self.analysis_summary_text.insert("1.0", "\n".join(lines))
@@ -304,8 +344,12 @@ class AnalysisTabMixin:
 
         try:
             smooth_seconds = float(self.analysis_smooth_var.get())
-        except:
+        except ValueError:
             smooth_seconds = 2.0
+            self.analysis_smooth_var.set("2.0")
+            messagebox.showwarning("Invalid Smoothing",
+                                   "Smoothing value was not a valid number.\n"
+                                   "Using default: 2.0 seconds.")
 
         show_individual = self.show_individual_fish_var.get()
         show_average = self.show_file_average_var.get()
@@ -337,7 +381,6 @@ class AnalysisTabMixin:
                 if len(speed) == 0:
                     continue
 
-                # Apply smoothing to individual fish data
                 if smooth_seconds > 0 and len(speed) > 1:
                     speed = smooth_time_series(speed, smooth_seconds, frame_rate)
 
@@ -380,10 +423,15 @@ class AnalysisTabMixin:
 
         try:
             n_bins = int(self.histogram_bins_var.get())
-        except:
+            if n_bins < 1:
+                raise ValueError("Must be at least 1")
+        except ValueError:
             n_bins = 30
+            self.histogram_bins_var.set("30")
+            messagebox.showwarning("Invalid Bins",
+                                   "Histogram bins value was not valid.\n"
+                                   "Using default: 30 bins.")
 
-        # Collect all speed data
         fish_info = []
         file_colors = plt.cm.tab10(np.linspace(0, 1, len(selected_files)))
 
@@ -406,23 +454,18 @@ class AnalysisTabMixin:
         if not fish_info:
             return
 
-        # Calculate global x-axis limits (speed range) across ALL fish
         all_speeds_combined = np.concatenate([info[2] for info in fish_info])
         global_x_min = 0
         global_x_max = np.percentile(all_speeds_combined, 99.5)
-        
-        # Create histograms with same bins for all fish
         global_bins = np.linspace(global_x_min, global_x_max, n_bins + 1)
-        
-        # Pre-compute all histograms to find global y-axis max
+
         all_hist_counts = []
         for filename, fish, speed, file_color, unit in fish_info:
             counts, _ = np.histogram(speed, bins=global_bins)
             all_hist_counts.append(counts)
-        
+
         global_y_max = max(counts.max() for counts in all_hist_counts) * 1.1
 
-        # Determine grid size
         total_fish = len(fish_info)
         n_cols = min(3, total_fish)
         n_rows = (total_fish + n_cols - 1) // n_cols
@@ -431,7 +474,6 @@ class AnalysisTabMixin:
 
         for plot_idx, (filename, fish, speed, file_color, unit) in enumerate(fish_info):
             ax = fig.add_subplot(n_rows, n_cols, plot_idx + 1)
-            
             ax.hist(speed, bins=global_bins, color=file_color, alpha=0.7, edgecolor='black', linewidth=0.5)
 
             mean_speed = np.mean(speed)
@@ -439,11 +481,10 @@ class AnalysisTabMixin:
 
             ax.set_xlabel(f'Speed ({unit}/s)', fontsize=9)
             ax.set_ylabel('Count', fontsize=9)
-            
             ax.set_xlim(global_x_min, global_x_max)
             ax.set_ylim(0, global_y_max)
 
-            short_name = filename[:8] if len(filename) > 8 else filename
+            short_name = filename[:15] if len(filename) > 15 else filename
             ax.set_title(f'{short_name} - Fish {fish.fish_id}', fontsize=10)
             ax.legend(fontsize=7, loc='upper right')
 
@@ -453,16 +494,19 @@ class AnalysisTabMixin:
         canvas.draw()
         canvas.get_tk_widget().pack(fill="both", expand=True)
 
-    def _plot_distance_comparison(self, selected_files: List[str]):
-        """Plot distance and sinuosity comparison as bar charts."""
+    def _plot_behavioral_comparison(self, selected_files: List[str]):
+        """Plot behavioral comparison as bar charts: distance, freeze%, burst rate, straightness."""
         for widget in self.distance_comparison_frame.winfo_children():
             widget.destroy()
 
-        fig = Figure(figsize=(12, 5), dpi=100)
+        fig = Figure(figsize=(14, 8), dpi=100)
 
         file_names = []
         avg_distances = []
-        avg_sinuosities = []
+        avg_freeze_pcts = []
+        avg_burst_rates = []
+        avg_straightness = []
+        avg_erratic_rates = []
         units = []
 
         for filename in selected_files:
@@ -471,38 +515,72 @@ class AnalysisTabMixin:
             unit = loaded_file.calibration.unit_name
 
             distances = [f.metrics.get('total_distance', np.nan) for f in fish_list]
-            sinuosities = [f.metrics.get('sinuosity', np.nan) for f in fish_list]
+            freeze_pcts = [f.metrics.get('freeze_fraction_pct', 0) for f in fish_list]
+            burst_rates = [f.metrics.get('burst_frequency_per_min', 0) for f in fish_list]
+            straightness = [f.metrics.get('mean_path_straightness', np.nan) for f in fish_list]
+            erratic_rates = [f.metrics.get('erratic_movements_per_min', 0) for f in fish_list]
 
-            file_names.append(filename[:15] if len(filename) > 15 else filename)
+            file_names.append(filename[:20] if len(filename) > 20 else filename)
             avg_distances.append(np.nanmean(distances))
-            avg_sinuosities.append(np.nanmean(sinuosities))
+            avg_freeze_pcts.append(np.mean(freeze_pcts))
+            avg_burst_rates.append(np.mean(burst_rates))
+            avg_straightness.append(np.nanmean(straightness))
+            avg_erratic_rates.append(np.mean(erratic_rates))
             units.append(unit)
 
         x = np.arange(len(file_names))
         colors = plt.cm.tab10(np.linspace(0, 1, len(file_names)))
 
-        ax1 = fig.add_subplot(1, 2, 1)
+        # 2x3 grid of subplots
+        ax1 = fig.add_subplot(2, 3, 1)
         ax1.bar(x, avg_distances, color=colors, edgecolor='black')
-        ax1.set_xlabel('File', fontsize=12)
-        ax1.set_ylabel(f'Total Distance ({units[0] if units else "units"})', fontsize=12)
-        ax1.set_title('Total Distance Traveled', fontsize=14, fontweight='bold')
+        ax1.set_ylabel(f'Total Distance ({units[0] if units else "units"})', fontsize=10)
+        ax1.set_title('Total Distance', fontsize=12, fontweight='bold')
         ax1.set_xticks(x)
-        ax1.set_xticklabels(file_names, rotation=45, ha='right')
+        ax1.set_xticklabels(file_names, rotation=45, ha='right', fontsize=8)
 
-        ax2 = fig.add_subplot(1, 2, 2)
-        ax2.bar(x, avg_sinuosities, color=colors, edgecolor='black')
-        ax2.set_xlabel('File', fontsize=12)
-        ax2.set_ylabel('Sinuosity', fontsize=12)
-        ax2.set_title('Path Sinuosity', fontsize=14, fontweight='bold')
+        ax2 = fig.add_subplot(2, 3, 2)
+        ax2.bar(x, avg_freeze_pcts, color=colors, edgecolor='black')
+        ax2.set_ylabel('Time Frozen (%)', fontsize=10)
+        ax2.set_title('Freezing', fontsize=12, fontweight='bold')
         ax2.set_xticks(x)
-        ax2.set_xticklabels(file_names, rotation=45, ha='right')
-        ax2.axhline(y=1.0, color='gray', linestyle='--', alpha=0.5)
+        ax2.set_xticklabels(file_names, rotation=45, ha='right', fontsize=8)
+
+        ax3 = fig.add_subplot(2, 3, 3)
+        ax3.bar(x, avg_burst_rates, color=colors, edgecolor='black')
+        ax3.set_ylabel('Bursts / min', fontsize=10)
+        ax3.set_title('Burst Frequency', fontsize=12, fontweight='bold')
+        ax3.set_xticks(x)
+        ax3.set_xticklabels(file_names, rotation=45, ha='right', fontsize=8)
+
+        ax4 = fig.add_subplot(2, 3, 4)
+        ax4.bar(x, avg_straightness, color=colors, edgecolor='black')
+        ax4.set_ylabel('Straightness (0–1)', fontsize=10)
+        ax4.set_title('Path Straightness', fontsize=12, fontweight='bold')
+        ax4.set_xticks(x)
+        ax4.set_xticklabels(file_names, rotation=45, ha='right', fontsize=8)
+        ax4.set_ylim(0, 1)
+        ax4.axhline(y=1.0, color='gray', linestyle='--', alpha=0.5)
+
+        ax5 = fig.add_subplot(2, 3, 5)
+        ax5.bar(x, avg_erratic_rates, color=colors, edgecolor='black')
+        ax5.set_ylabel('Erratic Movements / min', fontsize=10)
+        ax5.set_title('Erratic Movements', fontsize=12, fontweight='bold')
+        ax5.set_xticks(x)
+        ax5.set_xticklabels(file_names, rotation=45, ha='right', fontsize=8)
+
+        # Remove 6th subplot if unused
+        ax6 = fig.add_subplot(2, 3, 6)
+        ax6.axis('off')
 
         fig.tight_layout()
 
         canvas = FigureCanvasTkAgg(fig, master=self.distance_comparison_frame)
         canvas.draw()
         canvas.get_tk_widget().pack(fill="both", expand=True)
+
+    # Keep old name as alias for backwards compatibility
+    _plot_distance_comparison = _plot_behavioral_comparison
 
     def _refresh_trajectory_view(self):
         """Refresh trajectory view."""
@@ -580,7 +658,7 @@ class AnalysisTabMixin:
 
                 ax.plot(x, y, color=file_color, linewidth=0.6, alpha=0.6)
 
-                short_name = filename[:8] if len(filename) > 8 else filename
+                short_name = filename[:15] if len(filename) > 15 else filename
                 ax.set_title(f'{short_name} - Fish {fish.fish_id}', fontsize=9)
                 ax.set_aspect('equal')
                 ax.tick_params(labelsize=7)
@@ -591,3 +669,33 @@ class AnalysisTabMixin:
         canvas = FigureCanvasTkAgg(fig, master=self.trajectory_view_frame)
         canvas.draw()
         canvas.get_tk_widget().pack(fill="both", expand=True)
+
+    # =========================================================================
+    # EXPORT METHODS
+    # =========================================================================
+
+    def _export_individual_csv(self):
+        """Export individual trajectory metrics to a CSV file."""
+        analyzed = {k: v for k, v in self.loaded_files.items() if v.processed_data}
+        if not analyzed:
+            messagebox.showwarning("No Data",
+                                   "No files have been analyzed yet.\n"
+                                   "Run 'Run Individual Trajectory Analysis' first.")
+            return
+
+        output_path = filedialog.asksaveasfilename(
+            title="Export Individual Metrics CSV",
+            defaultextension=".csv",
+            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
+            initialfile="individual_metrics.csv"
+        )
+        if not output_path:
+            return
+
+        try:
+            n_rows = export_individual_metrics_csv(analyzed, Path(output_path))
+            self.set_status(f"Exported {n_rows} fish to {Path(output_path).name}")
+            messagebox.showinfo("Export Complete",
+                                f"Exported {n_rows} fish rows to:\n{output_path}")
+        except Exception as e:
+            messagebox.showerror("Export Error", f"Failed to export:\n{e}")

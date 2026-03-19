@@ -11,22 +11,24 @@ This mixin provides all methods related to:
 """
 
 from typing import Dict, List, Any
+from pathlib import Path
 import numpy as np
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, filedialog
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.patches import Polygon as MplPolygon
 import matplotlib.pyplot as plt
 
 from ..spatial import (
-    ArenaDefinition, 
-    ThigmotaxisResults, 
-    ThigmotaxisCalculator, 
+    ArenaDefinition,
+    ThigmotaxisResults,
+    ThigmotaxisCalculator,
     HeatmapGenerator,
     SHAPELY_AVAILABLE,
     compute_shared_heatmap_scale
 )
+from ..export import export_thigmotaxis_csv
 
 
 class SpatialTabMixin:
@@ -184,6 +186,12 @@ class SpatialTabMixin:
             bg="lightblue", font=("Arial", 10)
         ).pack(fill="x", padx=10, pady=5)
 
+        tk.Button(
+            parent, text="Export Thigmotaxis to CSV",
+            command=self._export_thigmotaxis_csv,
+            font=("Arial", 10)
+        ).pack(fill="x", padx=10, pady=(0, 5))
+
         # Heatmap Settings
         heat_frame = tk.LabelFrame(parent, text="Heatmap Settings", font=("Arial", 11, "bold"))
         heat_frame.pack(fill="x", padx=10, pady=10)
@@ -235,16 +243,26 @@ class SpatialTabMixin:
         
         self.thigmotaxis_text.insert("1.0",
             "SPATIAL ANALYSIS - THIGMOTAXIS & HEATMAPS\n"
-            "=" * 50 + "\n\n"
-            "Workflow:\n"
-            "1. Select file(s) from the list\n"
-            "2. Define arena boundary (click vertices or use Rectangle)\n"
-            "3. Click 'Complete' to finalize arena\n"
-            "4. Use 'Apply Arena to Selected Files' if same arena works for multiple files\n"
-            "5. Click 'Run Analysis on Selected Files'\n\n"
-            "Status indicators:\n"
-            "  [✓] = Arena defined for this file\n"
-            "  [■] = Analysis completed for this file\n"
+            "=" * 60 + "\n\n"
+            "WHAT THIS DOES:\n"
+            "Thigmotaxis measures how much time fish spend near the walls\n"
+            "(border zone) vs the center of the arena. High thigmotaxis\n"
+            "(wall-hugging) is a common anxiety-like behavior in zebrafish.\n\n"
+            "Heatmaps show where fish spend the most time in the arena.\n\n"
+            "HOW TO USE (step by step):\n"
+            "-" * 40 + "\n"
+            "Step 1: Select a file from the list on the left.\n"
+            "Step 2: Go to the 'Arena Definition' tab (right panel).\n"
+            "        Click on the image to place arena boundary points,\n"
+            "        OR click 'Rectangle' for a quick rectangular arena.\n"
+            "Step 3: Click 'Complete' to finalize the arena shape.\n"
+            "Step 4: (Optional) If multiple files share the same arena,\n"
+            "        select them and click 'Apply Arena to Selected Files'.\n"
+            "Step 5: Select all files you want to analyze, then click\n"
+            "        'Run Analysis on Selected Files'.\n\n"
+            "STATUS INDICATORS (in the file list):\n"
+            "  [\u2713] = Arena has been defined for this file\n"
+            "  [\u25a0] = Analysis has been completed for this file\n"
         )
 
         # Time Series Tab
@@ -431,10 +449,19 @@ class SpatialTabMixin:
         self.arena_canvas.draw()
 
     def _clear_current_arena(self):
-        """Clear the arena for the current file."""
+        """Clear the arena for the current file (with confirmation)."""
         if self.current_arena_file is None:
             return
-        
+
+        # Confirm before clearing a completed arena
+        if self.current_arena_file in self.file_arena_definitions:
+            if not messagebox.askyesno(
+                "Clear Arena?",
+                f"This will remove the arena definition for '{self.current_arena_file}'.\n"
+                "You will need to redraw it. Continue?"
+            ):
+                return
+
         self.arena_vertices = []
         self.arena_definition = None
         
@@ -732,8 +759,9 @@ class SpatialTabMixin:
         
         try:
             smooth_seconds = float(self.spatial_smooth_var.get())
-        except:
+        except ValueError:
             smooth_seconds = 30.0
+            self.spatial_smooth_var.set("30")
         
         show_individuals = self.show_individual_fish_thig_var.get() if hasattr(self, 'show_individual_fish_thig_var') else True
         
@@ -798,15 +826,16 @@ class SpatialTabMixin:
         
         try:
             smooth_seconds = float(self.spatial_smooth_var.get())
-        except:
+        except ValueError:
             smooth_seconds = 30.0
+            self.spatial_smooth_var.set("30")
         
         # Time series overlay
         for (filename, results), color in zip(results_dict.items(), file_colors):
             time_minutes = results.timestamps / 60.0
             smoothed_data = results.get_smoothed_group_timeseries(smooth_seconds)
             ax1.plot(time_minutes, smoothed_data, color=color, linewidth=2,
-                    label=f'{filename[:15]} ({results.mean_pct_in_border:.1f}%)')
+                    label=f'{filename[:20]} ({results.mean_pct_in_border:.1f}%)')
         
         ax1.set_xlabel('Time (minutes)', fontsize=11)
         ax1.set_ylabel('% Fish in Border Zone', fontsize=11)
@@ -816,7 +845,7 @@ class SpatialTabMixin:
         ax1.grid(True, alpha=0.3)
         
         # Bar chart
-        file_names = [f[:12] if len(f) > 12 else f for f in results_dict.keys()]
+        file_names = [f[:20] if len(f) > 20 else f for f in results_dict.keys()]
         means = [r.mean_pct_in_border for r in results_dict.values()]
         stds = [r.std_pct_in_border for r in results_dict.values()]
         x = np.arange(len(file_names))
@@ -855,8 +884,11 @@ class SpatialTabMixin:
         
         try:
             grid_size = int(self.heatmap_grid_var.get())
-        except:
+            if grid_size < 5:
+                raise ValueError("Grid size must be at least 5")
+        except ValueError:
             grid_size = 50
+            self.heatmap_grid_var.set("50")
         
         mode = self.heatmap_mode_var.get()
         use_shared_scale = self.shared_colorscale_var.get() if hasattr(self, 'shared_colorscale_var') else True
@@ -864,6 +896,12 @@ class SpatialTabMixin:
         if mode == "combined":
             self._plot_combined_heatmaps(valid_files, grid_size, use_shared_scale)
         else:
+            if len(valid_files) > 1:
+                messagebox.showinfo(
+                    "Individual Heatmap Mode",
+                    f"Showing individual fish heatmaps for '{valid_files[0]}' only.\n\n"
+                    "Individual mode displays one file at a time.\n"
+                    "Use 'Combined' mode to compare across files.")
             self._plot_individual_fish_heatmaps(valid_files[0], grid_size, use_shared_scale)
 
     def _plot_combined_heatmaps(self, filenames: List[str], grid_size: int, use_shared_scale: bool):
@@ -980,7 +1018,38 @@ class SpatialTabMixin:
         fig.tight_layout()
         if use_shared_scale:
             fig.subplots_adjust(right=0.9, top=0.92)
-        
+
         canvas = FigureCanvasTkAgg(fig, master=self.heatmap_frame)
         canvas.draw()
         canvas.get_tk_widget().pack(fill="both", expand=True)
+
+    # =========================================================================
+    # EXPORT METHODS
+    # =========================================================================
+
+    def _export_thigmotaxis_csv(self):
+        """Export thigmotaxis results to a CSV file."""
+        analyzed = {k: v for k, v in self.loaded_files.items()
+                    if getattr(v, 'thigmotaxis_results', None) is not None}
+        if not analyzed:
+            messagebox.showwarning("No Data",
+                                   "No files have thigmotaxis results yet.\n"
+                                   "Run 'Run Analysis on Selected Files' first.")
+            return
+
+        output_path = filedialog.asksaveasfilename(
+            title="Export Thigmotaxis Results CSV",
+            defaultextension=".csv",
+            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
+            initialfile="thigmotaxis_results.csv"
+        )
+        if not output_path:
+            return
+
+        try:
+            n_rows = export_thigmotaxis_csv(analyzed, Path(output_path))
+            self.set_status(f"Exported thigmotaxis data to {Path(output_path).name}")
+            messagebox.showinfo("Export Complete",
+                                f"Exported {n_rows} file(s) to:\n{output_path}")
+        except Exception as e:
+            messagebox.showerror("Export Error", f"Failed to export:\n{e}")
