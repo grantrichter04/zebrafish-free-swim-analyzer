@@ -16,10 +16,10 @@ import numpy as np
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 from matplotlib.figure import Figure
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 import matplotlib.pyplot as plt
 
-from .utils import smooth_time_series
+from .utils import smooth_time_series, create_sortable_treeview, embed_figure_with_toolbar
 from ..export import export_individual_metrics_csv
 
 
@@ -111,6 +111,14 @@ class AnalysisTabMixin:
         dist_frame = tk.LabelFrame(parent, text="Distribution Settings", font=("Arial", 11, "bold"))
         dist_frame.pack(fill="x", padx=10, pady=10)
 
+        # View mode
+        tk.Label(dist_frame, text="View mode:", font=("Arial", 9)).pack(anchor="w", padx=10, pady=(5, 0))
+        self.speed_dist_mode_var = tk.StringVar(value="histogram")
+        tk.Radiobutton(dist_frame, text="Histograms (grid)",
+                       variable=self.speed_dist_mode_var, value="histogram").pack(anchor="w", padx=20)
+        tk.Radiobutton(dist_frame, text="Ridge plot (joy plot)",
+                       variable=self.speed_dist_mode_var, value="ridge").pack(anchor="w", padx=20)
+
         bins_frame = tk.Frame(dist_frame)
         bins_frame.pack(fill="x", padx=10, pady=5)
         tk.Label(bins_frame, text="Histogram bins:").pack(side="left")
@@ -122,35 +130,21 @@ class AnalysisTabMixin:
         results_notebook = ttk.Notebook(parent)
         results_notebook.pack(fill="both", expand=True, padx=5, pady=5)
 
-        # Summary tab
+        # Summary tab (uses Treeview tables)
         summary_tab = ttk.Frame(results_notebook)
         results_notebook.add(summary_tab, text="Summary")
 
-        summary_scroll = tk.Scrollbar(summary_tab)
-        summary_scroll.pack(side="right", fill="y")
+        self.analysis_summary_frame = tk.Frame(summary_tab)
+        self.analysis_summary_frame.pack(fill="both", expand=True)
 
-        self.analysis_summary_text = tk.Text(
-            summary_tab, wrap=tk.WORD, font=("Courier", 10),
-            yscrollcommand=summary_scroll.set
-        )
-        self.analysis_summary_text.pack(side="left", fill="both", expand=True)
-        summary_scroll.config(command=self.analysis_summary_text.yview)
-
-        self.analysis_summary_text.insert("1.0",
-            "Individual trajectory analysis results will appear here.\n\n"
+        tk.Label(self.analysis_summary_frame,
+            text="Individual trajectory analysis results will appear here.\n\n"
             "To run analysis:\n"
             "1. Load trajectory files in the 'Data Setup' tab\n"
-            "2. Click 'Run Individual Trajectory Analysis' to process\n"
-            "3. Select files from the list and click 'Update Visualizations'\n\n"
-            "Metrics calculated:\n"
-            "- Total distance traveled\n"
-            "- Mean/max speed\n"
-            "- Freeze count and duration (anxiety indicator)\n"
-            "- Burst count and speed (locomotor vigor)\n"
-            "- Angular velocity (turning rate)\n"
-            "- Erratic movements (sudden direction changes)\n"
-            "- Path straightness (how direct the swimming path is)\n"
-        )
+            "2. Click 'Run All Analysis' to process\n"
+            "3. Select files from the list and click 'Update Visualizations'",
+            font=("Arial", 10), fg="gray", justify=tk.LEFT
+        ).pack(padx=20, pady=20)
 
         # Speed Time Series tab
         speed_ts_tab = ttk.Frame(results_notebook)
@@ -246,39 +240,25 @@ class AnalysisTabMixin:
         self._update_analysis_methods_text(selected_files)
 
     def _update_analysis_summary(self, selected_files: List[str]):
-        """Update the text summary of individual analysis."""
-        self.analysis_summary_text.delete("1.0", tk.END)
+        """Update the summary tab with Treeview tables."""
+        for widget in self.analysis_summary_frame.winfo_children():
+            widget.destroy()
 
-        lines = []
-        lines.append("=" * 100)
-        lines.append("INDIVIDUAL TRAJECTORY ANALYSIS")
-        lines.append("=" * 100)
-        lines.append("")
-
-        # Determine unit from first file
         first_file = self.loaded_files[selected_files[0]]
         u = first_file.calibration.unit_name
 
-        # Comparison table
-        lines.append("COMPARISON TABLE (File Averages):")
-        lines.append("-" * 100)
-        lines.append(
-            f"{'File':<22} {'Fish':<5} "
-            f"{'Distance':>10} {'MeanSpd':>9} {'MaxSpd':>9} "
-            f"{'Freeze#':>8} {'FreezePct':>10} "
-            f"{'Burst#':>8} {'Erratic#':>9} "
-            f"{'Straight':>9} {'Lateral':>8}"
-        )
-        lines.append(
-            f"{'':22} {'':5} "
-            f"{'(' + u + ')':>10} {'(' + u + '/s)':>9} {'(' + u + '/s)':>9} "
-            f"{'':>8} {'(%)':>10} "
-            f"{'':>8} {'(/min)':>9} "
-            f"{'(0-1)':>9} {'(-1..1)':>8}"
-        )
-        lines.append("-" * 110)
+        # --- File Averages Table ---
+        file_columns = [
+            ("file", "File", 150), ("fish", "Fish", 50),
+            ("distance", f"Distance ({u})", 90), ("mean_spd", f"Mean Spd ({u}/s)", 90),
+            ("max_spd", f"Max Spd ({u}/s)", 90), ("freeze_n", "Freeze #", 70),
+            ("freeze_pct", "Freeze %", 70), ("burst_n", "Burst #", 70),
+            ("erratic", "Erratic /min", 80), ("straight", "Straightness", 80),
+            ("lateral", "Laterality", 70),
+        ]
 
-        all_file_data = []
+        file_rows = []
+        all_fish_rows = []
 
         for filename in selected_files:
             loaded_file = self.loaded_files[filename]
@@ -298,74 +278,52 @@ class AnalysisTabMixin:
             straightness = [f.metrics.get('mean_path_straightness', np.nan) for f in fish_list]
             laterality = [f.metrics.get('laterality_index', np.nan) for f in fish_list]
 
-            short_name = filename[:21] if len(filename) > 21 else filename
-            lines.append(
-                f"{short_name:<22} {len(fish_list):<5} "
-                f"{np.nanmean(distances):>10.1f} {np.nanmean(mean_speeds):>9.2f} {np.nanmean(max_speeds):>9.2f} "
-                f"{np.mean(freeze_counts):>8.1f} {np.mean(freeze_pcts):>10.1f} "
-                f"{np.mean(burst_counts):>8.1f} {np.mean(erratic_rates):>9.1f} "
-                f"{np.nanmean(straightness):>9.2f} {np.nanmean(laterality):>8.2f}"
-            )
+            file_rows.append((
+                filename, len(fish_list),
+                f"{np.nanmean(distances):.1f}", f"{np.nanmean(mean_speeds):.2f}",
+                f"{np.nanmean(max_speeds):.2f}", f"{np.mean(freeze_counts):.1f}",
+                f"{np.mean(freeze_pcts):.1f}", f"{np.mean(burst_counts):.1f}",
+                f"{np.mean(erratic_rates):.1f}", f"{np.nanmean(straightness):.2f}",
+                f"{np.nanmean(laterality):.2f}",
+            ))
 
-            all_file_data.append({
-                'filename': filename, 'fish_list': fish_list, 'unit': unit
-            })
-
-        lines.append("-" * 110)
-        lines.append("")
-
-        # Detailed per-fish results
-        lines.append("=" * 110)
-        lines.append("DETAILED RESULTS BY FILE")
-        lines.append("=" * 100)
-
-        for data in all_file_data:
-            filename = data['filename']
-            fish_list = data['fish_list']
-            unit = data['unit']
-            loaded_file = self.loaded_files[filename]
-
-            lines.append("")
-            lines.append(f"FILE: {filename}")
-            lines.append(f"Duration: {loaded_file.duration_minutes:.1f} min | Units: {unit} | Fish: {len(fish_list)}")
-            lines.append("-" * 70)
-
+            # Per-fish rows
             for fish in fish_list:
                 m = fish.metrics
-                lines.append(f"  Fish {fish.fish_id} ({fish.identity_label}):")
-                lines.append(f"    Data quality:       {fish.valid_percentage:.1%} valid frames")
-                lines.append(f"    Total distance:     {m.get('total_distance', np.nan):.1f} {unit}")
-                lines.append(f"    Mean speed:         {m.get('mean_speed', np.nan):.2f} {unit}/s")
-                lines.append(f"    Max speed:          {m.get('max_speed', np.nan):.2f} {unit}/s")
-                lines.append(f"    Path straightness:  {m.get('mean_path_straightness', np.nan):.2f} (1.0 = perfectly straight)")
-                lines.append(f"    ---")
-                lines.append(f"    Freeze episodes:    {m.get('freeze_count', 0)} "
-                             f"(total {m.get('freeze_total_duration_s', 0):.1f}s, "
-                             f"mean {m.get('freeze_mean_duration_s', 0):.1f}s, "
-                             f"{m.get('freeze_fraction_pct', 0):.1f}% of time)")
-                lines.append(f"    Burst events:       {m.get('burst_count', 0)} "
-                             f"({m.get('burst_frequency_per_min', 0):.1f}/min, "
-                             f"mean peak {m.get('burst_mean_speed', 0):.2f} {unit}/s)")
-                lines.append(f"    Angular velocity:   {m.get('mean_angular_velocity_deg_s', np.nan):.1f} °/s")
-                lines.append(f"    Erratic movements:  {m.get('erratic_movement_count', 0)} "
-                             f"({m.get('erratic_movements_per_min', 0):.1f}/min)")
-                lines.append(f"    ---")
                 lat = m.get('laterality_index', np.nan)
-                lat_label = "no bias"
-                if not np.isnan(lat):
-                    if lat > 0.1:
-                        lat_label = "CW (right) bias"
-                    elif lat < -0.1:
-                        lat_label = "CCW (left) bias"
-                lines.append(f"    Laterality index:   {lat:.3f} ({lat_label})")
-                lines.append(f"    Turns:              {m.get('n_right_turns', 0)} right (CW), "
-                             f"{m.get('n_left_turns', 0)} left (CCW)")
-                lines.append(f"    Cumulative heading: {m.get('cumulative_heading_change_deg', np.nan):.1f}°")
-                lines.append(f"    Signed ang. vel.:   {m.get('mean_signed_angular_velocity_deg_s', np.nan):.1f} °/s "
-                             f"(+CCW / -CW)")
-                lines.append("")
+                all_fish_rows.append((
+                    filename, f"Fish {fish.fish_id}",
+                    f"{fish.valid_percentage:.0%}",
+                    f"{m.get('total_distance', np.nan):.1f}",
+                    f"{m.get('mean_speed', np.nan):.2f}",
+                    f"{m.get('max_speed', np.nan):.2f}",
+                    f"{m.get('freeze_count', 0)}",
+                    f"{m.get('freeze_fraction_pct', 0):.1f}",
+                    f"{m.get('burst_count', 0)}",
+                    f"{m.get('burst_frequency_per_min', 0):.1f}",
+                    f"{m.get('erratic_movements_per_min', 0):.1f}",
+                    f"{m.get('mean_path_straightness', np.nan):.2f}",
+                    f"{m.get('mean_angular_velocity_deg_s', np.nan):.1f}",
+                    f"{lat:.3f}" if not np.isnan(lat) else "N/A",
+                ))
 
-        self.analysis_summary_text.insert("1.0", "\n".join(lines))
+        create_sortable_treeview(self.analysis_summary_frame, file_columns, file_rows,
+                                 title="File Averages")
+
+        # --- Per-Fish Details Table ---
+        fish_columns = [
+            ("file", "File", 130), ("fish", "Fish", 60),
+            ("quality", "Valid %", 60),
+            ("distance", f"Distance ({u})", 85), ("mean_spd", f"Mean Spd", 75),
+            ("max_spd", f"Max Spd", 70), ("freeze_n", "Freeze #", 65),
+            ("freeze_pct", "Freeze %", 65), ("burst_n", "Burst #", 60),
+            ("burst_rate", "Burst /min", 70), ("erratic", "Erratic /min", 75),
+            ("straight", "Straight", 65), ("ang_vel", "Ang Vel", 65),
+            ("lateral", "Lateral", 60),
+        ]
+
+        create_sortable_treeview(self.analysis_summary_frame, fish_columns, all_fish_rows,
+                                 title="Per-Fish Details")
 
     def _plot_speed_timeseries(self, selected_files: List[str]):
         """Plot speed over time for selected files."""
@@ -445,12 +403,10 @@ class AnalysisTabMixin:
         ax.set_ylim(bottom=0)
         fig.tight_layout()
 
-        canvas = FigureCanvasTkAgg(fig, master=self.speed_timeseries_frame)
-        canvas.draw()
-        canvas.get_tk_widget().pack(fill="both", expand=True)
+        embed_figure_with_toolbar(fig, self.speed_timeseries_frame)
 
     def _plot_speed_distribution(self, selected_files: List[str]):
-        """Plot speed distribution histograms with shared axes for comparison."""
+        """Plot speed distribution as histograms or ridge plot."""
         for widget in self.speed_distribution_frame.winfo_children():
             widget.destroy()
 
@@ -461,9 +417,6 @@ class AnalysisTabMixin:
         except ValueError:
             n_bins = 30
             self.histogram_bins_var.set("30")
-            messagebox.showwarning("Invalid Bins",
-                                   "Histogram bins value was not valid.\n"
-                                   "Using default: 30 bins.")
 
         fish_info = []
         file_colors = plt.cm.tab10(np.linspace(0, 1, len(selected_files)))
@@ -487,6 +440,15 @@ class AnalysisTabMixin:
         if not fish_info:
             return
 
+        view_mode = self.speed_dist_mode_var.get()
+
+        if view_mode == "ridge":
+            self._plot_speed_ridge(fish_info, n_bins)
+        else:
+            self._plot_speed_histograms(fish_info, n_bins)
+
+    def _plot_speed_histograms(self, fish_info, n_bins):
+        """Plot traditional histogram grid."""
         all_speeds_combined = np.concatenate([info[2] for info in fish_info])
         global_x_min = 0
         global_x_max = np.percentile(all_speeds_combined, 99.5)
@@ -522,10 +484,112 @@ class AnalysisTabMixin:
             ax.legend(fontsize=7, loc='upper right')
 
         fig.tight_layout()
+        embed_figure_with_toolbar(fig, self.speed_distribution_frame)
 
-        canvas = FigureCanvasTkAgg(fig, master=self.speed_distribution_frame)
-        canvas.draw()
-        canvas.get_tk_widget().pack(fill="both", expand=True)
+    def _plot_speed_ridge(self, fish_info, n_bins):
+        """Plot overlapping KDE ridge (joy) plot.
+
+        Fish from the same file are grouped tightly together with consistent
+        color.  A visual gap separates different files for easy comparison.
+        """
+        from scipy.stats import gaussian_kde
+
+        all_speeds = np.concatenate([info[2] for info in fish_info])
+        x_min = 0
+        x_max = np.percentile(all_speeds, 99.5)
+        x_grid = np.linspace(x_min, x_max, 200)
+
+        # --- Group fish by file (preserve order) ---
+        from collections import OrderedDict
+        file_groups = OrderedDict()
+        for filename, fish, speed, file_color, unit in fish_info:
+            if filename not in file_groups:
+                file_groups[filename] = []
+            file_groups[filename].append((filename, fish, speed, file_color, unit))
+
+        n_files = len(file_groups)
+        n_total = len(fish_info)
+
+        # Spacing: tight within-file, larger gap between files
+        within_overlap = 0.45   # vertical step between fish in same file
+        between_gap = 0.3       # extra gap between file groups
+
+        # Compute all KDEs first to find global max for normalization
+        kde_curves = {}
+        for filename, fish, speed, file_color, unit in fish_info:
+            key = (filename, fish.fish_id)
+            try:
+                kde = gaussian_kde(speed, bw_method=0.15)
+                density = kde(x_grid)
+            except Exception:
+                density = np.zeros_like(x_grid)
+            kde_curves[key] = density
+
+        max_density = max(d.max() for d in kde_curves.values()) if kde_curves else 1.0
+
+        # Build the layout: bottom to top (reversed so first file is at top)
+        ordered_entries = []  # (y_offset, filename, fish, speed, file_color, unit, density)
+        y_pos = 0.0
+        for file_idx, (filename, group) in enumerate(reversed(list(file_groups.items()))):
+            for fish_idx, (fn, fish, speed, file_color, unit) in enumerate(reversed(group)):
+                key = (fn, fish.fish_id)
+                density = kde_curves[key]
+                ordered_entries.append((y_pos, fn, fish, speed, file_color, unit, density))
+                y_pos += within_overlap
+            # Add extra gap between file groups (but not after the last one)
+            if file_idx < n_files - 1:
+                y_pos += between_gap
+
+        total_height = y_pos
+        fig_height = max(4, total_height * 1.3 + 2)
+        fig = Figure(figsize=(10, fig_height), dpi=100)
+        ax = fig.add_subplot(111)
+
+        # Track file boundaries for divider lines
+        prev_filename = None
+        for y_offset, filename, fish, speed, file_color, unit, density in ordered_entries:
+            # Normalize density so peaks are comparable
+            normalized = density / max_density * within_overlap * 1.5
+
+            ax.fill_between(x_grid, y_offset, y_offset + normalized,
+                           color=file_color, alpha=0.6, linewidth=0)
+            ax.plot(x_grid, y_offset + normalized, color=file_color,
+                   linewidth=1.2, alpha=0.9)
+
+            # Label: show filename only for first fish in each group
+            short_name = filename[:15] if len(filename) > 15 else filename
+            if prev_filename != filename:
+                label = f"{short_name}\n  F{fish.fish_id}"
+            else:
+                label = f"  F{fish.fish_id}"
+            ax.text(-0.02 * x_max, y_offset + within_overlap * 0.2, label,
+                   fontsize=8, ha='right', va='center', transform=ax.transData)
+
+            prev_filename = filename
+
+        # Draw thin separator lines between file groups
+        if n_files > 1:
+            y_pos = 0.0
+            for file_idx, (filename, group) in enumerate(reversed(list(file_groups.items()))):
+                y_pos += len(group) * within_overlap
+                if file_idx < n_files - 1:
+                    sep_y = y_pos + between_gap * 0.5
+                    ax.axhline(sep_y, color='gray', linewidth=0.5,
+                              linestyle=':', alpha=0.5)
+                    y_pos += between_gap
+
+        unit = fish_info[0][4] if fish_info else "BL"
+        ax.set_xlabel(f'Speed ({unit}/s)', fontsize=11)
+        ax.set_xlim(x_min, x_max)
+        ax.set_ylim(-0.1, total_height + within_overlap)
+        ax.set_yticks([])
+        ax.set_title('Speed Distribution (Ridge Plot)', fontsize=13, fontweight='bold')
+        ax.spines['left'].set_visible(False)
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+        fig.tight_layout()
+
+        embed_figure_with_toolbar(fig, self.speed_distribution_frame)
 
     def _plot_behavioral_comparison(self, selected_files: List[str]):
         """Plot behavioral comparison as bar charts: distance, freeze%, burst rate, straightness."""
@@ -608,9 +672,7 @@ class AnalysisTabMixin:
 
         fig.tight_layout()
 
-        canvas = FigureCanvasTkAgg(fig, master=self.distance_comparison_frame)
-        canvas.draw()
-        canvas.get_tk_widget().pack(fill="both", expand=True)
+        embed_figure_with_toolbar(fig, self.distance_comparison_frame)
 
     # Keep old name as alias for backwards compatibility
     _plot_distance_comparison = _plot_behavioral_comparison
@@ -647,6 +709,11 @@ class AnalysisTabMixin:
                 fish_list = loaded_file.processed_data
                 unit = loaded_file.calibration.unit_name
 
+                # Calculate full arena dimensions
+                pixels_to_bl = loaded_file.calibration.scale_factor
+                width = loaded_file.metadata.video_width * pixels_to_bl
+                height = loaded_file.metadata.video_height * pixels_to_bl
+
                 colors = plt.cm.tab10(np.linspace(0, 1, len(fish_list)))
 
                 for fish, color in zip(fish_list, colors):
@@ -654,6 +721,8 @@ class AnalysisTabMixin:
                     y = fish.trajectory['y'].values
                     ax.plot(x, y, color=color, linewidth=0.8, alpha=0.7, label=f'Fish {fish.fish_id}')
 
+                ax.set_xlim(0, width)
+                ax.set_ylim(0, height)
                 ax.set_xlabel(f'X ({unit})', fontsize=10)
                 ax.set_ylabel(f'Y ({unit})', fontsize=10)
                 ax.set_title(f'{filename}', fontsize=12, fontweight='bold')
@@ -683,6 +752,11 @@ class AnalysisTabMixin:
                 ax = fig.add_subplot(n_rows, n_cols, plot_idx + 1)
                 unit = loaded_file.calibration.unit_name
 
+                # Calculate full arena dimensions
+                pixels_to_bl = loaded_file.calibration.scale_factor
+                width = loaded_file.metadata.video_width * pixels_to_bl
+                height = loaded_file.metadata.video_height * pixels_to_bl
+
                 x = fish.trajectory['x'].values
                 y = fish.trajectory['y'].values
 
@@ -691,6 +765,8 @@ class AnalysisTabMixin:
 
                 ax.plot(x, y, color=file_color, linewidth=0.6, alpha=0.6)
 
+                ax.set_xlim(0, width)
+                ax.set_ylim(0, height)
                 short_name = filename[:15] if len(filename) > 15 else filename
                 ax.set_title(f'{short_name} - Fish {fish.fish_id}', fontsize=9)
                 ax.set_aspect('equal')
@@ -699,9 +775,7 @@ class AnalysisTabMixin:
 
             fig.tight_layout()
 
-        canvas = FigureCanvasTkAgg(fig, master=self.trajectory_view_frame)
-        canvas.draw()
-        canvas.get_tk_widget().pack(fill="both", expand=True)
+        embed_figure_with_toolbar(fig, self.trajectory_view_frame)
 
     # =========================================================================
     # METHODS TEXT

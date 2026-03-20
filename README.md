@@ -4,7 +4,7 @@ A desktop application for analyzing zebrafish locomotor behavior from free-swimm
 
 The tool takes raw trajectory data (x, y positions per frame per fish) and produces calibrated behavioral metrics — swimming speed, distance traveled, freezing, bursting, erratic movements, path straightness, group cohesion (shoaling), and anxiety-related wall-hugging (thigmotaxis) — through an interactive GUI or a scriptable Python API.
 
-Designed for the [Morsch Lab](https://www.macquarie.edu.au/) at Macquarie University to support zebrafish neurobehavioral research.
+Designed for the Morsch lab at Macquarie University to support zebrafish neurobehavioral research.
 
 > **Status:** Under active development. Core analyses are functional; refinements ongoing.
 
@@ -51,7 +51,7 @@ fish_analyzer/
 
 ```bash
 # Create a new environment with all dependencies
-conda create -n fishanalyzer python=3.10 numpy pandas matplotlib scipy shapely -c conda-forge
+conda create -n fishanalyzer python=3.10 numpy pandas matplotlib scipy shapely scikit-learn -c conda-forge
 conda activate fishanalyzer
 
 # Install remaining packages via pip (not available on conda-forge)

@@ -72,7 +72,7 @@ class DataTabMixin:
         analyze_frame.pack(fill="x", padx=20, pady=20)
 
         tk.Button(
-            analyze_frame, text="Run Individual Trajectory Analysis",
+            analyze_frame, text="Run All Analysis",
             command=self._run_analysis_and_switch_tab,
             bg="lightgreen", font=("Arial", 14, "bold"), height=2
         ).pack()
@@ -85,7 +85,8 @@ class DataTabMixin:
         self.analysis_progress.pack_forget()  # Hide initially
 
         tk.Label(
-            analyze_frame, text="Calculates speed, distance, freezing, bursting, and path straightness for each fish.\n"
+            analyze_frame, text="Runs individual trajectory analysis (speed, distance, freezing, bursting,\n"
+                               "path straightness) AND bout analysis for all loaded files.\n"
                                "Shoaling and spatial analyses are run separately from their own tabs.",
             font=("Arial", 9), fg="gray", justify=tk.CENTER
         ).pack(pady=5)
@@ -567,8 +568,15 @@ class DataTabMixin:
     # =========================================================================
 
     def _run_analysis_and_switch_tab(self):
-        """Run analysis and switch to the results tab."""
+        """Run individual trajectory analysis + bout analysis, then switch tab."""
         self._run_analysis()
+        # Auto-run bout analysis if bout tab methods are available
+        if hasattr(self, '_refresh_bout_file_list') and hasattr(self, '_run_bout_analysis'):
+            try:
+                self._refresh_bout_file_list()
+                self._run_bout_analysis()
+            except Exception as e:
+                print(f"Auto bout analysis skipped: {e}")
         self.notebook.select(1)
 
     def _run_analysis(self):
@@ -583,8 +591,7 @@ class DataTabMixin:
             messagebox.showerror("Invalid Parameters", str(e))
             return
 
-        self.analysis_summary_text.delete("1.0", tk.END)
-        self.analysis_summary_text.insert("1.0", f"Processing {len(self.loaded_files)} file(s)...\n\n")
+        self.set_status(f"Processing {len(self.loaded_files)} file(s)...")
 
         # Show and configure progress bar
         total = len(self.loaded_files)
@@ -596,15 +603,14 @@ class DataTabMixin:
         try:
             for idx, (nickname, loaded_file) in enumerate(self.loaded_files.items(), 1):
                 self.set_status(f"Processing {idx}/{total}: {nickname}...")
-                self.analysis_summary_text.insert(tk.END, f"Processing: {nickname}...\n")
+                self.set_status(f"Processing {idx}/{total}: {nickname}...")
                 self.analysis_progress['value'] = idx - 1
                 self.root.update()
 
                 fish_list = process_and_analyze_file(loaded_file, params)
                 loaded_file.processed_data = fish_list
 
-                self.analysis_summary_text.insert(tk.END,
-                    f"  [OK] Analyzed {len(fish_list)}/{loaded_file.n_fish} fish\n")
+                self.set_status(f"  [OK] {nickname}: {len(fish_list)}/{loaded_file.n_fish} fish analyzed")
                 self.analysis_progress['value'] = idx
                 self.root.update()
 
@@ -619,8 +625,7 @@ class DataTabMixin:
             messagebox.showinfo("Complete", f"Processed {total} file(s).\n"
                               "View results in the Individual Analysis tab.")
         except Exception as e:
-            self.analysis_summary_text.delete("1.0", tk.END)
-            self.analysis_summary_text.insert("1.0", f"Error: {str(e)}")
+            self.set_status(f"Error: {str(e)}")
             self.set_status(f"Analysis failed: {e}")
             import traceback
             traceback.print_exc()

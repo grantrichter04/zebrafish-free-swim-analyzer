@@ -23,6 +23,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import matplotlib.pyplot as plt
 
 from ..bout_analysis import BoutParameters, BoutResults, analyze_bouts_for_file
+from .utils import create_sortable_treeview, embed_figure_with_toolbar
 
 
 class BoutTabMixin:
@@ -138,41 +139,41 @@ class BoutTabMixin:
         results_notebook = ttk.Notebook(parent)
         results_notebook.pack(fill="both", expand=True)
 
-        # Summary text tab
+        # Summary tab (uses Treeview tables)
         text_tab = ttk.Frame(results_notebook)
         results_notebook.add(text_tab, text="Summary")
 
-        scrollbar = tk.Scrollbar(text_tab)
-        scrollbar.pack(side="right", fill="y")
+        self.bout_summary_frame = tk.Frame(text_tab)
+        self.bout_summary_frame.pack(fill="both", expand=True)
 
-        self.bout_results_text = tk.Text(
-            text_tab, wrap=tk.WORD, font=("Courier", 10),
-            yscrollcommand=scrollbar.set
-        )
-        self.bout_results_text.pack(fill="both", expand=True)
-        scrollbar.config(command=self.bout_results_text.yview)
-
-        self.bout_results_text.insert("1.0",
-            "Bout analysis detects individual swim bouts (darts) and "
-            "measures:\n\n"
-            "  - Bout rate: how frequently the fish darts (bouts/min)\n"
-            "  - Bout duration: how long each dart lasts\n"
-            "  - Inter-bout interval (IBI): rest time between darts\n"
-            "  - Peak speed: maximum speed during each dart\n"
-            "  - Displacement: how far each dart moves the fish\n"
-            "  - Per-bout heading change: turning during each dart\n\n"
-            "Load files in the Data tab, then select files here and "
-            "click\n'Run Bout Analysis'.\n\n"
-            "Tip: For larvae at 30fps, start with 0.5 BL/s threshold.\n"
-            "For adults, try 0.3-1.0 BL/s depending on swimming style.\n\n"
-            "Use the Video Inspector tab to visualize bout speed traces\n"
-            "and heading changes overlaid on fish positions."
-        )
+        tk.Label(self.bout_summary_frame,
+            text="Bout analysis detects individual swim bouts (darts).\n\n"
+            "Load files in the Data tab, then select files here and click 'Run Bout Analysis'.\n"
+            "Tip: For larvae at 30fps, start with 0.5 BL/s threshold.",
+            font=("Arial", 10), fg="gray", justify=tk.LEFT
+        ).pack(padx=20, pady=20)
 
         # Distribution plots tab
         plots_tab = ttk.Frame(results_notebook)
         results_notebook.add(plots_tab, text="Distributions")
-        self.bout_plots_frame = plots_tab
+
+        # Fish filter bar at top of distributions
+        filter_bar = tk.Frame(plots_tab)
+        filter_bar.pack(fill="x", padx=5, pady=(5, 0))
+        tk.Label(filter_bar, text="Show:", font=("Arial", 9, "bold")).pack(side="left")
+        self.bout_dist_fish_var = tk.StringVar(value="All fish")
+        self.bout_dist_fish_combo = ttk.Combobox(
+            filter_bar, textvariable=self.bout_dist_fish_var,
+            state="readonly", width=20
+        )
+        self.bout_dist_fish_combo['values'] = ["All fish"]
+        self.bout_dist_fish_combo.pack(side="left", padx=5)
+        self.bout_dist_fish_combo.bind(
+            "<<ComboboxSelected>>", self._on_bout_dist_filter_change
+        )
+
+        self.bout_plots_frame = tk.Frame(plots_tab)
+        self.bout_plots_frame.pack(fill="both", expand=True)
 
         # Laterality tab
         lat_tab = ttk.Frame(results_notebook)
@@ -248,12 +249,17 @@ class BoutTabMixin:
         )
 
     def _run_bout_analysis(self):
-        """Run bout detection on selected files."""
+        """Run bout detection on selected files (defaults to all if none selected)."""
         selected_indices = self.bout_file_listbox.curselection()
         if not selected_indices:
-            messagebox.showinfo("No Files",
-                                "Please select files to analyze.")
-            return
+            # Auto-select all files
+            if self.bout_file_listbox.size() > 0:
+                self.bout_file_listbox.select_set(0, tk.END)
+                selected_indices = self.bout_file_listbox.curselection()
+            else:
+                messagebox.showinfo("No Files",
+                                    "Load files in the Data tab first.")
+                return
 
         selected_files = [self.bout_file_listbox.get(i)
                           for i in selected_indices]
@@ -274,6 +280,9 @@ class BoutTabMixin:
                 traceback.print_exc()
 
         if self.bout_results:
+            # Populate fish filter dropdown
+            self._populate_bout_fish_filter(selected_files)
+
             self._display_bout_summary(selected_files)
             self._plot_bout_distributions(selected_files)
             self._plot_bout_laterality(selected_files)
@@ -291,170 +300,126 @@ class BoutTabMixin:
             self.set_status("Bout analysis: no results")
 
     # =========================================================================
+    # FISH FILTER
+    # =========================================================================
+
+    def _populate_bout_fish_filter(self, selected_files: List[str]):
+        """Populate the fish filter dropdown with available fish IDs."""
+        options = ["All fish"]
+        for filename in selected_files:
+            if filename not in self.bout_results:
+                continue
+            short = filename[:15] if len(filename) > 15 else filename
+            for r in self.bout_results[filename]:
+                options.append(f"{short} - Fish {r.fish_id}")
+        self.bout_dist_fish_combo['values'] = options
+        self.bout_dist_fish_var.set("All fish")
+        # Store the selected files so filter can re-plot
+        self._bout_selected_files = selected_files
+
+    def _on_bout_dist_filter_change(self, event=None):
+        """Re-plot distributions when fish filter changes."""
+        selected_files = getattr(self, '_bout_selected_files', [])
+        if selected_files and self.bout_results:
+            self._plot_bout_distributions(selected_files)
+
+    # =========================================================================
     # DISPLAY
     # =========================================================================
 
     def _display_bout_summary(self, selected_files: List[str]):
-        """Display bout analysis summary as text."""
-        self.bout_results_text.delete("1.0", tk.END)
-        lines = []
+        """Display bout analysis summary using Treeview tables."""
+        for widget in self.bout_summary_frame.winfo_children():
+            widget.destroy()
 
         threshold = self.bout_threshold_var.get()
-        lines.append(
-            f"BOUT ANALYSIS RESULTS (threshold: {threshold} BL/s)"
-        )
-        lines.append("=" * 90)
-        lines.append("")
+        tk.Label(self.bout_summary_frame,
+                 text=f"Bout Analysis Results (threshold: {threshold} BL/s)",
+                 font=("Arial", 11, "bold")).pack(anchor="w", padx=10, pady=(5, 0))
 
-        # Comparison table header
-        lines.append(
-            f"{'File':<22} {'Fish':<5} "
-            f"{'Bouts':>7} {'Rate':>8} {'Duration':>10} {'IBI':>10} "
-            f"{'PkSpd':>8} {'Disp':>7} {'Lateral':>8}"
-        )
-        lines.append(
-            f"{'':22} {'':5} "
-            f"{'':>7} {'(/min)':>8} {'(ms)':>10} {'(ms)':>10} "
-            f"{'(BL/s)':>8} {'(BL)':>7} {'(-1..1)':>8}"
-        )
-        lines.append("-" * 90)
+        # --- File Averages Table ---
+        file_columns = [
+            ("file", "File", 150), ("fish", "Fish", 50),
+            ("bouts", "Bouts", 60), ("rate", "Rate /min", 75),
+            ("duration", "Duration (ms)", 90), ("ibi", "IBI (ms)", 80),
+            ("peak", "Peak Spd", 75), ("disp", "Displace", 70),
+            ("lateral", "Laterality", 70),
+        ]
+
+        file_rows = []
+        fish_rows = []
 
         for filename in selected_files:
             if filename not in self.bout_results:
                 continue
-
-            results = self.bout_results[filename]
-            n_fish = len(results)
-            all_bouts = sum(
-                r.summary.get('bout_count', 0) for r in results
-            )
-            avg_rate = np.mean(
-                [r.summary.get('bout_rate_per_min', 0) for r in results]
-            )
-            avg_dur = np.nanmean(
-                [r.summary.get('bout_duration_median_ms', np.nan)
-                 for r in results]
-            )
-            avg_ibi = np.nanmean(
-                [r.summary.get('ibi_median_ms', np.nan)
-                 for r in results]
-            )
-            avg_pk = np.nanmean(
-                [r.summary.get('bout_peak_speed_median', np.nan)
-                 for r in results]
-            )
-            avg_disp = np.nanmean(
-                [r.summary.get('bout_displacement_median', np.nan)
-                 for r in results]
-            )
-            avg_lat = np.nanmean(
-                [r.summary.get('bout_laterality_index', np.nan)
-                 for r in results]
-            )
-
-            short_name = (filename[:21] if len(filename) > 21
-                          else filename)
-            lines.append(
-                f"{short_name:<22} {n_fish:<5} "
-                f"{all_bouts:>7} {avg_rate:>8.1f} {avg_dur:>10.0f} "
-                f"{avg_ibi:>10.0f} "
-                f"{avg_pk:>8.2f} {avg_disp:>7.2f} {avg_lat:>8.3f}"
-            )
-
-        lines.append("-" * 90)
-        lines.append("")
-
-        # Detailed per-fish results
-        for filename in selected_files:
-            if filename not in self.bout_results:
-                continue
-
             results = self.bout_results[filename]
             loaded_file = self.loaded_files[filename]
             unit = loaded_file.calibration.unit_name
+            n_fish = len(results)
+            all_bouts = sum(r.summary.get('bout_count', 0) for r in results)
 
-            lines.append(f"FILE: {filename}")
-            lines.append(
-                f"Duration: {loaded_file.duration_minutes:.1f} min | "
-                f"FPS: {loaded_file.calibration.frame_rate:.1f}"
-            )
-            lines.append("-" * 70)
+            file_rows.append((
+                filename, n_fish, all_bouts,
+                f"{np.mean([r.summary.get('bout_rate_per_min', 0) for r in results]):.1f}",
+                f"{np.nanmean([r.summary.get('bout_duration_median_ms', np.nan) for r in results]):.0f}",
+                f"{np.nanmean([r.summary.get('ibi_median_ms', np.nan) for r in results]):.0f}",
+                f"{np.nanmean([r.summary.get('bout_peak_speed_median', np.nan) for r in results]):.2f}",
+                f"{np.nanmean([r.summary.get('bout_displacement_median', np.nan) for r in results]):.3f}",
+                f"{np.nanmean([r.summary.get('bout_laterality_index', np.nan) for r in results]):.3f}",
+            ))
 
+            # Per-fish rows
             for r in results:
                 s = r.summary
-                lines.append(
-                    f"  Fish {r.fish_id} ({r.identity_label}):"
-                )
-                lines.append(
-                    f"    Bout count:         "
-                    f"{s.get('bout_count', 0)}"
-                )
-                lines.append(
-                    f"    Bout rate:          "
-                    f"{s.get('bout_rate_per_min', 0):.1f} /min"
-                )
-                dur_iqr = s.get('bout_duration_iqr_ms', (np.nan, np.nan))
-                lines.append(
-                    f"    Bout duration:      "
-                    f"{s.get('bout_duration_median_ms', np.nan):.0f} ms "
-                    f"(IQR: {dur_iqr[0]:.0f}-{dur_iqr[1]:.0f})"
-                )
-                ibi_iqr = s.get('ibi_iqr_ms', (np.nan, np.nan))
-                lines.append(
-                    f"    Inter-bout int:     "
-                    f"{s.get('ibi_median_ms', np.nan):.0f} ms "
-                    f"(IQR: {ibi_iqr[0]:.0f}-{ibi_iqr[1]:.0f})"
-                )
-                pk_iqr = s.get('bout_peak_speed_iqr', (np.nan, np.nan))
-                lines.append(
-                    f"    Peak speed:         "
-                    f"{s.get('bout_peak_speed_median', np.nan):.2f} "
-                    f"{unit}/s "
-                    f"(IQR: {pk_iqr[0]:.2f}-{pk_iqr[1]:.2f})"
-                )
-                lines.append(
-                    f"    Displacement:       "
-                    f"{s.get('bout_displacement_median', np.nan):.3f} "
-                    f"{unit}"
-                )
-                lines.append(
-                    f"    Distance:           "
-                    f"{s.get('bout_distance_median', np.nan):.3f} "
-                    f"{unit}"
-                )
-                lines.append(f"    ---")
-                lines.append(
-                    f"    Mean |heading D|:   "
-                    f"{s.get('bout_heading_change_mean_abs_deg', np.nan):.1f}"
-                    f" deg"
-                )
-                lat = s.get('bout_laterality_index', np.nan)
-                lat_label = "no bias"
-                if not np.isnan(lat):
-                    if lat > 0.1:
-                        lat_label = "CW (right) bias"
-                    elif lat < -0.1:
-                        lat_label = "CCW (left) bias"
-                lines.append(
-                    f"    Laterality:         "
-                    f"{lat:.3f} ({lat_label})"
-                )
-                lines.append(
-                    f"    Turns:              "
-                    f"{s.get('bout_n_right', 0)} right, "
-                    f"{s.get('bout_n_left', 0)} left, "
-                    f"{s.get('bout_n_straight', 0)} straight"
-                )
-                lines.append("")
+                fish_rows.append((
+                    filename, f"Fish {r.fish_id}",
+                    s.get('bout_count', 0),
+                    f"{s.get('bout_rate_per_min', 0):.1f}",
+                    f"{s.get('bout_duration_median_ms', np.nan):.0f}",
+                    f"{s.get('ibi_median_ms', np.nan):.0f}",
+                    f"{s.get('bout_peak_speed_median', np.nan):.2f}",
+                    f"{s.get('bout_displacement_median', np.nan):.3f}",
+                    f"{s.get('bout_heading_change_mean_abs_deg', np.nan):.1f}",
+                    f"{s.get('bout_laterality_index', np.nan):.3f}",
+                    f"{s.get('bout_n_right', 0)}R / {s.get('bout_n_left', 0)}L / {s.get('bout_n_straight', 0)}S",
+                ))
 
-        self.bout_results_text.insert("1.0", "\n".join(lines))
+        create_sortable_treeview(self.bout_summary_frame, file_columns, file_rows,
+                                 title="File Averages")
+
+        # --- Per-Fish Details Table ---
+        fish_columns = [
+            ("file", "File", 130), ("fish", "Fish", 60),
+            ("bouts", "Bouts", 55), ("rate", "Rate /min", 70),
+            ("duration", "Dur (ms)", 70), ("ibi", "IBI (ms)", 70),
+            ("peak", "Peak Spd", 70), ("disp", "Displace", 65),
+            ("heading", "|Heading|", 65), ("lateral", "Lateral", 60),
+            ("turns", "Turns (R/L/S)", 100),
+        ]
+
+        create_sortable_treeview(self.bout_summary_frame, fish_columns, fish_rows,
+                                 title="Per-Fish Details")
 
     def _plot_bout_distributions(self, selected_files: List[str]):
-        """Plot bout metric distributions."""
+        """Plot bout metric distributions, filtered by fish selection."""
         for widget in self.bout_plots_frame.winfo_children():
             widget.destroy()
 
-        # Collect all bouts across selected files
+        # Parse the fish filter selection
+        filter_val = self.bout_dist_fish_var.get()
+        filter_fish_id = None
+        filter_filename = None
+        if filter_val != "All fish":
+            # Parse "filename - Fish N"
+            parts = filter_val.rsplit(" - Fish ", 1)
+            if len(parts) == 2:
+                filter_filename = parts[0]
+                try:
+                    filter_fish_id = int(parts[1])
+                except ValueError:
+                    pass
+
+        # Collect bouts (optionally filtered)
         all_durations = {}
         all_ibis = {}
         all_peak_speeds = {}
@@ -465,11 +430,19 @@ class BoutTabMixin:
                 continue
             short = (filename[:15] if len(filename) > 15
                      else filename)
+
+            # Skip files that don't match filter
+            if filter_filename is not None and short != filter_filename:
+                continue
+
             durs = []
             ibis = []
             peaks = []
             headings = []
             for r in self.bout_results[filename]:
+                # Skip fish that don't match filter
+                if filter_fish_id is not None and r.fish_id != filter_fish_id:
+                    continue
                 durs.extend([b.duration_s * 1000 for b in r.bouts])
                 ibis.extend(r.inter_bout_intervals_s * 1000)
                 peaks.extend([b.peak_speed for b in r.bouts])
@@ -477,10 +450,12 @@ class BoutTabMixin:
                     [b.heading_change_deg for b in r.bouts]
                 )
 
-            all_durations[short] = np.array(durs)
-            all_ibis[short] = np.array(ibis)
-            all_peak_speeds[short] = np.array(peaks)
-            all_heading_changes[short] = np.array(headings)
+            label = short if filter_fish_id is None else f"{short} F{filter_fish_id}"
+            if durs:  # Only add if there's data
+                all_durations[label] = np.array(durs)
+                all_ibis[label] = np.array(ibis)
+                all_peak_speeds[label] = np.array(peaks)
+                all_heading_changes[label] = np.array(headings)
 
         if not all_durations:
             return
@@ -547,9 +522,7 @@ class BoutTabMixin:
         if len(all_heading_changes) > 1:
             ax4.legend(fontsize=7)
 
-        canvas = FigureCanvasTkAgg(fig, master=self.bout_plots_frame)
-        canvas.draw()
-        canvas.get_tk_widget().pack(fill="both", expand=True)
+        embed_figure_with_toolbar(fig, self.bout_plots_frame)
 
     def _plot_bout_laterality(self, selected_files: List[str]):
         """Plot per-fish laterality summary."""
@@ -625,9 +598,7 @@ class BoutTabMixin:
         ax2.legend(fontsize=8)
 
         fig.tight_layout()
-        canvas = FigureCanvasTkAgg(fig, master=self.bout_laterality_frame)
-        canvas.draw()
-        canvas.get_tk_widget().pack(fill="both", expand=True)
+        embed_figure_with_toolbar(fig, self.bout_laterality_frame)
 
     # =========================================================================
     # METHODS TEXT

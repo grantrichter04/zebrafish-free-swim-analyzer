@@ -24,7 +24,7 @@ import matplotlib.pyplot as plt
 
 from ..shoaling import ShoalingParameters, ShoalingResults, ShoalingCalculator
 from ..export import export_shoaling_metrics_csv, export_shoaling_summary_csv
-from .utils import smooth_time_series
+from .utils import smooth_time_series, create_sortable_treeview, embed_figure_with_toolbar
 
 
 class ShoalingTabMixin:
@@ -126,34 +126,19 @@ class ShoalingTabMixin:
         results_notebook = ttk.Notebook(parent)
         results_notebook.pack(fill="both", expand=True, padx=5, pady=5)
 
-        # Text results
+        # Results Summary tab (Treeview tables)
         text_tab = ttk.Frame(results_notebook)
         results_notebook.add(text_tab, text="Results Summary")
 
-        scrollbar = tk.Scrollbar(text_tab)
-        scrollbar.pack(side="right", fill="y")
+        self.shoaling_summary_frame = tk.Frame(text_tab)
+        self.shoaling_summary_frame.pack(fill="both", expand=True)
 
-        self.shoaling_results_text = tk.Text(
-            text_tab, wrap=tk.WORD, font=("Courier", 10),
-            yscrollcommand=scrollbar.set
-        )
-        self.shoaling_results_text.pack(side="left", fill="both",
-                                         expand=True)
-        scrollbar.config(command=self.shoaling_results_text.yview)
-
-        self.shoaling_results_text.insert("1.0",
-            "Shoaling analysis results will appear here.\n\n"
-            "To run analysis:\n"
-            "1. Load trajectory files in the 'Data Setup' tab\n"
-            "2. Select one or more files (Ctrl+click for multiple)\n"
-            "3. Click 'Run Shoaling Analysis'\n\n"
-            "Metrics:\n"
-            "- NND: Nearest Neighbor Distance (closest fish)\n"
-            "- IID: Inter-Individual Distance (all pairs average)\n"
-            "- Hull: Convex Hull Area (group footprint)\n\n"
-            "Use the Video Inspector tab to visualize these metrics\n"
-            "overlaid on fish positions frame by frame."
-        )
+        tk.Label(self.shoaling_summary_frame,
+            text="Shoaling analysis results will appear here.\n\n"
+            "Select files and click 'Run Shoaling Analysis'.\n"
+            "Metrics: NND (nearest neighbor), IID (all pairs), Hull (group area)",
+            font=("Arial", 10), fg="gray", justify=tk.LEFT
+        ).pack(padx=20, pady=20)
 
         # NND Plot
         nnd_plot_tab = ttk.Frame(results_notebook)
@@ -220,12 +205,17 @@ class ShoalingTabMixin:
     # =========================================================================
 
     def _run_shoaling_analysis(self):
-        """Run shoaling analysis on selected files."""
+        """Run shoaling analysis on selected files (defaults to all)."""
         selected_indices = self.shoaling_files_listbox.curselection()
         if not selected_indices:
-            messagebox.showerror("No Files Selected",
-                                  "Please select one or more files.")
-            return
+            # Auto-select all files
+            if self.shoaling_files_listbox.size() > 0:
+                self.shoaling_files_listbox.select_set(0, tk.END)
+                selected_indices = self.shoaling_files_listbox.curselection()
+            else:
+                messagebox.showerror("No Files",
+                                      "Load files in the Data tab first.")
+                return
 
         file_keys = list(self.loaded_files.keys())
         selected_files = [file_keys[i] for i in selected_indices]
@@ -281,38 +271,30 @@ class ShoalingTabMixin:
 
     def _display_shoaling_comparison(self,
                                       all_results: Dict[str, ShoalingResults]):
-        """Display comparison of shoaling results."""
-        self.shoaling_results_text.delete("1.0", tk.END)
+        """Display comparison of shoaling results using Treeview tables."""
+        for widget in self.shoaling_summary_frame.winfo_children():
+            widget.destroy()
 
-        lines = ["=" * 90, "SHOALING ANALYSIS COMPARISON", "=" * 90, ""]
+        columns = [
+            ("file", "File", 160), ("fish", "Fish", 50),
+            ("nnd", "Mean NND (BL)", 100), ("nnd_sd", "NND SD", 70),
+            ("iid", "Mean IID (BL)", 100), ("iid_sd", "IID SD", 70),
+            ("hull", "Mean Hull (BL\u00b2)", 110), ("hull_sd", "Hull SD", 70),
+            ("complete", "Complete %", 80),
+        ]
 
-        lines.append("SUMMARY COMPARISON:")
-        lines.append("-" * 90)
-        lines.append(
-            f"{'File':<20} {'Fish':<6} {'Mean NND':<12} {'Mean IID':<12} "
-            f"{'Mean Hull':<14} {'Complete %':<12}"
-        )
-        lines.append("-" * 90)
-
+        rows = []
         for filename, results in all_results.items():
-            short_name = (filename[:19] if len(filename) > 19
-                          else filename)
-            lines.append(
-                f"{short_name:<20} {results.n_fish:<6} "
-                f"{results.mean_nnd:<12.3f} "
-                f"{results.mean_iid:<12.3f} "
-                f"{results.mean_hull_area:<14.2f} "
-                f"{results.completeness_percentage:<12.1f}"
-            )
+            rows.append((
+                filename, results.n_fish,
+                f"{results.mean_nnd:.3f}", f"{results.std_nnd:.3f}",
+                f"{results.mean_iid:.3f}", f"{results.std_iid:.3f}",
+                f"{results.mean_hull_area:.2f}", f"{results.std_hull_area:.2f}",
+                f"{results.completeness_percentage:.1f}",
+            ))
 
-        lines.append("-" * 90)
-        lines.append("")
-
-        for filename, results in all_results.items():
-            lines.append(f"\nFILE: {filename}")
-            lines.append(results.summary())
-
-        self.shoaling_results_text.insert("1.0", "\n".join(lines))
+        create_sortable_treeview(self.shoaling_summary_frame, columns, rows,
+                                 title="Shoaling Comparison")
 
     def _plot_nnd_comparison(self,
                               all_results: Dict[str, ShoalingResults]):
@@ -354,9 +336,7 @@ class ShoalingTabMixin:
         ax.set_ylim(bottom=0)
         fig.tight_layout()
 
-        canvas = FigureCanvasTkAgg(fig, master=self.shoaling_nnd_plot_frame)
-        canvas.draw()
-        canvas.get_tk_widget().pack(fill="both", expand=True)
+        embed_figure_with_toolbar(fig, self.shoaling_nnd_plot_frame)
 
     def _plot_iid_comparison(self,
                               all_results: Dict[str, ShoalingResults]):
@@ -398,9 +378,7 @@ class ShoalingTabMixin:
         ax.set_ylim(bottom=0)
         fig.tight_layout()
 
-        canvas = FigureCanvasTkAgg(fig, master=self.shoaling_iid_plot_frame)
-        canvas.draw()
-        canvas.get_tk_widget().pack(fill="both", expand=True)
+        embed_figure_with_toolbar(fig, self.shoaling_iid_plot_frame)
 
     def _plot_hull_comparison(self,
                                all_results: Dict[str, ShoalingResults]):
@@ -443,9 +421,7 @@ class ShoalingTabMixin:
         ax.set_ylim(bottom=0)
         fig.tight_layout()
 
-        canvas = FigureCanvasTkAgg(fig, master=self.shoaling_hull_plot_frame)
-        canvas.draw()
-        canvas.get_tk_widget().pack(fill="both", expand=True)
+        embed_figure_with_toolbar(fig, self.shoaling_hull_plot_frame)
 
     # =========================================================================
     # METHODS TEXT

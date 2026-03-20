@@ -29,6 +29,7 @@ from ..spatial import (
     compute_shared_heatmap_scale
 )
 from ..export import export_thigmotaxis_csv
+from .utils import create_sortable_treeview, embed_figure_with_toolbar
 
 
 class SpatialTabMixin:
@@ -142,14 +143,44 @@ class SpatialTabMixin:
         # Analysis Settings Section
         settings_frame = tk.LabelFrame(parent, text="Analysis Settings", font=("Arial", 11, "bold"))
         settings_frame.pack(fill="x", padx=10, pady=10)
-        
-        # Border zone
-        border_frame = tk.Frame(settings_frame)
-        border_frame.pack(fill="x", padx=10, pady=3)
-        tk.Label(border_frame, text="Border zone:").pack(side="left")
+
+        # Analysis mode
+        tk.Label(settings_frame, text="Mode:", font=("Arial", 9, "bold")).pack(anchor="w", padx=10, pady=(5, 0))
+        self.spatial_mode_var = tk.StringVar(value="border")
+        tk.Radiobutton(settings_frame, text="Border zone (thigmotaxis)",
+                       variable=self.spatial_mode_var, value="border",
+                       command=self._on_spatial_mode_change).pack(anchor="w", padx=20)
+        tk.Radiobutton(settings_frame, text="Custom ROI (% time in drawn region)",
+                       variable=self.spatial_mode_var, value="roi",
+                       command=self._on_spatial_mode_change).pack(anchor="w", padx=20)
+
+        # Border zone settings
+        self.border_settings_frame = tk.Frame(settings_frame)
+        self.border_settings_frame.pack(fill="x", padx=10, pady=3)
+        tk.Label(self.border_settings_frame, text="Border zone:").pack(side="left")
         self.border_pct_var = tk.StringVar(value="15")
-        tk.Entry(border_frame, textvariable=self.border_pct_var, width=5).pack(side="left", padx=5)
-        tk.Label(border_frame, text="% from wall").pack(side="left")
+        tk.Entry(self.border_settings_frame, textvariable=self.border_pct_var, width=5).pack(side="left", padx=5)
+        tk.Label(self.border_settings_frame, text="% from wall").pack(side="left")
+
+        # ROI settings
+        self.roi_settings_frame = tk.Frame(settings_frame)
+        # Hidden by default
+        self.roi_vertices = []
+        self.roi_definition = None
+        self.file_roi_definitions = {}
+
+        roi_btn_frame = tk.Frame(self.roi_settings_frame)
+        roi_btn_frame.pack(fill="x", padx=0, pady=3)
+        tk.Button(roi_btn_frame, text="Draw ROI", command=self._start_roi_drawing,
+                  bg="lightyellow", width=10).pack(side="left", padx=2)
+        tk.Button(roi_btn_frame, text="Clear ROI", command=self._clear_roi,
+                  width=8).pack(side="left", padx=2)
+        tk.Button(roi_btn_frame, text="Complete ROI", command=self._complete_roi,
+                  bg="lightgreen", width=10).pack(side="left", padx=2)
+        self.roi_status_label = tk.Label(self.roi_settings_frame, text="No ROI defined",
+                                         font=("Arial", 8), fg="gray")
+        self.roi_status_label.pack(anchor="w")
+        self._roi_drawing_mode = False
         
         # Sample interval
         sample_frame = tk.Frame(settings_frame)
@@ -227,43 +258,18 @@ class SpatialTabMixin:
                  text="Select a file from the list to define its arena",
                  font=("Arial", 11), fg="gray").pack(expand=True)
 
-        # Results Summary Tab
+        # Results Summary Tab (Treeview tables)
         summary_tab = ttk.Frame(results_notebook)
         results_notebook.add(summary_tab, text="Results Summary")
-        
-        summary_scroll = tk.Scrollbar(summary_tab)
-        summary_scroll.pack(side="right", fill="y")
-        
-        self.thigmotaxis_text = tk.Text(
-            summary_tab, wrap=tk.WORD, font=("Courier", 10),
-            yscrollcommand=summary_scroll.set
-        )
-        self.thigmotaxis_text.pack(side="left", fill="both", expand=True)
-        summary_scroll.config(command=self.thigmotaxis_text.yview)
-        
-        self.thigmotaxis_text.insert("1.0",
-            "SPATIAL ANALYSIS - THIGMOTAXIS & HEATMAPS\n"
-            "=" * 60 + "\n\n"
-            "WHAT THIS DOES:\n"
-            "Thigmotaxis measures how much time fish spend near the walls\n"
-            "(border zone) vs the center of the arena. High thigmotaxis\n"
-            "(wall-hugging) is a common anxiety-like behavior in zebrafish.\n\n"
-            "Heatmaps show where fish spend the most time in the arena.\n\n"
-            "HOW TO USE (step by step):\n"
-            "-" * 40 + "\n"
-            "Step 1: Select a file from the list on the left.\n"
-            "Step 2: Go to the 'Arena Definition' tab (right panel).\n"
-            "        Click on the image to place arena boundary points,\n"
-            "        OR click 'Rectangle' for a quick rectangular arena.\n"
-            "Step 3: Click 'Complete' to finalize the arena shape.\n"
-            "Step 4: (Optional) If multiple files share the same arena,\n"
-            "        select them and click 'Apply Arena to Selected Files'.\n"
-            "Step 5: Select all files you want to analyze, then click\n"
-            "        'Run Analysis on Selected Files'.\n\n"
-            "STATUS INDICATORS (in the file list):\n"
-            "  [\u2713] = Arena has been defined for this file\n"
-            "  [\u25a0] = Analysis has been completed for this file\n"
-        )
+
+        self.thigmotaxis_summary_frame = tk.Frame(summary_tab)
+        self.thigmotaxis_summary_frame.pack(fill="both", expand=True)
+
+        tk.Label(self.thigmotaxis_summary_frame,
+            text="Spatial analysis results will appear here after running analysis.\n\n"
+            "Steps: 1) Select file  2) Draw arena  3) Complete  4) Run Analysis",
+            font=("Arial", 10), fg="gray", justify=tk.LEFT
+        ).pack(padx=20, pady=20)
 
         # Time Series Tab
         ts_tab = ttk.Frame(results_notebook)
@@ -380,17 +386,17 @@ class SpatialTabMixin:
         width_bl = loaded_file.metadata.video_width * pixels_to_bl
         height_bl = loaded_file.metadata.video_height * pixels_to_bl
 
-        # Try to load and display background image
+        # Try to load and display background image (always B&W for arena drawing)
         background_loaded = False
         if loaded_file.background_image_path and loaded_file.background_image_path.exists():
             try:
                 background_img = plt.imread(str(loaded_file.background_image_path))
-                if len(background_img.shape) == 2:
-                    self.arena_ax.imshow(background_img, extent=[0, width_bl, 0, height_bl],
-                                        aspect='equal', origin='upper', alpha=0.8, cmap='gray')
-                else:
-                    self.arena_ax.imshow(background_img, extent=[0, width_bl, 0, height_bl],
-                                        aspect='equal', origin='upper', alpha=0.8)
+                # Convert to grayscale if color image
+                if len(background_img.shape) == 3:
+                    # Standard luminance conversion
+                    background_img = np.dot(background_img[..., :3], [0.299, 0.587, 0.114])
+                self.arena_ax.imshow(background_img, extent=[0, width_bl, 0, height_bl],
+                                    aspect='equal', origin='upper', alpha=0.8, cmap='gray')
                 background_loaded = True
             except Exception as e:
                 print(f"Failed to load background image: {e}")
@@ -424,12 +430,27 @@ class SpatialTabMixin:
         self._arena_height_bl = height_bl
 
     def _on_arena_click(self, event):
-        """Handle click on arena canvas - add vertex."""
+        """Handle click on arena canvas - add vertex (arena or ROI)."""
         if event.inaxes != self.arena_ax or event.button != 1:
             return
-        
+
         if self.current_arena_file is None:
             messagebox.showwarning("No File", "Please select a file first.")
+            return
+
+        # If in ROI drawing mode, add to ROI vertices instead
+        if getattr(self, '_roi_drawing_mode', False):
+            self.roi_vertices.append((event.xdata, event.ydata))
+            # Draw ROI vertex on canvas
+            self.arena_ax.scatter([event.xdata], [event.ydata], c='cyan', s=80, zorder=10, marker='s')
+            if len(self.roi_vertices) > 1:
+                xs = [v[0] for v in self.roi_vertices]
+                ys = [v[1] for v in self.roi_vertices]
+                # Draw lines connecting ROI vertices
+                self.arena_ax.plot(xs[-2:], ys[-2:], 'c--', linewidth=2, alpha=0.7)
+            self.roi_status_label.config(
+                text=f"{len(self.roi_vertices)} ROI vertices defined", fg="blue")
+            self.arena_canvas.draw()
             return
 
         self.arena_vertices.append((event.xdata, event.ydata))
@@ -644,49 +665,61 @@ class SpatialTabMixin:
     # =========================================================================
 
     def _run_spatial_analysis_batch(self):
-        """Run thigmotaxis analysis on all selected files."""
+        """Run thigmotaxis or ROI analysis on all selected files."""
         if not SHAPELY_AVAILABLE:
-            messagebox.showerror("Missing Dependency", 
+            messagebox.showerror("Missing Dependency",
                                 "Shapely is required. Install with: pip install shapely")
             return
 
         selection = self.spatial_files_listbox.curselection()
         if not selection:
-            messagebox.showwarning("No Selection", "Please select files to analyze.")
-            return
-        
+            # Auto-select all files
+            if self.spatial_files_listbox.size() > 0:
+                self.spatial_files_listbox.select_set(0, tk.END)
+                selection = self.spatial_files_listbox.curselection()
+            else:
+                messagebox.showwarning("No Files",
+                                       "Load files in the Data tab first.")
+                return
+
         file_keys = list(self.loaded_files.keys())
         selected_files = [file_keys[i] for i in selection]
-        
+
+        analysis_mode = self.spatial_mode_var.get() if hasattr(self, 'spatial_mode_var') else "border"
+
+        if analysis_mode == "roi":
+            self._run_roi_analysis(selected_files)
+            return
+
         # Check which files have arenas
         files_without_arena = [f for f in selected_files if f not in self.file_arena_definitions]
         if files_without_arena:
             missing_str = "\n".join(files_without_arena[:5])
             if len(files_without_arena) > 5:
                 missing_str += f"\n... and {len(files_without_arena) - 5} more"
-            messagebox.showwarning("Missing Arenas", 
+            messagebox.showwarning("Missing Arenas",
                                   f"These files need arena definitions:\n\n{missing_str}\n\n"
                                   "Define arena and use 'Apply Arena to Selected Files'.")
             return
-        
+
         try:
             border_pct = float(self.border_pct_var.get()) / 100
             sample_interval = int(self.spatial_sample_var.get())
         except ValueError as e:
             messagebox.showerror("Invalid Parameters", f"Check settings: {e}")
             return
-        
+
         success_count = 0
         results_dict = {}
-        
+
         for filename in selected_files:
             loaded_file = self.loaded_files[filename]
             arena = self.file_arena_definitions[filename]
-            
+
             try:
                 calculator = ThigmotaxisCalculator(
                     loaded_file, arena,
-                    border_pct=border_pct, 
+                    border_pct=border_pct,
                     sample_interval=sample_interval
                 )
                 results = calculator.calculate()
@@ -697,9 +730,9 @@ class SpatialTabMixin:
                 print(f"Error analyzing {filename}: {e}")
                 import traceback
                 traceback.print_exc()
-        
+
         self._update_spatial_files_list()
-        
+
         if results_dict:
             self._display_combined_thigmotaxis_summary(results_dict)
             self._plot_combined_thigmotaxis_timeseries(results_dict)
@@ -710,20 +743,110 @@ class SpatialTabMixin:
         messagebox.showinfo("Analysis Complete",
                             f"Successfully analyzed {success_count}/{len(selected_files)} files.")
 
+    def _run_roi_analysis(self, selected_files: List[str]):
+        """Run custom ROI analysis — compute % time each fish spends in the ROI polygon."""
+        from shapely.geometry import Polygon as ShapelyPolygon, Point
+
+        try:
+            sample_interval = int(self.spatial_sample_var.get())
+        except ValueError:
+            sample_interval = 30
+
+        # Check for ROI definitions
+        files_without_roi = [f for f in selected_files if f not in self.file_roi_definitions]
+        if files_without_roi:
+            # Use the current ROI for all
+            if self.roi_definition is not None:
+                for f in files_without_roi:
+                    self.file_roi_definitions[f] = self.roi_definition
+            else:
+                messagebox.showwarning("No ROI",
+                                       "Please draw and complete an ROI before running analysis.")
+                return
+
+        for widget in self.thigmotaxis_summary_frame.winfo_children():
+            widget.destroy()
+
+        columns = [
+            ("file", "File", 160), ("fish", "Fish", 60),
+            ("pct_in_roi", "% Time in ROI", 100), ("frames_valid", "Valid Frames", 90),
+        ]
+        all_rows = []
+
+        for filename in selected_files:
+            loaded_file = self.loaded_files[filename]
+            roi_bl = self.file_roi_definitions.get(filename)
+            if roi_bl is None:
+                continue
+
+            roi_poly = ShapelyPolygon(roi_bl)
+            pixels_to_bl = 1.0 / loaded_file.metadata.body_length
+            n_fish = loaded_file.n_fish
+            n_frames = loaded_file.n_frames
+
+            for fish_idx in range(n_fish):
+                in_roi = 0
+                valid = 0
+                for frame_idx in range(0, n_frames, sample_interval):
+                    pos = loaded_file.trajectories[frame_idx, fish_idx, :]
+                    if np.isnan(pos[0]):
+                        continue
+                    x_bl = pos[0] * pixels_to_bl
+                    y_bl = (loaded_file.metadata.video_height - pos[1]) * pixels_to_bl
+                    valid += 1
+                    if roi_poly.contains(Point(x_bl, y_bl)):
+                        in_roi += 1
+
+                pct = (in_roi / valid * 100) if valid > 0 else 0
+                all_rows.append((filename, f"Fish {fish_idx}", f"{pct:.1f}", valid))
+
+        create_sortable_treeview(self.thigmotaxis_summary_frame, columns, all_rows,
+                                 title="ROI Analysis — % Time in Custom Region")
+
+        # Store ROI results so "Update Visualizations" can find them
+        for filename in selected_files:
+            loaded_file = self.loaded_files[filename]
+            loaded_file.roi_analysis_done = True
+
+        if all_rows:
+            self.set_status(f"ROI analysis complete for {len(selected_files)} file(s).")
+
+        messagebox.showinfo("ROI Analysis Complete",
+                            f"Analyzed {len(selected_files)} file(s) with custom ROI.")
+
     def _update_spatial_visualizations(self):
         """Update visualizations for files that have been analyzed."""
+        # Check analysis mode
+        analysis_mode = self.spatial_mode_var.get() if hasattr(self, 'spatial_mode_var') else "border"
+
+        # If in ROI mode, re-run ROI analysis on all files that have ROI definitions
+        if analysis_mode == "roi":
+            roi_files = [f for f in self.loaded_files
+                         if f in self.file_roi_definitions
+                         or self.roi_definition is not None]
+            if roi_files:
+                self._run_roi_analysis(roi_files)
+                return
+            else:
+                messagebox.showinfo("No ROI",
+                                     "Draw and complete an ROI first, then run analysis.")
+                return
+
+        # Border mode: look for thigmotaxis results
         results_dict = {}
         analyzed_files = []
-        
+
         for filename, loaded_file in self.loaded_files.items():
             if hasattr(loaded_file, 'thigmotaxis_results') and loaded_file.thigmotaxis_results:
                 results_dict[filename] = loaded_file.thigmotaxis_results
                 analyzed_files.append(filename)
-        
+
         if not results_dict:
-            messagebox.showinfo("No Results", "No files have been analyzed yet.")
+            messagebox.showinfo("No Results",
+                                "No files have been analyzed yet.\n\n"
+                                "Click 'Run Analysis on Selected Files' first.")
             return
-        
+
         self._display_combined_thigmotaxis_summary(results_dict)
         self._plot_combined_thigmotaxis_timeseries(results_dict)
         self._plot_thigmotaxis_comparison_charts(results_dict)
@@ -734,38 +857,28 @@ class SpatialTabMixin:
     # =========================================================================
 
     def _display_combined_thigmotaxis_summary(self, results_dict: Dict[str, ThigmotaxisResults]):
-        """Display combined summary of all analyzed files."""
-        self.thigmotaxis_text.delete("1.0", tk.END)
-        
-        lines = [
-            "=" * 70,
-            "THIGMOTAXIS ANALYSIS - ALL FILES",
-            "=" * 70,
-            "",
+        """Display combined summary using Treeview tables."""
+        for widget in self.thigmotaxis_summary_frame.winfo_children():
+            widget.destroy()
+
+        columns = [
+            ("file", "File", 160), ("fish", "Fish", 50),
+            ("mean_pct", "Mean % Border", 100), ("std_pct", "Std % Border", 90),
+            ("mean_center", "Mean % Center", 100), ("samples", "Samples", 70),
         ]
-        
-        lines.append("SUMMARY COMPARISON:")
-        lines.append("-" * 70)
-        lines.append(f"{'File':<20} {'Fish':<6} {'Mean %':<10} {'Std %':<10} {'Samples':<10}")
-        lines.append("-" * 70)
-        
+
+        rows = []
         for filename, results in results_dict.items():
-            short_name = filename[:19] if len(filename) > 19 else filename
-            lines.append(
-                f"{short_name:<20} {results.n_fish:<6} "
-                f"{results.mean_pct_in_border:<10.1f} {results.std_pct_in_border:<10.1f} "
-                f"{results.n_samples:<10}"
-            )
-        
-        lines.append("-" * 70)
-        lines.append("")
-        
-        for filename, results in results_dict.items():
-            lines.append("")
-            lines.append(f"FILE: {filename}")
-            lines.append(results.summary())
-        
-        self.thigmotaxis_text.insert("1.0", "\n".join(lines))
+            rows.append((
+                filename, results.n_fish,
+                f"{results.mean_pct_in_border:.1f}",
+                f"{results.std_pct_in_border:.1f}",
+                f"{100 - results.mean_pct_in_border:.1f}",
+                results.n_samples,
+            ))
+
+        create_sortable_treeview(self.thigmotaxis_summary_frame, columns, rows,
+                                 title="Thigmotaxis Summary")
 
     def _plot_combined_thigmotaxis_timeseries(self, results_dict: Dict[str, ThigmotaxisResults]):
         """Plot thigmotaxis time series for all files."""
@@ -823,9 +936,7 @@ class SpatialTabMixin:
         
         fig.tight_layout()
         
-        canvas = FigureCanvasTkAgg(fig, master=self.thigmotaxis_plot_frame)
-        canvas.draw()
-        canvas.get_tk_widget().pack(fill="both", expand=True)
+        embed_figure_with_toolbar(fig, self.thigmotaxis_plot_frame)
 
     def _plot_thigmotaxis_comparison_charts(self, results_dict: Dict[str, ThigmotaxisResults]):
         """Plot comparison bar charts and summary statistics."""
@@ -883,9 +994,7 @@ class SpatialTabMixin:
         
         fig.tight_layout()
         
-        canvas = FigureCanvasTkAgg(fig, master=self.thigmotaxis_compare_frame)
-        canvas.draw()
-        canvas.get_tk_widget().pack(fill="both", expand=True)
+        embed_figure_with_toolbar(fig, self.thigmotaxis_compare_frame)
 
     # =========================================================================
     # HEATMAP METHODS
@@ -980,9 +1089,7 @@ class SpatialTabMixin:
         if use_shared_scale and len(heatmaps) > 1:
             fig.subplots_adjust(right=0.9)
         
-        canvas = FigureCanvasTkAgg(fig, master=self.heatmap_frame)
-        canvas.draw()
-        canvas.get_tk_widget().pack(fill="both", expand=True)
+        embed_figure_with_toolbar(fig, self.heatmap_frame)
 
     def _plot_individual_fish_heatmaps(self, filename: str, grid_size: int, use_shared_scale: bool):
         """Plot individual fish heatmaps for a single file."""
@@ -1037,9 +1144,69 @@ class SpatialTabMixin:
         if use_shared_scale:
             fig.subplots_adjust(right=0.9, top=0.92)
 
-        canvas = FigureCanvasTkAgg(fig, master=self.heatmap_frame)
-        canvas.draw()
-        canvas.get_tk_widget().pack(fill="both", expand=True)
+        embed_figure_with_toolbar(fig, self.heatmap_frame)
+
+    # =========================================================================
+    # ROI MODE METHODS
+    # =========================================================================
+
+    def _on_spatial_mode_change(self):
+        """Toggle visibility of border zone vs ROI settings."""
+        mode = self.spatial_mode_var.get()
+        if mode == "border":
+            self.border_settings_frame.pack(fill="x", padx=10, pady=3)
+            self.roi_settings_frame.pack_forget()
+        else:
+            self.border_settings_frame.pack_forget()
+            self.roi_settings_frame.pack(fill="x", padx=10, pady=3)
+
+    def _start_roi_drawing(self):
+        """Enable ROI drawing mode on the arena canvas."""
+        if self.current_arena_file is None:
+            messagebox.showwarning("No File", "Select a file first.")
+            return
+        self._roi_drawing_mode = True
+        self.roi_vertices = []
+        self.roi_status_label.config(text="Click on arena to draw ROI vertices...", fg="blue")
+
+    def _clear_roi(self):
+        """Clear the current ROI."""
+        self.roi_vertices = []
+        self.roi_definition = None
+        self._roi_drawing_mode = False
+        if self.current_arena_file and self.current_arena_file in self.file_roi_definitions:
+            del self.file_roi_definitions[self.current_arena_file]
+        self.roi_status_label.config(text="ROI cleared", fg="gray")
+        # Redraw arena without ROI
+        if self.current_arena_file:
+            self._setup_arena_canvas_for_file(self.current_arena_file)
+
+    def _complete_roi(self):
+        """Complete the ROI polygon."""
+        if len(self.roi_vertices) < 3:
+            messagebox.showwarning("Insufficient Vertices",
+                                   "Please define at least 3 ROI vertices.")
+            return
+        if self.current_arena_file is None:
+            return
+
+        roi_bl = np.array(self.roi_vertices)
+        self.roi_definition = roi_bl
+        self.file_roi_definitions[self.current_arena_file] = roi_bl
+        self._roi_drawing_mode = False
+
+        # Draw ROI on canvas
+        if self.arena_ax is not None:
+            roi_polygon = MplPolygon(roi_bl, closed=True, fill=True,
+                                     facecolor='cyan', alpha=0.2,
+                                     edgecolor='cyan', linewidth=2,
+                                     linestyle='--', label='ROI')
+            self.arena_ax.add_patch(roi_polygon)
+            self.arena_ax.legend(loc='upper right', fontsize=8)
+            self.arena_canvas.draw()
+
+        self.roi_status_label.config(
+            text=f"ROI defined ({len(self.roi_vertices)} vertices)", fg="green")
 
     # =========================================================================
     # METHODS TEXT
