@@ -52,10 +52,18 @@ class BoutParameters:
     min_bout_frames: minimum bout duration in frames. Bouts shorter than
         this are discarded as noise. At 30fps, 1 frame = 33ms.
         Typical: 1–2 frames.
+
+    heading_lookback_frames: number of frames to accumulate before/after a
+        bout when estimating the approach and departure heading. A larger
+        value gives a more stable direction estimate by averaging over more
+        displacement, at the cost of capturing turns that happen close
+        together. At 30fps, 5 frames = ~167ms, 10 frames = ~333ms.
+        Typical: 5–10 frames.
     """
     speed_threshold: float = 0.5    # BL/s
     merge_gap_frames: int = 2       # frames
     min_bout_frames: int = 1        # frames
+    heading_lookback_frames: int = 5  # frames to accumulate for pre/post heading
 
     def validate(self):
         if self.speed_threshold <= 0:
@@ -64,6 +72,8 @@ class BoutParameters:
             raise ValueError(f"Merge gap must be non-negative, got {self.merge_gap_frames}")
         if self.min_bout_frames < 1:
             raise ValueError(f"Min bout frames must be >= 1, got {self.min_bout_frames}")
+        if self.heading_lookback_frames < 1:
+            raise ValueError(f"Heading look-back must be >= 1, got {self.heading_lookback_frames}")
 
 
 @dataclass
@@ -232,42 +242,53 @@ class BoutDetector:
         """
         Compute total signed heading change during a bout.
 
-        For very short bouts (1–2 frames), we compare the heading entering
-        the bout to the heading leaving it, rather than summing internal
-        frame-to-frame changes (which would be noisy or undefined).
+        For 1-frame bouts (where the bout itself has only two position samples,
+        giving a single displacement vector with no internal turn to measure),
+        compare the cumulative displacement over params.heading_lookback_frames
+        before the bout to the equivalent window after it, giving a stable
+        heading estimate even when adjacent frames are noisy.
+
+        For longer bouts, sum frame-to-frame heading changes, skipping any
+        step whose displacement is below _MIN_DISP (tracking noise).
         """
-        # We need at least 3 positions to compute a heading change
-        # (2 displacement vectors → 1 turn)
+        lookback = self.params.heading_lookback_frames
+        _MIN_DISP = 0.05       # BL — below this, displacement direction is unreliable
+
         seg_x = x[start:end + 1]
         seg_y = y[start:end + 1]
 
         if len(seg_x) < 3:
-            # For 1–2 frame bouts, use the displacement vector before
-            # and after the bout to determine turn direction
-            pre_start = max(0, start - 1)
-            post_end = min(len(x) - 1, end + 1)
+            # 1-frame bouts: compare approach heading to departure heading.
+            # Accumulate displacement over up to lookback frames for stability.
+            pre = max(0, start - lookback)
+            post = min(len(x) - 1, end + lookback)
 
-            if pre_start < start and end < post_end:
-                # Heading before bout
-                dx_pre = x[start] - x[pre_start]
-                dy_pre = y[start] - y[pre_start]
-                # Heading after bout
-                dx_post = x[post_end] - x[end]
-                dy_post = y[post_end] - y[end]
+            if pre == start or post == end:
+                return 0.0
 
-                if any(np.isnan([dx_pre, dy_pre, dx_post, dy_post])):
-                    return 0.0
+            dx_pre = x[start] - x[pre]
+            dy_pre = y[start] - y[pre]
+            dx_post = x[post] - x[end]
+            dy_post = y[post] - y[end]
 
-                h_pre = np.arctan2(dy_pre, dx_pre)
-                h_post = np.arctan2(dy_post, dx_post)
-                dh = (h_post - h_pre + np.pi) % (2 * np.pi) - np.pi
-                return float(np.degrees(dh))
-            return 0.0
+            if any(np.isnan([dx_pre, dy_pre, dx_post, dy_post])):
+                return 0.0
+            if (np.hypot(dx_pre, dy_pre) < _MIN_DISP
+                    or np.hypot(dx_post, dy_post) < _MIN_DISP):
+                return 0.0
 
-        # For longer bouts, sum frame-to-frame heading changes
+            h_pre = np.arctan2(dy_pre, dx_pre)
+            h_post = np.arctan2(dy_post, dx_post)
+            dh = (h_post - h_pre + np.pi) % (2 * np.pi) - np.pi
+            return float(np.degrees(dh))
+
+        # For longer bouts, sum frame-to-frame heading changes.
+        # Filter out near-zero displacement steps — their heading is dominated
+        # by tracking noise and would corrupt the accumulated turn angle.
         dx = np.diff(seg_x)
         dy = np.diff(seg_y)
-        valid = ~(np.isnan(dx) | np.isnan(dy))
+        disp = np.hypot(dx, dy)
+        valid = (~np.isnan(dx)) & (~np.isnan(dy)) & (disp >= _MIN_DISP)
 
         if np.sum(valid) < 2:
             return 0.0

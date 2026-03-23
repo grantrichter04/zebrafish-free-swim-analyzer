@@ -111,13 +111,27 @@ class BoutTabMixin:
                  width=4).pack(side="left", padx=5)
         tk.Label(min_frame, text="frames").pack(side="left")
 
+        # Short bout look-back
+        lookback_frame = tk.Frame(params_frame)
+        lookback_frame.pack(fill="x", padx=10, pady=3)
+        tk.Label(lookback_frame, text="Short bout look-back:").pack(side="left")
+        self.bout_lookback_var = tk.StringVar(value="5")
+        tk.Entry(lookback_frame, textvariable=self.bout_lookback_var,
+                 width=4).pack(side="left", padx=5)
+        tk.Label(lookback_frame, text="frames").pack(side="left")
+
         # Help text
         help_text = (
             "Speed threshold: movement below this is considered rest. "
             "Lower values detect more bouts but may include drift.\n\n"
             "Merge gap: bouts separated by fewer than this many frames "
             "are combined into one (prevents splitting a single dart).\n\n"
-            "Min bout length: discard bouts shorter than this."
+            "Min bout length: discard bouts shorter than this.\n\n"
+            "Short bout look-back: for bouts of only 1 frame, the turn "
+            "angle is estimated from the displacement accumulated over "
+            "this many frames before and after the bout. More frames = "
+            "more stable estimate. At 30fps: 5 \u2248 167ms, 10 \u2248 333ms. "
+            "Has no effect on bouts of 2+ frames."
         )
         tk.Label(params_frame, text=help_text, font=("Arial", 8),
                  fg="gray", wraplength=280,
@@ -171,6 +185,16 @@ class BoutTabMixin:
         self.bout_dist_fish_combo.bind(
             "<<ComboboxSelected>>", self._on_bout_dist_filter_change
         )
+
+        # View mode toggle
+        tk.Label(filter_bar, text="  View:", font=("Arial", 9, "bold")).pack(side="left")
+        self.bout_dist_mode_var = tk.StringVar(value="ridge")
+        tk.Radiobutton(filter_bar, text="Ridge plot",
+                       variable=self.bout_dist_mode_var, value="ridge",
+                       command=self._on_bout_dist_filter_change).pack(side="left")
+        tk.Radiobutton(filter_bar, text="Histograms",
+                       variable=self.bout_dist_mode_var, value="histogram",
+                       command=self._on_bout_dist_filter_change).pack(side="left")
 
         self.bout_plots_frame = tk.Frame(plots_tab)
         self.bout_plots_frame.pack(fill="both", expand=True)
@@ -242,10 +266,21 @@ class BoutTabMixin:
             self.bout_min_frames_var.set("1")
             min_frames = 1
 
+        try:
+            lookback = int(self.bout_lookback_var.get())
+        except ValueError:
+            messagebox.showwarning(
+                "Invalid Input",
+                "Turn look-back must be an integer. Resetting to 5."
+            )
+            self.bout_lookback_var.set("5")
+            lookback = 5
+
         return BoutParameters(
             speed_threshold=threshold,
             merge_gap_frames=merge_gap,
             min_bout_frames=min_frames,
+            heading_lookback_frames=lookback,
         )
 
     def _run_bout_analysis(self):
@@ -264,6 +299,7 @@ class BoutTabMixin:
         selected_files = [self.bout_file_listbox.get(i)
                           for i in selected_indices]
         params = self._get_bout_params()
+        self._bout_run_params = params   # remembered for inspector stale-check
 
         self.set_status("Running bout analysis...")
         self.bout_results.clear()
@@ -405,6 +441,11 @@ class BoutTabMixin:
         for widget in self.bout_plots_frame.winfo_children():
             widget.destroy()
 
+        if getattr(self, 'bout_dist_mode_var', None) and \
+                self.bout_dist_mode_var.get() == 'ridge':
+            self._plot_bout_ridge(selected_files)
+            return
+
         # Parse the fish filter selection
         filter_val = self.bout_dist_fish_var.get()
         filter_fish_id = None
@@ -524,6 +565,155 @@ class BoutTabMixin:
 
         embed_figure_with_toolbar(fig, self.bout_plots_frame)
 
+    def _plot_bout_ridge(self, selected_files: List[str]):
+        """Plot bout metric distributions as a 2×2 grid of ridge (joy) plots."""
+        from scipy.stats import gaussian_kde
+        from collections import OrderedDict
+
+        # ---- parse fish filter ----
+        filter_val = self.bout_dist_fish_var.get()
+        filter_fish_id = None
+        filter_short = None
+        if filter_val != "All fish":
+            parts = filter_val.rsplit(" - Fish ", 1)
+            if len(parts) == 2:
+                filter_short = parts[0]
+                try:
+                    filter_fish_id = int(parts[1])
+                except ValueError:
+                    pass
+
+        # ---- collect per-fish data, grouped by file ----
+        file_colors_arr = plt.cm.tab10(np.linspace(0, 1, max(len(selected_files), 1)))
+        file_groups: OrderedDict = OrderedDict()
+
+        for file_idx, filename in enumerate(selected_files):
+            if filename not in self.bout_results:
+                continue
+            short = filename[:15] if len(filename) > 15 else filename
+            if filter_short is not None and short != filter_short:
+                continue
+            fc = file_colors_arr[file_idx]
+
+            for r in self.bout_results[filename]:
+                if filter_fish_id is not None and r.fish_id != filter_fish_id:
+                    continue
+                durs = np.array([b.duration_s * 1000 for b in r.bouts])
+                if len(durs) == 0:
+                    continue
+                ibis = np.asarray(r.inter_bout_intervals_s) * 1000
+                peaks = np.array([b.peak_speed for b in r.bouts])
+                headings = np.array([b.heading_change_deg for b in r.bouts])
+                if short not in file_groups:
+                    file_groups[short] = []
+                file_groups[short].append((r.fish_id, fc, durs, ibis, peaks, headings))
+
+        if not file_groups:
+            return
+
+        # ---- build stacked entry list (bottom → top, first file at top) ----
+        entries = []  # (label, color, durs, ibis, peaks, headings)
+        n_files = len(file_groups)
+        for short, fish_list in reversed(list(file_groups.items())):
+            first_in_file = True
+            for fish_id, fc, durs, ibis, peaks, headings in reversed(fish_list):
+                label = (f"{short}\n  F{fish_id}" if first_in_file
+                         else f"  F{fish_id}")
+                entries.append((label, fc, durs, ibis, peaks, headings))
+                first_in_file = False
+
+        # ---- layout ----
+        within_overlap = 0.45
+        n = len(entries)
+        total_height = n * within_overlap
+        panel_h = max(3.0, total_height * 1.2 + 1.5)
+        fig = Figure(figsize=(14, panel_h * 2 + 0.5), dpi=100)
+        fig.subplots_adjust(hspace=0.45, wspace=0.38,
+                            left=0.18, right=0.97, top=0.94, bottom=0.07)
+
+        # ---- inner helper: draw one ridge panel ----
+        def _ridge_panel(ax, data_list, x_label, x_lim=None, bw=0.15, vline=None):
+            """data_list: [(label, color, 1-D array), ...] in bottom-to-top order."""
+            all_vals = np.concatenate(
+                [d for _, _, d in data_list if len(d) > 1]
+            ) if any(len(d) > 1 for _, _, d in data_list) else np.array([])
+
+            if len(all_vals) == 0:
+                ax.text(0.5, 0.5, 'No data', transform=ax.transAxes,
+                        ha='center', va='center', color='gray', fontsize=9)
+                return
+
+            if x_lim is None:
+                x_min = max(0.0, np.percentile(all_vals, 0.5))
+                x_max = np.percentile(all_vals, 99.5)
+            else:
+                x_min, x_max = x_lim
+            if x_max <= x_min:
+                x_max = x_min + 1.0
+            x_span = x_max - x_min
+            x_grid = np.linspace(x_min, x_max, 300)
+
+            densities = []
+            for _, _, data in data_list:
+                valid = data[~np.isnan(data)]
+                if x_lim is not None:
+                    valid = valid[(valid >= x_min) & (valid <= x_max)]
+                if len(valid) < 2:
+                    densities.append(np.zeros_like(x_grid))
+                    continue
+                try:
+                    densities.append(gaussian_kde(valid, bw_method=bw)(x_grid))
+                except Exception:
+                    densities.append(np.zeros_like(x_grid))
+
+            max_d = max((d.max() for d in densities), default=1.0) or 1.0
+
+            for i, ((label, color, _), density) in enumerate(
+                    zip(data_list, densities)):
+                y0 = i * within_overlap
+                norm = density / max_d * within_overlap * 1.5
+                ax.fill_between(x_grid, y0, y0 + norm,
+                                color=color, alpha=0.6, lw=0)
+                ax.plot(x_grid, y0 + norm, color=color, lw=1.2, alpha=0.9)
+                ax.text(x_min - x_span * 0.02, y0 + within_overlap * 0.2,
+                        label, fontsize=7, ha='right', va='center')
+
+            if vline is not None:
+                ax.axvline(vline, color='black', lw=0.8,
+                           linestyle='--', alpha=0.5)
+
+            ax.set_xlim(x_min, x_max)
+            ax.set_ylim(-0.1, total_height + within_overlap * 0.5)
+            ax.set_yticks([])
+            ax.set_xlabel(x_label, fontsize=9)
+            ax.spines['left'].set_visible(False)
+            ax.spines['top'].set_visible(False)
+            ax.spines['right'].set_visible(False)
+
+        # ---- per-metric data slices ----
+        dur_list  = [(lbl, c, d) for lbl, c, d, _,  _,  _  in entries]
+        ibi_list  = [(lbl, c, i) for lbl, c, _,  i,  _,  _  in entries]
+        peak_list = [(lbl, c, p) for lbl, c, _,  _,  p,  _  in entries]
+        head_list = [(lbl, c, h) for lbl, c, _,  _,  _,  h  in entries]
+
+        ax1 = fig.add_subplot(2, 2, 1)
+        ax2 = fig.add_subplot(2, 2, 2)
+        ax3 = fig.add_subplot(2, 2, 3)
+        ax4 = fig.add_subplot(2, 2, 4)
+
+        _ridge_panel(ax1, dur_list,  "Bout Duration (ms)")
+        _ridge_panel(ax2, ibi_list,  "Inter-Bout Interval (ms)")
+        _ridge_panel(ax3, peak_list, "Peak Bout Speed (BL/s)")
+        _ridge_panel(ax4, head_list, "Turn Angle (°)",
+                     x_lim=(-180, 180), bw=0.2, vline=0)
+
+        ax1.set_title("Bout Duration", fontsize=10, fontweight='bold')
+        ax2.set_title("IBI", fontsize=10, fontweight='bold')
+        ax3.set_title("Peak Speed", fontsize=10, fontweight='bold')
+        ax4.set_title("Turn Angle", fontsize=10, fontweight='bold')
+
+        embed_figure_with_toolbar(fig, self.bout_plots_frame)
+
     def _plot_bout_laterality(self, selected_files: List[str]):
         """Plot per-fish laterality summary."""
         for widget in self.bout_laterality_frame.winfo_children():
@@ -632,6 +822,7 @@ class BoutTabMixin:
 
         merge_ms = params.merge_gap_frames / fps * 1000
         min_ms = params.min_bout_frames / fps * 1000
+        lookback_ms = params.heading_lookback_frames / fps * 1000
 
         text = (
             "METHODS \u2014 Bout Analysis\n"
@@ -660,7 +851,17 @@ class BoutTabMixin:
             f"heading change (total signed angular displacement during "
             f"the bout, with positive values indicating "
             f"counterclockwise turns and negative values indicating "
-            f"clockwise turns). Inter-bout intervals (IBIs) were "
+            f"clockwise turns). For 1-frame bouts (where the bout "
+            f"contains only a single displacement vector and no internal "
+            f"turn can be measured), heading change was instead estimated "
+            f"by comparing the approach and departure directions using the "
+            f"cumulative displacement over {params.heading_lookback_frames} "
+            f"frames ({lookback_ms:.0f} ms) before and after the bout — "
+            f"a window controlled by the 'Short bout look-back' parameter. "
+            f"If displacement over either window was below 0.05 body "
+            f"lengths (indicating the fish was at rest), the bout was "
+            f"classified as straight (0\u00b0). "
+            f"Inter-bout intervals (IBIs) were "
             f"computed as the time between the end of one bout and the "
             f"start of the next.\n\n"
             f"Turning laterality was assessed per fish by classifying "
@@ -680,6 +881,8 @@ class BoutTabMixin:
             f"({merge_ms:.0f} ms)\n"
             f"  Min bout duration:   {params.min_bout_frames} frame(s) "
             f"({min_ms:.0f} ms)\n"
+            f"  Turn look-back:      {params.heading_lookback_frames} frames "
+            f"({lookback_ms:.0f} ms)\n"
             f"  Turn dead zone:      \u00b15\u00b0\n"
             f"  Frame rate:          {fps:.1f} fps\n"
             f"  Calibration:         {cal.scale_factor:.6f} "
@@ -708,6 +911,8 @@ class BoutTabMixin:
             return
 
         import csv
+
+        run_params = getattr(self, '_bout_run_params', None)
 
         rows = []
         for filename, results_list in self.bout_results.items():
@@ -738,6 +943,19 @@ class BoutTabMixin:
                         'Distance': round(bout.distance, 4),
                         'HeadingChange_deg': round(
                             bout.heading_change_deg, 2
+                        ),
+                        # Detection parameters — included for reproducibility
+                        'Param_SpeedThreshold': (
+                            run_params.speed_threshold if run_params else ''
+                        ),
+                        'Param_MergeGap_frames': (
+                            run_params.merge_gap_frames if run_params else ''
+                        ),
+                        'Param_MinBout_frames': (
+                            run_params.min_bout_frames if run_params else ''
+                        ),
+                        'Param_LookbackFrames': (
+                            run_params.heading_lookback_frames if run_params else ''
                         ),
                     })
 

@@ -201,14 +201,77 @@ class TrajectoryFileLoader:
                 frame_rate=metadata.frames_per_second
             )
 
+        video_path = TrajectoryFileLoader._find_video_file(file_path)
+
         return LoadedTrajectoryFile(
             nickname=nickname,
             file_path=file_path,
             metadata=metadata,
             trajectories=trajectories,
             calibration=calibration,
-            background_image_path=background_path
+            background_image_path=background_path,
+            video_file_path=video_path,
         )
+
+    @staticmethod
+    def _find_video_file(trajectory_path: Path) -> Optional[Path]:
+        """
+        Look for the source video next to an idtracker.ai session folder.
+
+        idtracker.ai typically creates this structure:
+
+            experiment_folder/
+                session_VIDEONAME/
+                    trajectories/
+                        trajectories.npy   <-- trajectory_path
+                    preprocessing/
+                        background.png
+                VIDEONAME.mp4              <-- video we're looking for
+
+        We try (in order):
+          1. experiment_folder / VIDEONAME.{ext}  (name derived from session folder)
+          2. Any single video file directly in experiment_folder
+          3. Any video file directly in session_folder
+        """
+        VIDEO_EXTENSIONS = (
+            '.mp4', '.avi', '.mov', '.mkv',
+            '.MP4', '.AVI', '.MOV', '.MKV',
+        )
+        try:
+            # trajectories.npy  →  trajectories/  →  session_VIDEONAME/  →  experiment/
+            session_folder = trajectory_path.parent.parent
+            experiment_folder = session_folder.parent
+
+            # Derive video stem from session folder name
+            folder_name = session_folder.name
+            video_stem = (folder_name[8:] if folder_name.startswith('session_')
+                          else folder_name)
+
+            # 1. Named match in experiment folder
+            for ext in VIDEO_EXTENSIONS:
+                candidate = experiment_folder / (video_stem + ext)
+                if candidate.exists():
+                    return candidate
+
+            # 2. Any lone video file in experiment folder
+            video_files = [
+                f for f in experiment_folder.iterdir()
+                if f.is_file() and f.suffix in VIDEO_EXTENSIONS
+            ]
+            if len(video_files) == 1:
+                return video_files[0]
+
+            # 3. Any lone video file directly in session folder
+            video_files = [
+                f for f in session_folder.iterdir()
+                if f.is_file() and f.suffix in VIDEO_EXTENSIONS
+            ]
+            if len(video_files) == 1:
+                return video_files[0]
+
+        except Exception:
+            pass
+        return None
 
     @staticmethod
     def _find_background_image(trajectory_path: Path) -> Optional[Path]:

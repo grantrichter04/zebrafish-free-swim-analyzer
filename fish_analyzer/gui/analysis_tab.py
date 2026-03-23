@@ -113,7 +113,7 @@ class AnalysisTabMixin:
 
         # View mode
         tk.Label(dist_frame, text="View mode:", font=("Arial", 9)).pack(anchor="w", padx=10, pady=(5, 0))
-        self.speed_dist_mode_var = tk.StringVar(value="histogram")
+        self.speed_dist_mode_var = tk.StringVar(value="ridge")
         tk.Radiobutton(dist_frame, text="Histograms (grid)",
                        variable=self.speed_dist_mode_var, value="histogram").pack(anchor="w", padx=20)
         tk.Radiobutton(dist_frame, text="Ridge plot (joy plot)",

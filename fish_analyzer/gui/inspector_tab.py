@@ -475,6 +475,9 @@ class InspectorTabMixin:
             self.inspector_iid_focus_combo.current(0)
             self.inspector_bout_fish_combo.current(0)
 
+        # Try to auto-load the associated video
+        self._inspector_try_auto_load_video(selected)
+
         # Force rebuild
         self._insp_fig = None
         self._update_inspector_info()
@@ -711,6 +714,54 @@ class InspectorTabMixin:
     # VIDEO
     # =========================================================================
 
+    def _inspector_try_auto_load_video(self, selected: str) -> bool:
+        """
+        Try to load the video that was auto-detected at file-load time.
+
+        Returns True if a video is now ready in self.video_readers[selected],
+        False if nothing could be loaded (caller should prompt the user).
+        """
+        if selected in self.video_readers:
+            return True   # already loaded
+
+        loaded = self.loaded_files.get(selected)
+        if loaded is None:
+            return False
+
+        video_path = loaded.video_file_path
+        if video_path is None or not video_path.exists():
+            self.inspector_video_status.config(
+                text="No video found — use Browse to load manually",
+                fg="gray"
+            )
+            return False
+
+        try:
+            from ..video_utils import VideoFrameReader, CV2_AVAILABLE
+            if not CV2_AVAILABLE:
+                self.inspector_video_status.config(
+                    text="Install opencv-python for video support",
+                    fg="orange"
+                )
+                return False
+
+            reader = VideoFrameReader(video_path)
+            self.video_readers[selected] = reader
+            self.inspector_video_status.config(
+                text=f"Auto: {video_path.name} "
+                     f"({reader.total_frames} fr, "
+                     f"{reader.width}×{reader.height})",
+                fg="green"
+            )
+            return True
+
+        except Exception as e:
+            self.inspector_video_status.config(
+                text=f"Auto-load failed: {e}",
+                fg="orange"
+            )
+            return False
+
     def _inspector_browse_video(self):
         """Browse for a video file."""
         selected = self.inspector_file_var.get()
@@ -773,13 +824,10 @@ class InspectorTabMixin:
         if self.inspector_video_var.get():
             selected = self.inspector_file_var.get()
             if selected not in self.video_readers:
-                messagebox.showinfo(
-                    "No Video",
-                    "Please browse for and load a video file first.\n\n"
-                    "Click 'Browse Video...' to select your video file."
-                )
-                self.inspector_video_var.set(False)
-                return
+                # Try auto-load before complaining
+                if not self._inspector_try_auto_load_video(selected):
+                    self.inspector_video_var.set(False)
+                    return
 
         self._insp_fig = None
         self._inspector_update_fast()
@@ -1043,12 +1091,23 @@ class InspectorTabMixin:
         speed[np.isnan(speed)] = 0.0
         time_s = np.arange(len(speed)) / fps
 
-        # Get threshold
-        threshold = 0.5
-        if hasattr(self, 'bout_threshold_var'):
+        # Use the threshold from the run that produced the displayed bouts,
+        # not the current (possibly edited) UI value.
+        run_params = getattr(self, '_bout_run_params', None)
+        threshold = run_params.speed_threshold if run_params is not None else 0.5
+        lookback = run_params.heading_lookback_frames if run_params is not None else 5
+
+        # Detect whether the user has changed any parameter since the last run.
+        is_stale = False
+        if run_params is not None:
             try:
-                threshold = float(self.bout_threshold_var.get())
-            except ValueError:
+                is_stale = (
+                    float(getattr(self, 'bout_threshold_var', None).get()) != run_params.speed_threshold
+                    or int(getattr(self, 'bout_merge_gap_var', None).get()) != run_params.merge_gap_frames
+                    or int(getattr(self, 'bout_min_frames_var', None).get()) != run_params.min_bout_frames
+                    or int(getattr(self, 'bout_lookback_var', None).get()) != run_params.heading_lookback_frames
+                )
+            except (ValueError, TypeError, AttributeError):
                 pass
 
         unit = loaded.calibration.unit_name
@@ -1108,22 +1167,48 @@ class InspectorTabMixin:
         ax_speed.axhline(0, color='black', lw=0.5, zorder=2)
         ax_speed.set_ylabel(f"Speed ({unit}/s)", fontsize=8)
         ax_speed.set_xlabel("Time (s)", fontsize=8)
+
+        stale_note = "  \u26a0 params changed \u2014 re-run analysis" if is_stale else ""
+        param_note = (f"threshold={threshold} {unit}/s  |  "
+                      f"look-back={lookback} fr{stale_note}")
         ax_speed.set_title(
-            f"Fish {fish_id} \u2014 {len(bout_result.bouts)} bouts "
-            f"(\u25A0 blue=left  \u25A0 red=right  \u25A0 gray=straight)",
-            fontsize=9
+            f"Fish {fish_id} \u2014 {len(bout_result.bouts)} bouts   "
+            f"(\u25A0 blue=left  \u25A0 red=right  \u25A0 gray=straight)\n"
+            f"{param_note}",
+            fontsize=9,
+            color='firebrick' if is_stale else 'black'
         )
         ax_speed.legend(fontsize=7, loc='upper right')
         ax_speed.set_ylim(-y_cap * 0.4, y_cap)
 
-        # Add secondary y-axis on right side showing degree scale for heading bars
+        # Right y-axis: degree scale for the heading bars.
+        # The bars are drawn in ax_speed with negative y values (0 → -bar_h).
+        # We need an inverted axis where 0° aligns with the speed zero-line and
+        # max_abs_hc° aligns with the bottom of the tallest bar.
+        #
+        # Math: twinx shares physical space with ax_speed (ylim = -y_cap*0.4 → y_cap).
+        # The degree axis ylim that achieves zero-alignment:
+        #   bottom_deg =  y_cap * 0.4 / heading_scale   (big positive, below zero line)
+        #   top_deg    = -y_cap       / heading_scale   (big negative, above zero line)
+        # This makes the axis inverted so larger degrees appear lower on the plot.
         ax_deg = ax_speed.twinx()
-        ax_deg.set_ylim(-max_abs_hc, y_cap / heading_scale if heading_scale > 0 else 180)
+        if heading_scale > 0:
+            ax_deg.set_ylim(
+                y_cap * 0.4 / heading_scale,    # physical bottom
+                -y_cap / heading_scale          # physical top
+            )
+            # Choose a clean tick step so we get 3-5 ticks between 0 and max_abs_hc
+            for _step in [5, 10, 15, 20, 30, 45, 60, 90, 180]:
+                if max_abs_hc / _step <= 5:
+                    break
+            tick_vals = list(range(0, int(np.ceil(max_abs_hc)) + _step, _step))
+            tick_vals = [t for t in tick_vals if t <= max_abs_hc + _step * 0.5]
+            ax_deg.set_yticks(tick_vals)
+            ax_deg.set_yticklabels([f'{t:.0f}\u00b0' for t in tick_vals])
+        else:
+            ax_deg.set_yticks([])
         ax_deg.set_ylabel("|Turn| (\u00b0)", fontsize=8, color='gray')
         ax_deg.tick_params(axis='y', colors='gray', labelsize=7)
-        # Only show ticks in the negative region (heading bars)
-        import matplotlib.ticker as mticker
-        ax_deg.yaxis.set_major_locator(mticker.MaxNLocator(nbins=4))
         ax_deg.spines['right'].set_color('gray')
         ax_deg.spines['right'].set_alpha(0.5)
 
