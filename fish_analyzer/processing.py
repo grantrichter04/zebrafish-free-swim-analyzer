@@ -128,6 +128,7 @@ class FishTrajectory:
     metrics: Dict[str, Any] = field(default_factory=dict)
     n_valid_frames: int = 0
     n_total_frames: int = 0
+    smoothing_failed: bool = False
 
     @property
     def valid_percentage(self) -> float:
@@ -214,6 +215,7 @@ class TrajectoryProcessor:
         trj.spatial_units = self.file.calibration.unit_name
         trj.time_units = "s"
 
+        smoothing_failed = False
         if self.params.apply_smoothing:
             try:
                 # Interpolate NaN gaps before smoothing to prevent
@@ -241,13 +243,15 @@ class TrajectoryProcessor:
                     trj.loc[nan_mask, 'y'] = np.nan
             except Exception:
                 print(f"    Note: Smoothing failed for fish {fish_idx}, using raw trajectory")
+                smoothing_failed = True
 
         return FishTrajectory(
             fish_id=fish_idx,
             identity_label=self.file.metadata.identity_labels[fish_idx],
             trajectory=trj,
             n_valid_frames=n_valid,
-            n_total_frames=n_total
+            n_total_frames=n_total,
+            smoothing_failed=smoothing_failed,
         )
 
     def _transform_coordinates(self, raw_coords: np.ndarray) -> np.ndarray:

@@ -610,7 +610,14 @@ class DataTabMixin:
                 fish_list = process_and_analyze_file(loaded_file, params)
                 loaded_file.processed_data = fish_list
 
-                self.set_status(f"  [OK] {nickname}: {len(fish_list)}/{loaded_file.n_fish} fish analyzed")
+                failed_smoothing = [f.fish_id for f in fish_list if f.smoothing_failed]
+                if failed_smoothing:
+                    self.set_status(
+                        f"  [OK] {nickname}: {len(fish_list)}/{loaded_file.n_fish} fish analyzed "
+                        f"(smoothing failed for fish {failed_smoothing} — raw trajectories used)"
+                    )
+                else:
+                    self.set_status(f"  [OK] {nickname}: {len(fish_list)}/{loaded_file.n_fish} fish analyzed")
                 self.analysis_progress['value'] = idx
                 self.root.update()
 

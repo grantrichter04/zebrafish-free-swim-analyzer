@@ -394,11 +394,12 @@ class BoutTabMixin:
             n_fish = len(results)
             all_bouts = sum(r.summary.get('bout_count', 0) for r in results)
 
+            _file_ibi = np.nanmean([r.summary.get('ibi_median_ms', np.nan) for r in results])
             file_rows.append((
                 filename, n_fish, all_bouts,
                 f"{np.mean([r.summary.get('bout_rate_per_min', 0) for r in results]):.1f}",
                 f"{np.nanmean([r.summary.get('bout_duration_median_ms', np.nan) for r in results]):.0f}",
-                f"{np.nanmean([r.summary.get('ibi_median_ms', np.nan) for r in results]):.0f}",
+                "—" if np.isnan(_file_ibi) else f"{_file_ibi:.0f}",
                 f"{np.nanmean([r.summary.get('bout_peak_speed_median', np.nan) for r in results]):.2f}",
                 f"{np.nanmean([r.summary.get('bout_displacement_median', np.nan) for r in results]):.3f}",
                 f"{np.nanmean([r.summary.get('bout_laterality_index', np.nan) for r in results]):.3f}",
@@ -412,7 +413,7 @@ class BoutTabMixin:
                     s.get('bout_count', 0),
                     f"{s.get('bout_rate_per_min', 0):.1f}",
                     f"{s.get('bout_duration_median_ms', np.nan):.0f}",
-                    f"{s.get('ibi_median_ms', np.nan):.0f}",
+                    "—" if np.isnan(s.get('ibi_median_ms', np.nan)) else f"{s.get('ibi_median_ms', np.nan):.0f}",
                     f"{s.get('bout_peak_speed_median', np.nan):.2f}",
                     f"{s.get('bout_displacement_median', np.nan):.3f}",
                     f"{s.get('bout_heading_change_mean_abs_deg', np.nan):.1f}",

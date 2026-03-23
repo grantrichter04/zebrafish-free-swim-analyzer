@@ -862,9 +862,12 @@ class InspectorTabMixin:
         )
 
         if rebuild:
+            self.set_status("Rebuilding inspector...")
+            self.root.update_idletasks()
             self._inspector_rebuild_figure(
                 selected, loaded, frame_idx, time_mode
             )
+            self.set_status("Ready")
             self._insp_cached_file = selected
             self._insp_cached_time_mode = time_mode
             self._insp_cached_overlays = video_on

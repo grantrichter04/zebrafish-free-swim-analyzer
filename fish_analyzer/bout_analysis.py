@@ -291,7 +291,26 @@ class BoutDetector:
         valid = (~np.isnan(dx)) & (~np.isnan(dy)) & (disp >= _MIN_DISP)
 
         if np.sum(valid) < 2:
-            return 0.0
+            # Not enough clean steps to sum heading changes — fall back to the
+            # lookback approach used for 1-frame bouts: compare total approach
+            # and departure vectors around the bout.
+            pre = max(0, start - lookback)
+            post = min(len(x) - 1, end + lookback)
+            if pre == start or post == end:
+                return 0.0
+            dx_pre = x[start] - x[pre]
+            dy_pre = y[start] - y[pre]
+            dx_post = x[post] - x[end]
+            dy_post = y[post] - y[end]
+            if any(np.isnan([dx_pre, dy_pre, dx_post, dy_post])):
+                return 0.0
+            if (np.hypot(dx_pre, dy_pre) < _MIN_DISP
+                    or np.hypot(dx_post, dy_post) < _MIN_DISP):
+                return 0.0
+            h_pre = np.arctan2(dy_pre, dx_pre)
+            h_post = np.arctan2(dy_post, dx_post)
+            dh = (h_post - h_pre + np.pi) % (2 * np.pi) - np.pi
+            return float(np.degrees(dh))
 
         headings = np.arctan2(dy[valid], dx[valid])
         dh = np.diff(headings)
