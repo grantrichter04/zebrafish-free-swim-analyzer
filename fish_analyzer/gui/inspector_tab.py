@@ -28,6 +28,12 @@ try:
 except ImportError:
     _CV2_AVAILABLE = False
 
+try:
+    from PIL import Image as _PIL_Image, ImageTk as _PIL_ImageTk
+    _PIL_AVAILABLE = True
+except ImportError:
+    _PIL_AVAILABLE = False
+
 
 class InspectorTabMixin:
     """
@@ -199,7 +205,7 @@ class InspectorTabMixin:
         self.inspector_speed_var = tk.StringVar(value="1x")
         ttk.Combobox(
             play_row, textvariable=self.inspector_speed_var,
-            values=["0.5x", "1x", "2x", "4x", "8x"],
+            values=["0.25x", "0.5x", "1x", "2x", "4x", "8x"],
             width=5, state="readonly"
         ).pack(side="left")
 
@@ -384,6 +390,17 @@ class InspectorTabMixin:
         ).pack(side="left", padx=3)
         tk.Label(window_row, text="sec").pack(side="left")
 
+        turn_row = tk.Frame(bout_frame)
+        turn_row.pack(fill="x", padx=5, pady=2)
+        tk.Label(turn_row, text="Turn threshold:").pack(side="left")
+        self.inspector_straight_threshold_var = tk.IntVar(value=15)
+        tk.Spinbox(
+            turn_row, from_=1, to=90, width=4,
+            textvariable=self.inspector_straight_threshold_var,
+            command=self._inspector_rebuild_needed
+        ).pack(side="left", padx=3)
+        tk.Label(turn_row, text="° (below = straight)").pack(side="left")
+
         # --- Time Panel Mode (collapsible) ---
         _, time_frame = self._make_collapsible(scroll_frame, "Time Panel")
 
@@ -439,6 +456,14 @@ class InspectorTabMixin:
         self._insp_composite_artist = None
         self._insp_ax_zoom = None
         self._insp_zoom_artist = None
+        # PIL/ImageTk video display (replaces matplotlib imshow for speed)
+        self._insp_video_canvas = None
+        self._insp_video_photo = None
+        self._insp_video_canvas_item = None
+        self._insp_title_item = None
+        self._insp_zoom_canvas = None
+        self._insp_zoom_photo = None
+        self._insp_zoom_canvas_item = None
 
     # =========================================================================
     # FILE SELECTION
@@ -642,37 +667,82 @@ class InspectorTabMixin:
             self.root.after_cancel(self.animation_after_id)
             self.animation_after_id = None
 
+    def _on_inspector_resize(self, event=None):
+        """Pause animation during window resize to prevent UI freeze.
+
+        The video canvas fires <Configure> continuously while the user drags
+        the window edge. Rendering a resized PIL image on every event would
+        race with Tkinter's layout engine and lock up the UI. Instead we
+        pause the animation loop and restart it 200 ms after the last event.
+        """
+        # Cancel any pending restart
+        if hasattr(self, '_resize_after_id') and self._resize_after_id:
+            self.root.after_cancel(self._resize_after_id)
+            self._resize_after_id = None
+
+        # Pause the animation loop (without changing the play/pause button)
+        was_running = self.animation_running
+        if was_running:
+            self.animation_running = False
+            if self.animation_after_id:
+                self.root.after_cancel(self.animation_after_id)
+                self.animation_after_id = None
+
+        # Invalidate the canvas items so they get repositioned on next draw
+        self._insp_video_canvas_item = None
+        self._insp_title_item = None
+
+        def _resume():
+            self._resize_after_id = None
+            if was_running:
+                self.animation_running = True
+                self.inspector_play_button.config(text="|| Pause", bg="salmon")
+                self._inspector_animate_step()
+            else:
+                self._inspector_update_fast()
+
+        self._resize_after_id = self.root.after(200, _resume)
+
     def _inspector_animate_step(self):
         """Advance one step in animation."""
         if not self.animation_running:
             return
 
-        current = self.inspector_frame_var.get()
-        max_val = int(self.inspector_frame_slider.cget('to'))
+        import time
 
-        if current < max_val:
-            self.inspector_frame_var.set(current + 1)
-        else:
-            self.inspector_frame_var.set(0)
-
-        self._update_inspector_info()
-        self._inspector_update_fast()
-
-        # Calculate delay based on real-time playback
+        # Calculate target interval before rendering
         step = int(self.inspector_step_var.get())
         selected = self.inspector_file_var.get()
-        delay_ms = 100
+        target_ms = 100
         if selected and selected in self.loaded_files:
             fps = self.loaded_files[selected].calibration.frame_rate
             real_time = step / fps
-
             speed_str = self.inspector_speed_var.get()
             try:
                 speed_mult = float(speed_str.replace('x', ''))
             except ValueError:
                 speed_mult = 1.0
+            target_ms = max(16, int((real_time / speed_mult) * 1000))
 
-            delay_ms = max(16, int((real_time / speed_mult) * 1000))
+        t_start = time.perf_counter()
+
+        try:
+            current = self.inspector_frame_var.get()
+            max_val = int(self.inspector_frame_slider.cget('to'))
+
+            if current < max_val:
+                self.inspector_frame_var.set(current + 1)
+            else:
+                self.inspector_frame_var.set(0)
+
+            self._update_inspector_info()
+            self._inspector_update_fast()
+        except Exception:
+            pass  # Never let a render error break the animation chain
+
+        # Subtract render time; keep a floor of 8 ms so Tkinter can breathe
+        elapsed_ms = (time.perf_counter() - t_start) * 1000
+        delay_ms = max(8, int(target_ms - elapsed_ms))
 
         self.animation_after_id = self.root.after(
             delay_ms, self._inspector_animate_step
@@ -753,6 +823,7 @@ class InspectorTabMixin:
                      f"{reader.width}×{reader.height})",
                 fg="green"
             )
+            self.inspector_video_var.set(True)
             return True
 
         except Exception as e:
@@ -883,165 +954,155 @@ class InspectorTabMixin:
 
     def _inspector_rebuild_figure(self, selected, loaded, frame_idx,
                                    time_mode):
-        """Rebuild the entire figure from scratch.
+        """Rebuild the inspector layout from scratch.
 
-        Uses a persistent imshow artist for the arena — overlays are drawn
-        directly onto the frame (via CV2 when available) so only a single
-        set_data() call is needed per frame instead of dozens of scatter/plot
-        artists.
+        Video is displayed via PIL/ImageTk on a tk.Canvas (fast, direct pixel
+        transfer). The time panel beneath uses a small matplotlib Figure only
+        for the static chart + moving cursor (blitting works well there).
         """
         for widget in self.inspector_plot_frame.winfo_children():
             widget.destroy()
 
+        # Reset all canvas/artist state
+        self._insp_video_canvas = None
+        self._insp_video_photo = None
+        self._insp_video_canvas_item = None
+        self._insp_title_item = None
+        self._insp_zoom_canvas = None
+        self._insp_zoom_photo = None
+        self._insp_zoom_canvas_item = None
+        self._insp_fig = None
+        self._insp_canvas = None
+        self._insp_ax_main = None
+        self._insp_ax_time = None
+        self._insp_ax_time2 = None
+        self._insp_ax_zoom = None
+        self._insp_composite_artist = None
+        self._insp_zoom_artist = None
+        self._insp_bg_cache = None
+        self._insp_time_marker = None
+        self._insp_bout_cursor_speed = None
+        self._insp_bout_cursor_heading = None
+        self._insp_dynamic_artists = []
+
         show_time = time_mode != "none"
-        show_bout_heading = time_mode == "bout"
+        show_bout = time_mode == "bout"
 
-        # Determine layout — bout mode adds a crop-zoom panel to the right
-        if show_bout_heading:
-            self._insp_fig = Figure(figsize=(12, 10), dpi=100)
-            self._insp_ax_main = self._insp_fig.add_axes(
-                [0.02, 0.38, 0.62, 0.58]
-            )
-            self._insp_ax_zoom = self._insp_fig.add_axes(
-                [0.66, 0.42, 0.32, 0.54]
-            )
-            self._insp_ax_time = self._insp_fig.add_axes(
-                [0.06, 0.05, 0.90, 0.28]
-            )
-            self._insp_ax_time2 = None  # Combined into single panel now
-        elif show_time:
-            self._insp_fig = Figure(figsize=(10, 8), dpi=100)
-            self._insp_ax_main = self._insp_fig.add_axes(
-                [0.02, 0.22, 0.96, 0.74]
-            )
-            self._insp_ax_time = self._insp_fig.add_axes(
-                [0.08, 0.05, 0.88, 0.15]
-            )
-            self._insp_ax_time2 = None
-            self._insp_ax_zoom = None
-        else:
-            self._insp_fig = Figure(figsize=(10, 8), dpi=100)
-            self._insp_ax_main = self._insp_fig.add_axes(
-                [0.02, 0.02, 0.96, 0.94]
-            )
-            self._insp_ax_time = None
-            self._insp_ax_time2 = None
-            self._insp_ax_zoom = None
-
-        ax = self._insp_ax_main
-
-        # Coordinate system
+        vid_h = loaded.metadata.video_height
+        vid_w = loaded.metadata.video_width
         pixels_to_bl = 1.0 / loaded.metadata.body_length
-        width_bl = loaded.metadata.video_width * pixels_to_bl
-        height_bl = loaded.metadata.video_height * pixels_to_bl
-        self._insp_cached_width_bl = width_bl
-        self._insp_cached_height_bl = height_bl
+        self._insp_cached_width_bl = vid_w * pixels_to_bl
+        self._insp_cached_height_bl = vid_h * pixels_to_bl
 
-        # Load background image for compositing (don't display it separately)
+        # --- Layout: in bout mode add a zoom column on the right ---
+        if show_bout:
+            # Pack zoom_col FIRST so pack's space allocation gives it room
+            # before main_col's expand=True consumes everything.
+            zoom_col = tk.Frame(self.inspector_plot_frame, bg="black",
+                                width=260)
+            zoom_col.pack(side="right", fill="y")
+            zoom_col.pack_propagate(False)
+
+            tk.Label(zoom_col, text="Fish Zoom", font=("Arial", 10, "bold"),
+                     bg="black", fg="white").pack(side="top")
+            self._insp_zoom_canvas = tk.Canvas(zoom_col, bg="black",
+                                               highlightthickness=0)
+            self._insp_zoom_canvas.pack(fill="both", expand=True)
+
+            main_col = tk.Frame(self.inspector_plot_frame, bg="black")
+            main_col.pack(side="left", fill="both", expand=True)
+
+            video_parent = main_col
+            time_parent = main_col
+        else:
+            video_parent = self.inspector_plot_frame
+            time_parent = self.inspector_plot_frame
+
+        # --- Video canvas (PIL/ImageTk — replaces matplotlib imshow) ---
+        self._insp_video_canvas = tk.Canvas(video_parent, bg="black",
+                                            highlightthickness=0)
+        self._insp_video_canvas.pack(fill="both", expand=True)
+        self._insp_video_canvas.bind("<Configure>", self._on_inspector_resize)
+
+        # --- Time panel: small matplotlib figure below the video ---
+        if show_time:
+            time_fig_h = 3.2 if show_bout else 2.0
+            self._insp_fig = Figure(figsize=(10, time_fig_h), dpi=100)
+            self._insp_fig.patch.set_facecolor('#f5f5f5')
+            # bout mode needs extra top margin for the 2-line title
+            if show_bout:
+                self._insp_ax_time = self._insp_fig.add_axes(
+                    [0.08, 0.18, 0.82, 0.58]
+                )
+            else:
+                self._insp_ax_time = self._insp_fig.add_axes(
+                    [0.08, 0.22, 0.88, 0.68]
+                )
+            self._insp_ax_time2 = None
+
+            self._insp_canvas = FigureCanvasTkAgg(
+                self._insp_fig, master=time_parent
+            )
+            self._insp_canvas.get_tk_widget().pack(fill="x", side="bottom")
+
+            # Populate the time axes
+            if time_mode in ('nnd', 'iid', 'hull') and loaded.shoaling_results:
+                results = loaded.shoaling_results
+                time_min = results.timestamps / 60.0
+                ax_t = self._insp_ax_time
+                if time_mode == 'nnd':
+                    ax_t.plot(time_min, results.mean_nnd_per_sample,
+                              'b-', lw=1, alpha=0.7)
+                    ax_t.set_ylabel('NND (BL)', fontsize=8)
+                elif time_mode == 'iid':
+                    ax_t.plot(time_min, results.mean_iid_per_sample,
+                              'g-', lw=1, alpha=0.7)
+                    ax_t.set_ylabel('IID (BL)', fontsize=8)
+                else:
+                    ax_t.plot(time_min, results.convex_hull_area_per_sample,
+                              'r-', lw=1, alpha=0.7)
+                    ax_t.set_ylabel('Hull (BL\u00b2)', fontsize=8)
+                ax_t.set_xlabel('Time (min)', fontsize=8)
+                ax_t.set_xlim(time_min[0], time_min[-1])
+                ax_t.grid(True, alpha=0.3)
+                self._insp_time_marker = ax_t.axvline(
+                    x=0, color='red', lw=2, linestyle='--'
+                )
+            elif time_mode in ('nnd', 'iid', 'hull') and not loaded.shoaling_results:
+                self._insp_ax_time.text(
+                    0.5, 0.5, "Run Shoaling Analysis first",
+                    transform=self._insp_ax_time.transAxes,
+                    ha='center', va='center', fontsize=10, color='gray'
+                )
+            elif time_mode == 'bout':
+                self._inspector_build_bout_panels(selected, loaded)
+
+            # Draw static chart content and cache background for blitting
+            self._insp_canvas.draw()
+            try:
+                self._insp_bg_cache = self._insp_canvas.copy_from_bbox(
+                    self._insp_fig.bbox
+                )
+            except Exception:
+                self._insp_bg_cache = None
+
+        # --- Background image for compositing (used when video is off) ---
         self._insp_cached_background = None
         self._insp_video_bg_artist = None
         use_video = self.inspector_video_var.get()
-
         if (not use_video and loaded.background_image_path
                 and loaded.background_image_path.exists()):
             try:
                 bg = plt.imread(str(loaded.background_image_path))
-                # Ensure uint8 RGB for compositing
                 if bg.dtype != np.uint8:
                     bg = (np.clip(bg, 0, 1) * 255).astype(np.uint8)
                 if len(bg.shape) == 2:
                     bg = np.stack([bg, bg, bg], axis=-1)
                 elif bg.shape[2] == 4:
-                    bg = bg[:, :, :3]  # Drop alpha channel
+                    bg = bg[:, :, :3]
                 self._insp_cached_background = bg
             except Exception:
                 pass
-
-        # Create persistent imshow for composited frames
-        vid_h = loaded.metadata.video_height
-        vid_w = loaded.metadata.video_width
-        blank = np.ones((vid_h, vid_w, 3), dtype=np.uint8) * 180
-        self._insp_composite_artist = ax.imshow(
-            blank, extent=[0, width_bl, 0, height_bl],
-            aspect='auto', origin='upper', zorder=0,
-            interpolation='bilinear'
-        )
-
-        ax.set_xlim(0, width_bl)
-        ax.set_ylim(0, height_bl)
-        ax.set_xlabel('X (BL)', fontsize=9)
-        ax.set_ylabel('Y (BL)', fontsize=9)
-
-        # Zoom panel (bout mode)
-        if self._insp_ax_zoom is not None:
-            zoom_blank = np.ones((200, 200, 3), dtype=np.uint8) * 180
-            self._insp_zoom_artist = self._insp_ax_zoom.imshow(
-                zoom_blank, aspect='equal', interpolation='bilinear'
-            )
-            self._insp_ax_zoom.set_title('Fish Zoom', fontsize=10,
-                                          fontweight='bold')
-            self._insp_ax_zoom.axis('off')
-        else:
-            self._insp_zoom_artist = None
-
-        # --- Time panel: shoaling metrics ---
-        self._insp_time_marker = None
-        self._insp_bout_cursor_speed = None
-        self._insp_bout_cursor_heading = None
-
-        if time_mode in ('nnd', 'iid', 'hull') and loaded.shoaling_results:
-            results = loaded.shoaling_results
-            time_min = results.timestamps / 60.0
-            ax_t = self._insp_ax_time
-
-            if time_mode == 'nnd':
-                ax_t.plot(time_min, results.mean_nnd_per_sample,
-                          'b-', lw=1, alpha=0.7)
-                ax_t.set_ylabel('NND (BL)', fontsize=8)
-            elif time_mode == 'iid':
-                ax_t.plot(time_min, results.mean_iid_per_sample,
-                          'g-', lw=1, alpha=0.7)
-                ax_t.set_ylabel('IID (BL)', fontsize=8)
-            else:
-                ax_t.plot(time_min, results.convex_hull_area_per_sample,
-                          'r-', lw=1, alpha=0.7)
-                ax_t.set_ylabel('Hull (BL\u00b2)', fontsize=8)
-
-            ax_t.set_xlabel('Time (min)', fontsize=8)
-            ax_t.set_xlim(time_min[0], time_min[-1])
-            ax_t.grid(True, alpha=0.3)
-            self._insp_time_marker = ax_t.axvline(
-                x=0, color='red', lw=2, linestyle='--'
-            )
-
-        elif time_mode in ('nnd', 'iid', 'hull') and not loaded.shoaling_results:
-            ax_t = self._insp_ax_time
-            if ax_t:
-                ax_t.text(
-                    0.5, 0.5,
-                    "Run Shoaling Analysis first",
-                    transform=ax_t.transAxes, ha='center', va='center',
-                    fontsize=10, color='gray'
-                )
-
-        elif time_mode == 'bout':
-            self._inspector_build_bout_panels(selected, loaded)
-
-        # Create canvas
-        self._insp_canvas = FigureCanvasTkAgg(
-            self._insp_fig, master=self.inspector_plot_frame
-        )
-        self._insp_canvas.get_tk_widget().pack(fill="both", expand=True)
-        self._insp_dynamic_artists = []
-
-        # Draw static content and cache background for blitting
-        self._insp_canvas.draw()
-        try:
-            self._insp_bg_cache = self._insp_canvas.copy_from_bbox(
-                self._insp_fig.bbox
-            )
-        except Exception:
-            self._insp_bg_cache = None
 
     def _inspector_build_bout_panels(self, selected, loaded):
         """Build the bout speed trace + heading panels (full recording)."""
@@ -1126,11 +1187,16 @@ class InspectorTabMixin:
             label=f'Threshold ({threshold} {unit}/s)'
         )
 
+        try:
+            straight_thresh = int(self.inspector_straight_threshold_var.get())
+        except (ValueError, AttributeError):
+            straight_thresh = 15
+
         for bout in bout_result.bouts:
             t0 = bout.start_frame / fps
             t1 = bout.end_frame / fps
             hc = bout.heading_change_deg
-            if abs(hc) > 5:
+            if abs(hc) > straight_thresh:
                 color = '#1976d2' if hc > 0 else '#d32f2f'
             else:
                 color = '#bdbdbd'
@@ -1156,7 +1222,7 @@ class InspectorTabMixin:
             t_mid = (bout.start_frame + bout.end_frame) / 2 / fps
             hc = bout.heading_change_deg
             abs_hc = abs(hc)
-            if abs_hc > 5:
+            if abs_hc > straight_thresh:
                 c = '#1976d2' if hc > 0 else '#d32f2f'
             else:
                 c = '#757575'
@@ -1231,8 +1297,7 @@ class InspectorTabMixin:
         Uses CV2 drawing when available (much faster), falls back to
         matplotlib artists otherwise.
         """
-        ax = self._insp_ax_main
-        if ax is None or self._insp_composite_artist is None:
+        if self._insp_video_canvas is None:
             return
 
         n_fish = loaded.n_fish
@@ -1297,18 +1362,61 @@ class InspectorTabMixin:
                 display, raw_pos, n_fish, tab10, dot_radius
             )
 
-        # --- Update persistent imshow ---
-        self._insp_composite_artist.set_data(display)
+        # --- Render video frame via PIL/ImageTk (fast direct pixel display) ---
+        canvas_w = self._insp_video_canvas.winfo_width()
+        canvas_h = self._insp_video_canvas.winfo_height()
+        if canvas_w < 2 or canvas_h < 2:
+            # Canvas not yet laid out — use a sensible default
+            canvas_w, canvas_h = 800, 600
 
-        # --- Title ---
-        ax.set_title(
-            f'Frame {frame_idx} | {time_s:.1f}s',
-            fontsize=12, fontweight='bold'
-        )
+        img_h, img_w = display.shape[:2]
+        scale_fit = min(canvas_w / img_w, canvas_h / img_h)
+        new_w = max(1, int(img_w * scale_fit))
+        new_h = max(1, int(img_h * scale_fit))
 
-        # --- Crop zoom for bout mode (uses raw frame, not composited) ---
-        if (self._insp_zoom_artist is not None
-                and self.inspector_show_bouts_var.get()):
+        if _CV2_AVAILABLE and (new_w != img_w or new_h != img_h):
+            display_small = _cv2.resize(display, (new_w, new_h),
+                                        interpolation=_cv2.INTER_LINEAR)
+        else:
+            display_small = display
+
+        if _PIL_AVAILABLE:
+            pil_img = _PIL_Image.fromarray(display_small)
+            photo = _PIL_ImageTk.PhotoImage(image=pil_img)
+            # Replace reference BEFORE using canvas — this lets Python's refcount
+            # immediately GC the old PhotoImage and release its Tk image resource.
+            # Keeping self._insp_video_photo is also required so Tk doesn't lose
+            # the image while the canvas item still references it by name.
+            self._insp_video_photo = photo
+            cx, cy = canvas_w // 2, canvas_h // 2
+            if self._insp_video_canvas_item is None:
+                self._insp_video_canvas_item = self._insp_video_canvas.create_image(
+                    cx, cy, anchor="center", image=photo
+                )
+            else:
+                self._insp_video_canvas.itemconfig(
+                    self._insp_video_canvas_item, image=photo
+                )
+                self._insp_video_canvas.coords(
+                    self._insp_video_canvas_item, cx, cy
+                )
+
+            # Frame/time label overlaid on the canvas
+            title_text = f'Frame {frame_idx}  |  {time_s:.1f}s'
+            if self._insp_title_item is None:
+                self._insp_title_item = self._insp_video_canvas.create_text(
+                    cx, 14, text=title_text,
+                    fill="white", font=("Arial", 11, "bold"),
+                    anchor="center"
+                )
+            else:
+                self._insp_video_canvas.itemconfig(
+                    self._insp_title_item, text=title_text
+                )
+                self._insp_video_canvas.coords(self._insp_title_item, cx, 14)
+
+        # --- Crop zoom for bout mode (always shown when zoom canvas exists) ---
+        if self._insp_zoom_canvas is not None:
             try:
                 bout_fish = int(self.inspector_bout_fish_var.get())
                 if bout_fish < n_fish and not np.isnan(raw_pos[bout_fish, 0]):
@@ -1319,49 +1427,36 @@ class InspectorTabMixin:
             except (ValueError, TypeError):
                 pass
 
-        # --- Update time panel cursor ---
+        # --- Update time panel cursor (matplotlib blitting — only the cursor moves) ---
+        if self._insp_canvas is None:
+            return
+
         if time_mode in ('nnd', 'iid', 'hull') and self._insp_time_marker:
             current_min = time_s / 60.0
             self._insp_time_marker.set_xdata([current_min, current_min])
+            if self._insp_bg_cache is not None:
+                try:
+                    self._insp_canvas.restore_region(self._insp_bg_cache)
+                    self._insp_ax_time.draw_artist(self._insp_time_marker)
+                    self._insp_canvas.blit(self._insp_fig.bbox)
+                except Exception:
+                    self._insp_canvas.draw_idle()
+            else:
+                self._insp_canvas.draw_idle()
 
         elif time_mode == 'bout':
             center_s = time_s
             window_s = self.inspector_bout_window_var.get()
             total_s = loaded.n_frames / fps
-            t_start = max(0, center_s - window_s / 2)
-            t_end = t_start + window_s
-            if t_end > total_s:
-                t_end = total_s
-                t_start = max(0, t_end - window_s)
-
+            t_start_w = max(0, center_s - window_s / 2)
+            t_end_w = t_start_w + window_s
+            if t_end_w > total_s:
+                t_end_w = total_s
+                t_start_w = max(0, t_end_w - window_s)
             if self._insp_ax_time:
-                self._insp_ax_time.set_xlim(t_start, t_end)
-
+                self._insp_ax_time.set_xlim(t_start_w, t_end_w)
             if self._insp_bout_cursor_speed:
-                self._insp_bout_cursor_speed.set_xdata(
-                    [center_s, center_s]
-                )
-
-        # --- Render ---
-        # Use blitting when possible (not bout mode which scrolls xlim)
-        use_blitting = (
-            self._insp_bg_cache is not None
-            and time_mode != 'bout'
-        )
-
-        if use_blitting:
-            try:
-                self._insp_canvas.restore_region(self._insp_bg_cache)
-                ax.draw_artist(self._insp_composite_artist)
-                ax.draw_artist(ax.title)
-                if self._insp_zoom_artist is not None:
-                    self._insp_ax_zoom.draw_artist(self._insp_zoom_artist)
-                if self._insp_time_marker:
-                    self._insp_ax_time.draw_artist(self._insp_time_marker)
-                self._insp_canvas.blit(self._insp_fig.bbox)
-            except Exception:
-                self._insp_canvas.draw_idle()
-        else:
+                self._insp_bout_cursor_speed.set_xdata([center_s, center_s])
             self._insp_canvas.draw_idle()
 
     # =========================================================================
@@ -1540,6 +1635,9 @@ class InspectorTabMixin:
 
     def _inspector_update_zoom(self, display, raw_pos, fish_id, vid_h, vid_w):
         """Update the crop-zoom panel centered on the bout fish."""
+        if self._insp_zoom_canvas is None or not _PIL_AVAILABLE:
+            return
+
         px = int(raw_pos[fish_id, 0])
         py = int(raw_pos[fish_id, 1])
         crop_r = 80  # Radius in pixels
@@ -1550,19 +1648,35 @@ class InspectorTabMixin:
         x2 = min(vid_w, px + crop_r)
 
         crop = display[y1:y2, x1:x2].copy()
-
         if crop.size == 0:
             return
 
-        # Scale up for visibility
         if _CV2_AVAILABLE and crop.shape[0] > 0 and crop.shape[1] > 0:
             crop = _cv2.resize(crop, (250, 250),
-                              interpolation=_cv2.INTER_LINEAR)
-            # Draw crosshair at center
+                               interpolation=_cv2.INTER_LINEAR)
             cx, cy = 125, 125
             _cv2.line(crop, (cx - 15, cy), (cx + 15, cy),
-                     (0, 255, 255), 1, _cv2.LINE_AA)
+                      (0, 255, 255), 1, _cv2.LINE_AA)
             _cv2.line(crop, (cx, cy - 15), (cx, cy + 15),
-                     (0, 255, 255), 1, _cv2.LINE_AA)
+                      (0, 255, 255), 1, _cv2.LINE_AA)
 
-        self._insp_zoom_artist.set_data(crop)
+        pil_img = _PIL_Image.fromarray(crop)
+        photo = _PIL_ImageTk.PhotoImage(image=pil_img)
+        self._insp_zoom_photo = photo  # set early so old ref is released
+
+        zw = self._insp_zoom_canvas.winfo_width()
+        zh = self._insp_zoom_canvas.winfo_height()
+        zx = max(125, zw // 2)
+        zy = max(125, zh // 2)
+
+        if self._insp_zoom_canvas_item is None:
+            self._insp_zoom_canvas_item = self._insp_zoom_canvas.create_image(
+                zx, zy, anchor="center", image=photo
+            )
+        else:
+            self._insp_zoom_canvas.itemconfig(
+                self._insp_zoom_canvas_item, image=photo
+            )
+            self._insp_zoom_canvas.coords(
+                self._insp_zoom_canvas_item, zx, zy
+            )
