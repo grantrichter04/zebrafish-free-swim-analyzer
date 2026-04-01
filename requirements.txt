@@ -10,3 +10,8 @@ shapely>=2.0
 
 # Optional: video frame reading
 opencv-python>=4.8
+
+
+conda create -n fishanalyzer python=3.10 "numpy=1.26.4" "pandas=1.5.3" matplotlib scipy shapely scikit-learn opencv -c conda-forge
+conda activate fishanalyzer
+pip install traja

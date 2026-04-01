@@ -108,6 +108,9 @@ class GUIBase:
         self.file_arena_definitions: Dict[str, Any] = {}
         self.current_arena_file: Optional[str] = None
 
+        # Group assignments: file nickname → group label (for collapsed distributions)
+        self.file_groups: Dict[str, str] = {}
+
         # Create the main window
         self.root = tk.Tk()
         self.root.title("Fish Trajectory Analyzer")

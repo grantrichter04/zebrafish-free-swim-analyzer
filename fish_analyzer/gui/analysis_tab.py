@@ -20,7 +20,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolb
 import matplotlib.pyplot as plt
 
 from .utils import smooth_time_series, create_sortable_treeview, embed_figure_with_toolbar
-from ..export import export_individual_metrics_csv
+from ..export import export_individual_metrics_csv, export_combined_summary_csv
 
 
 class AnalysisTabMixin:
@@ -105,6 +105,12 @@ class AnalysisTabMixin:
             parent, text="Export Results to CSV",
             command=self._export_individual_csv,
             font=("Arial", 10)
+        ).pack(fill="x", padx=10, pady=(0, 4))
+
+        tk.Button(
+            parent, text="Export Combined Summary (per fish)",
+            command=self._export_combined_summary,
+            bg="#c8e6c9", font=("Arial", 10, "bold")
         ).pack(fill="x", padx=10, pady=(0, 10))
 
         # Distribution settings
@@ -124,6 +130,20 @@ class AnalysisTabMixin:
         tk.Label(bins_frame, text="Histogram bins:").pack(side="left")
         self.histogram_bins_var = tk.StringVar(value="30")
         tk.Entry(bins_frame, textvariable=self.histogram_bins_var, width=6).pack(side="left", padx=5)
+
+        # Collapse level
+        ttk.Separator(dist_frame, orient="horizontal").pack(fill="x", padx=10, pady=(8, 0))
+        tk.Label(dist_frame, text="Collapse level:", font=("Arial", 9)).pack(anchor="w", padx=10, pady=(5, 0))
+        self.speed_dist_collapse_var = tk.StringVar(value="individual")
+        tk.Radiobutton(dist_frame, text="Individual fish",
+                       variable=self.speed_dist_collapse_var, value="individual").pack(anchor="w", padx=20)
+        tk.Radiobutton(dist_frame, text="Per video (pool fish)",
+                       variable=self.speed_dist_collapse_var, value="video").pack(anchor="w", padx=20)
+        tk.Radiobutton(dist_frame, text="Per group (pool videos)",
+                       variable=self.speed_dist_collapse_var, value="group").pack(anchor="w", padx=20)
+        tk.Button(dist_frame, text="Assign Groups...",
+                  command=self._assign_groups_dialog,
+                  font=("Arial", 8)).pack(anchor="w", padx=20, pady=(4, 6))
 
     def _create_analysis_results(self, parent):
         """Create the results panel for analysis tab."""
@@ -405,6 +425,111 @@ class AnalysisTabMixin:
 
         embed_figure_with_toolbar(fig, self.speed_timeseries_frame)
 
+    def _auto_detect_group(self, filename: str) -> str:
+        """Infer a group label by stripping trailing numbers from a nickname.
+
+        E.g. 'Control_01' → 'Control', 'Exp2' → 'Exp'.
+        Falls back to the full filename if nothing is stripped.
+        """
+        import re
+        result = re.sub(r'[_\-\s]*\d+$', '', filename).strip()
+        return result if result else filename
+
+    def _assign_groups_dialog(self):
+        """Open a dialog for the user to assign group labels to loaded files."""
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Assign Group Labels")
+        dialog.resizable(False, False)
+        dialog.transient(self.root)
+        dialog.grab_set()
+
+        tk.Label(dialog, text="Assign each file to a group:",
+                 font=("Arial", 10, "bold")).pack(pady=(12, 2), padx=15)
+        tk.Label(dialog, text="Files sharing the same group name will be pooled together.",
+                 font=("Arial", 8), fg="gray").pack(padx=15)
+
+        grid_frame = tk.Frame(dialog)
+        grid_frame.pack(fill="both", expand=True, padx=20, pady=10)
+
+        tk.Label(grid_frame, text="File", font=("Arial", 9, "bold"), anchor="w").grid(
+            row=0, column=0, sticky="w", padx=5, pady=2)
+        tk.Label(grid_frame, text="Group label", font=("Arial", 9, "bold"), anchor="w").grid(
+            row=0, column=1, sticky="w", padx=5, pady=2)
+
+        entries = {}
+        for i, filename in enumerate(self.loaded_files.keys(), start=1):
+            short = filename if len(filename) <= 22 else filename[:19] + "..."
+            tk.Label(grid_frame, text=short, anchor="w", width=24).grid(
+                row=i, column=0, padx=5, pady=3, sticky="w")
+            current = self.file_groups.get(filename) or self._auto_detect_group(filename)
+            var = tk.StringVar(value=current)
+            tk.Entry(grid_frame, textvariable=var, width=22).grid(
+                row=i, column=1, padx=5, pady=3)
+            entries[filename] = var
+
+        btn_frame = tk.Frame(dialog)
+        btn_frame.pack(fill="x", padx=20, pady=(4, 12))
+
+        def _apply():
+            for fname, var in entries.items():
+                label = var.get().strip()
+                self.file_groups[fname] = label if label else self._auto_detect_group(fname)
+            dialog.destroy()
+
+        tk.Button(btn_frame, text="Apply", command=_apply,
+                  bg="lightblue", font=("Arial", 9)).pack(side="right", padx=4)
+        tk.Button(btn_frame, text="Cancel", command=dialog.destroy,
+                  font=("Arial", 9)).pack(side="right")
+
+        dialog.update_idletasks()
+        dialog.geometry(f"{dialog.winfo_reqwidth()}x{dialog.winfo_reqheight()}")
+
+    def _build_collapsed_info(self, fish_info, selected_files: List[str], collapse_level: str):
+        """Pool fish speeds to per-video or per-group level.
+
+        Returns a list of (label, speed_array, color, unit) tuples.
+        """
+        from collections import OrderedDict
+
+        if collapse_level == "video":
+            file_colors = plt.cm.tab10(np.linspace(0, 1, max(len(selected_files), 1)))
+            color_map = {fn: file_colors[i] for i, fn in enumerate(selected_files)}
+
+            video_data: OrderedDict = OrderedDict()
+            for filename, fish, speed, _, unit in fish_info:
+                if filename not in video_data:
+                    video_data[filename] = {'speeds': [], 'color': color_map[filename], 'unit': unit}
+                video_data[filename]['speeds'].append(speed)
+
+            return [
+                (fn, np.concatenate(d['speeds']), d['color'], d['unit'])
+                for fn, d in video_data.items()
+            ]
+
+        elif collapse_level == "group":
+            # Resolve group for each selected file
+            file_to_group = {
+                fn: (self.file_groups.get(fn) or self._auto_detect_group(fn))
+                for fn in selected_files
+            }
+            unique_groups = list(dict.fromkeys(file_to_group.values()))
+            group_colors = plt.cm.tab10(np.linspace(0, 1, max(len(unique_groups), 1)))
+            group_color_map = {g: group_colors[i] for i, g in enumerate(unique_groups)}
+
+            group_data: OrderedDict = OrderedDict()
+            for filename, fish, speed, _, unit in fish_info:
+                group = file_to_group.get(filename, filename)
+                if group not in group_data:
+                    group_data[group] = {'speeds': [], 'color': group_color_map[group], 'unit': unit}
+                group_data[group]['speeds'].append(speed)
+
+            return [
+                (grp, np.concatenate(d['speeds']), d['color'], d['unit'])
+                for grp, d in group_data.items()
+            ]
+
+        return []
+
     def _plot_speed_distribution(self, selected_files: List[str]):
         """Plot speed distribution as histograms or ridge plot."""
         for widget in self.speed_distribution_frame.winfo_children():
@@ -441,11 +566,21 @@ class AnalysisTabMixin:
             return
 
         view_mode = self.speed_dist_mode_var.get()
+        collapse_level = self.speed_dist_collapse_var.get()
 
-        if view_mode == "ridge":
-            self._plot_speed_ridge(fish_info, n_bins)
+        if collapse_level == "individual":
+            if view_mode == "ridge":
+                self._plot_speed_ridge(fish_info, n_bins)
+            else:
+                self._plot_speed_histograms(fish_info, n_bins)
         else:
-            self._plot_speed_histograms(fish_info, n_bins)
+            collapsed_info = self._build_collapsed_info(fish_info, selected_files, collapse_level)
+            if not collapsed_info:
+                return
+            if view_mode == "ridge":
+                self._plot_speed_collapsed_ridge(collapsed_info)
+            else:
+                self._plot_speed_collapsed_histograms(collapsed_info, n_bins)
 
     def _plot_speed_histograms(self, fish_info, n_bins):
         """Plot traditional histogram grid."""
@@ -589,6 +724,95 @@ class AnalysisTabMixin:
         ax.spines['right'].set_visible(False)
         fig.tight_layout()
 
+        embed_figure_with_toolbar(fig, self.speed_distribution_frame)
+
+    def _plot_speed_collapsed_ridge(self, collapsed_info):
+        """Ridge plot with one KDE row per video or group.
+
+        collapsed_info: [(label, speed_array, color, unit), ...]
+        """
+        from scipy.stats import gaussian_kde
+
+        all_speeds = np.concatenate([info[1] for info in collapsed_info])
+        x_min = 0.0
+        x_max = np.percentile(all_speeds, 99.5)
+        if x_max <= x_min:
+            x_max = x_min + 1.0
+        x_grid = np.linspace(x_min, x_max, 300)
+
+        kde_curves = []
+        for label, speed, color, unit in collapsed_info:
+            try:
+                kde_curves.append(gaussian_kde(speed, bw_method=0.15)(x_grid))
+            except Exception:
+                kde_curves.append(np.zeros_like(x_grid))
+
+        max_density = max(d.max() for d in kde_curves) if kde_curves else 1.0
+        if max_density == 0:
+            max_density = 1.0
+
+        within_overlap = 0.55  # slightly more space per row (fewer rows than individual fish)
+        n = len(collapsed_info)
+        total_height = n * within_overlap
+
+        fig = Figure(figsize=(10, max(4, total_height * 1.5 + 2)), dpi=100)
+        ax = fig.add_subplot(111)
+
+        # Draw bottom-to-top so the first entry appears at the top
+        for i, ((label, speed, color, unit), density) in enumerate(
+                zip(reversed(collapsed_info), reversed(kde_curves))):
+            y0 = i * within_overlap
+            norm = density / max_density * within_overlap * 1.5
+            ax.fill_between(x_grid, y0, y0 + norm, color=color, alpha=0.7, linewidth=0)
+            ax.plot(x_grid, y0 + norm, color=color, linewidth=1.5, alpha=0.95)
+            ax.text(x_min - 0.02 * x_max, y0 + within_overlap * 0.3,
+                    label, fontsize=9, ha='right', va='center')
+
+        unit_label = collapsed_info[0][3] if collapsed_info else "BL"
+        ax.set_xlabel(f'Speed ({unit_label}/s)', fontsize=11)
+        ax.set_xlim(x_min, x_max)
+        ax.set_ylim(-0.1, total_height + within_overlap)
+        ax.set_yticks([])
+        ax.set_title('Speed Distribution (Ridge Plot)', fontsize=13, fontweight='bold')
+        ax.spines['left'].set_visible(False)
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+        fig.tight_layout()
+
+        embed_figure_with_toolbar(fig, self.speed_distribution_frame)
+
+    def _plot_speed_collapsed_histograms(self, collapsed_info, n_bins):
+        """Histogram grid with one subplot per video or group.
+
+        collapsed_info: [(label, speed_array, color, unit), ...]
+        """
+        all_speeds = np.concatenate([info[1] for info in collapsed_info])
+        x_max = np.percentile(all_speeds, 99.5)
+        global_bins = np.linspace(0, x_max, n_bins + 1)
+
+        all_counts = [np.histogram(info[1], bins=global_bins)[0] for info in collapsed_info]
+        y_max = max(c.max() for c in all_counts) * 1.1
+
+        n = len(collapsed_info)
+        n_cols = min(3, n)
+        n_rows = (n + n_cols - 1) // n_cols
+
+        fig = Figure(figsize=(4 * n_cols, 3 * n_rows), dpi=100)
+
+        for plot_idx, (label, speed, color, unit) in enumerate(collapsed_info):
+            ax = fig.add_subplot(n_rows, n_cols, plot_idx + 1)
+            ax.hist(speed, bins=global_bins, color=color, alpha=0.7, edgecolor='black', linewidth=0.5)
+            mean_speed = np.mean(speed)
+            ax.axvline(mean_speed, color='red', linestyle='--', linewidth=1.5,
+                       label=f'Mean: {mean_speed:.2f}')
+            ax.set_xlabel(f'Speed ({unit}/s)', fontsize=9)
+            ax.set_ylabel('Count', fontsize=9)
+            ax.set_xlim(0, x_max)
+            ax.set_ylim(0, y_max)
+            ax.set_title(label, fontsize=10)
+            ax.legend(fontsize=7, loc='upper right')
+
+        fig.tight_layout()
         embed_figure_with_toolbar(fig, self.speed_distribution_frame)
 
     def _plot_behavioral_comparison(self, selected_files: List[str]):
@@ -886,9 +1110,54 @@ class AnalysisTabMixin:
             return
 
         try:
-            n_rows = export_individual_metrics_csv(analyzed, Path(output_path))
+            n_rows = export_individual_metrics_csv(
+                analyzed, Path(output_path), file_groups=self.file_groups
+            )
             self.set_status(f"Exported {n_rows} fish to {Path(output_path).name}")
             messagebox.showinfo("Export Complete",
                                 f"Exported {n_rows} fish rows to:\n{output_path}")
+        except Exception as e:
+            messagebox.showerror("Export Error", f"Failed to export:\n{e}")
+
+    def _export_combined_summary(self):
+        """Export combined per-fish summary: trajectory metrics + bout summary + Group."""
+        analyzed = {k: v for k, v in self.loaded_files.items() if v.processed_data}
+        if not analyzed:
+            messagebox.showwarning("No Data",
+                                   "No files have been analyzed yet.\n"
+                                   "Run 'Run Individual Trajectory Analysis' first.")
+            return
+
+        bout_results = getattr(self, 'bout_results', {})
+        if not bout_results:
+            if not messagebox.askyesno(
+                "Bout Data Missing",
+                "Bout analysis has not been run.\n\n"
+                "The Bout_* columns will be empty (NaN).\n\n"
+                "Export trajectory metrics only?"
+            ):
+                return
+
+        output_path = filedialog.asksaveasfilename(
+            title="Export Combined Summary CSV",
+            defaultextension=".csv",
+            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
+            initialfile="combined_summary.csv"
+        )
+        if not output_path:
+            return
+
+        try:
+            n_rows = export_combined_summary_csv(
+                analyzed, bout_results, self.file_groups, Path(output_path)
+            )
+            has_bouts = bool(bout_results)
+            msg = (
+                f"Exported {n_rows} fish rows to:\n{output_path}\n\n"
+                f"Columns: trajectory metrics"
+                + (" + bout summary stats." if has_bouts else " only (no bout data).")
+            )
+            self.set_status(f"Exported combined summary: {n_rows} fish")
+            messagebox.showinfo("Export Complete", msg)
         except Exception as e:
             messagebox.showerror("Export Error", f"Failed to export:\n{e}")
