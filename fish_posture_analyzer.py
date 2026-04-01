@@ -32,6 +32,7 @@ import sys
 import tkinter as tk
 from tkinter import filedialog, messagebox
 from pathlib import Path
+from typing import Optional
 
 import cv2
 import numpy as np
@@ -331,7 +332,7 @@ def process_video(video_path: Path, output_dir: Path):
 # Entry point
 # =============================================================================
 
-def browse_target() -> Path | None:
+def browse_target() -> Optional[Path]:
     """Open a file/folder dialog and return the selected path."""
     root = tk.Tk()
     root.withdraw()
