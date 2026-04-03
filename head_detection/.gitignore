@@ -1,0 +1,9 @@
+# Output videos and data
+validation_output/
+head_detection_output/
+individual_mask_videos/
+*.avi
+
+# Session tracking data (large binary files)
+session_*/
+
