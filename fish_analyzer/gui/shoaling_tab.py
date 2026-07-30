@@ -15,6 +15,7 @@ The interactive frame viewer has been moved to inspector_tab.py.
 
 from typing import Dict, Any
 from pathlib import Path
+import traceback
 import numpy as np
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
@@ -109,11 +110,13 @@ class ShoalingTabMixin:
                                           expand=True)
         scrollbar.config(command=self.shoaling_files_listbox.yview)
 
-        tk.Button(
+        # Kept as an attribute so it can be disabled while a run is in flight.
+        self.run_shoaling_button = tk.Button(
             parent, text="Run Shoaling Analysis",
             command=self._run_shoaling_analysis,
             bg="lightgreen", font=("Arial", 12, "bold"), height=2
-        ).pack(fill="x", padx=10, pady=10)
+        )
+        self.run_shoaling_button.pack(fill="x", padx=10, pady=10)
 
         tk.Button(
             parent, text="Export Shoaling Results to CSV",
@@ -235,7 +238,10 @@ class ShoalingTabMixin:
             return
 
         all_results = {}
-        for filename in selected_files:
+        failed = []
+        for filename in self._with_progress(selected_files,
+                                            label="Shoaling analysis",
+                                            button=self.run_shoaling_button):
             loaded_file = self.loaded_files[filename]
             try:
                 calculator = ShoalingCalculator(loaded_file, params)
@@ -243,14 +249,16 @@ class ShoalingTabMixin:
                 loaded_file.shoaling_results = results
                 all_results[filename] = results
             except Exception as e:
-                messagebox.showwarning("Analysis Warning",
-                                        f"Failed '{filename}':\n{e}")
-                import traceback
+                # Drop any earlier result rather than leaving one computed
+                # under different parameters attached and exportable.
+                loaded_file.shoaling_results = None
+                failed.append(f"{filename}: {e}")
+                print(f"[FAILED] Shoaling analysis for {filename}: {e}")
                 traceback.print_exc()
 
         if not all_results:
-            messagebox.showerror("Analysis Failed",
-                                  "Could not analyze any files.")
+            self._report_batch_outcome("Shoaling Analysis",
+                                       len(selected_files), [], failed, [])
             return
 
         self._display_shoaling_comparison(all_results)
@@ -263,11 +271,15 @@ class ShoalingTabMixin:
         if hasattr(self, '_inspector_rebuild_needed'):
             self._inspector_rebuild_needed()
 
-        messagebox.showinfo(
-            "Analysis Complete",
-            f"Shoaling analysis complete for {len(all_results)} file(s).\n\n"
-            "Use the Video Inspector tab to visualize overlays."
-        )
+        if failed:
+            self._report_batch_outcome("Shoaling Analysis", len(selected_files),
+                                       list(all_results.keys()), failed, [])
+        else:
+            messagebox.showinfo(
+                "Analysis Complete",
+                f"Shoaling analysis complete for {len(all_results)} file(s).\n\n"
+                "Use the Video Inspector tab to visualize overlays."
+            )
 
     def _display_shoaling_comparison(self,
                                       all_results: Dict[str, ShoalingResults]):

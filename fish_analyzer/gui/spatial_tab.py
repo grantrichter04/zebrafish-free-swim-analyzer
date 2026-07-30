@@ -12,6 +12,7 @@ This mixin provides all methods related to:
 
 from typing import Dict, List, Any
 from pathlib import Path
+import traceback
 import numpy as np
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
@@ -29,7 +30,8 @@ from ..spatial import (
     compute_shared_heatmap_scale
 )
 from ..export import export_thigmotaxis_csv
-from .utils import create_sortable_treeview, embed_figure_with_toolbar
+from .utils import (create_sortable_treeview, embed_figure_with_toolbar,
+                    install_canvas_error_handler)
 
 
 class SpatialTabMixin:
@@ -203,12 +205,15 @@ class SpatialTabMixin:
         tk.Checkbutton(settings_frame, text="Show individual fish in time series",
                        variable=self.show_individual_fish_thig_var).pack(anchor="w", padx=10)
 
-        # Main Action Button
-        tk.Button(
+        # Main Action Button (kept as an attribute so it can be disabled while
+        # a run is in flight — thigmotaxis is the slowest analysis here and
+        # previously gave no feedback at all)
+        self.run_spatial_button = tk.Button(
             parent, text="Run Analysis on Selected Files",
             command=self._run_spatial_analysis_batch,
             bg="lightgreen", font=("Arial", 11, "bold"), height=2
-        ).pack(fill="x", padx=10, pady=10)
+        )
+        self.run_spatial_button.pack(fill="x", padx=10, pady=10)
         
         # Update plots button
         tk.Button(
@@ -421,6 +426,10 @@ class SpatialTabMixin:
         self.arena_fig.tight_layout()
 
         self.arena_canvas = FigureCanvasTkAgg(self.arena_fig, master=self.arena_canvas_frame)
+        # This canvas is the only one with a user event handler attached
+        # (_on_arena_click below), so it is the one that most needs its
+        # exceptions surfaced rather than printed to a console.
+        install_canvas_error_handler(self.arena_canvas)
         self.arena_canvas.draw()
         self.arena_canvas.get_tk_widget().pack(fill="both", expand=True)
 
@@ -615,30 +624,95 @@ class SpatialTabMixin:
             
             self.arena_ax.plot(x_bl, y_bl, color='gray', linewidth=0.5, alpha=0.4)
 
+    @staticmethod
+    def _rescale_arena_for(arena: ArenaDefinition, target) -> ArenaDefinition:
+        """Re-express an arena in the target file's body-length coordinates.
+
+        `vertices_pixels` is image geometry and transfers between files with
+        the same frame size. `vertices_bl` does not: it was divided by the
+        *source* file's body_length and Y-flipped with the source's video
+        height, while ThigmotaxisCalculator converts fish positions using the
+        *target's* body_length (spatial.py:344) and compares against
+        `vertices_bl` (spatial.py:365). Copying vertices_bl across files with
+        different body lengths therefore silently resizes the arena relative
+        to the fish. This inverts _complete_arena() using the target's values.
+        """
+        px = arena.vertices_pixels.copy()
+        px[:, 1] = target.metadata.video_height - px[:, 1]   # image Y → plot Y
+        return ArenaDefinition(
+            vertices_pixels=arena.vertices_pixels.copy(),
+            vertices_bl=px / target.metadata.body_length
+        )
+
     def _apply_arena_to_selected(self):
         """Apply the current arena definition to all selected files."""
         if self.arena_definition is None:
             messagebox.showwarning("No Arena", "Please define and complete an arena first.")
             return
-        
+
         selection = self.spatial_files_listbox.curselection()
         if not selection:
             messagebox.showwarning("No Selection", "Please select files to apply arena to.")
             return
-        
+
         file_keys = list(self.loaded_files.keys())
         selected_files = [file_keys[i] for i in selection]
-        
+
+        source = self.loaded_files.get(self.current_arena_file)
+        targets = [f for f in selected_files if f != self.current_arena_file]
+
+        # An arena is pixel geometry drawn on one frame. It is meaningless on a
+        # recording of a different frame size, so those files are refused
+        # rather than silently given a polygon in the wrong place.
+        incompatible = []
+        if source is not None:
+            for filename in targets:
+                target = self.loaded_files.get(filename)
+                if target is None:
+                    continue
+                if (target.metadata.video_width != source.metadata.video_width
+                        or target.metadata.video_height != source.metadata.video_height):
+                    incompatible.append((
+                        filename,
+                        f"{target.metadata.video_width}x{target.metadata.video_height}"
+                    ))
+
+        if incompatible:
+            shown = "\n".join(f"  {name}: {size}" for name, size in incompatible[:5])
+            if len(incompatible) > 5:
+                shown += f"\n  ... and {len(incompatible) - 5} more"
+            messagebox.showwarning(
+                "Different Frame Size",
+                f"The arena was drawn on a "
+                f"{source.metadata.video_width}x{source.metadata.video_height} "
+                f"frame. These files differ and will be skipped:\n\n{shown}\n\n"
+                f"Draw an arena on each of them separately."
+            )
+            skip = {name for name, _ in incompatible}
+            targets = [f for f in targets if f not in skip]
+
         count = 0
-        for filename in selected_files:
-            if filename != self.current_arena_file:
+        rescaled = 0
+        for filename in targets:
+            target = self.loaded_files.get(filename)
+            if target is None or source is None:
                 self.file_arena_definitions[filename] = self.arena_definition.copy()
-                count += 1
-        
+            else:
+                self.file_arena_definitions[filename] = self._rescale_arena_for(
+                    self.arena_definition, target
+                )
+                if target.metadata.body_length != source.metadata.body_length:
+                    rescaled += 1
+            count += 1
+
         self._update_spatial_files_list()
-        messagebox.showinfo("Arena Applied", 
+        note = (f"\n\n{rescaled} file(s) had a different body length, so the "
+                f"arena was re-expressed in their own body-length units."
+                if rescaled else "")
+        messagebox.showinfo("Arena Applied",
                             f"Arena copied to {count} additional file(s).\n"
-                            f"Total files with arena: {len(self.file_arena_definitions)}")
+                            f"Total files with arena: {len(self.file_arena_definitions)}"
+                            + note)
 
     def _draw_rectangle_arena(self):
         """Auto-draw a rectangle arena for current file."""
@@ -709,10 +783,12 @@ class SpatialTabMixin:
             messagebox.showerror("Invalid Parameters", f"Check settings: {e}")
             return
 
-        success_count = 0
         results_dict = {}
+        failed = []
 
-        for filename in selected_files:
+        for filename in self._with_progress(selected_files,
+                                            label="Thigmotaxis",
+                                            button=self.run_spatial_button):
             loaded_file = self.loaded_files[filename]
             arena = self.file_arena_definitions[filename]
 
@@ -725,10 +801,12 @@ class SpatialTabMixin:
                 results = calculator.calculate()
                 loaded_file.thigmotaxis_results = results
                 results_dict[filename] = results
-                success_count += 1
             except Exception as e:
-                print(f"Error analyzing {filename}: {e}")
-                import traceback
+                # Clear any earlier result so a failed file cannot be exported
+                # with numbers from a previous parameter set.
+                loaded_file.thigmotaxis_results = None
+                failed.append(f"{filename}: {e}")
+                print(f"[FAILED] Thigmotaxis for {filename}: {e}")
                 traceback.print_exc()
 
         self._update_spatial_files_list()
@@ -737,11 +815,11 @@ class SpatialTabMixin:
             self._display_combined_thigmotaxis_summary(results_dict)
             self._plot_combined_thigmotaxis_timeseries(results_dict)
             self._plot_thigmotaxis_comparison_charts(results_dict)
-            self._generate_comparison_heatmaps(selected_files)
+            self._generate_comparison_heatmaps(list(results_dict.keys()))
             self._update_spatial_methods_text(results_dict, border_pct, sample_interval)
 
-        messagebox.showinfo("Analysis Complete",
-                            f"Successfully analyzed {success_count}/{len(selected_files)} files.")
+        self._report_batch_outcome("Thigmotaxis Analysis", len(selected_files),
+                                   list(results_dict.keys()), failed, [])
 
     def _run_roi_analysis(self, selected_files: List[str]):
         """Run custom ROI analysis — compute % time each fish spends in the ROI polygon."""

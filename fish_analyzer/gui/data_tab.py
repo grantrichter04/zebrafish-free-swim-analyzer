@@ -12,6 +12,7 @@ This mixin provides all methods related to:
 
 from typing import Optional
 from pathlib import Path
+import traceback
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, simpledialog
 
@@ -71,11 +72,13 @@ class DataTabMixin:
         analyze_frame = tk.Frame(self.scrollable_frame)
         analyze_frame.pack(fill="x", padx=20, pady=20)
 
-        tk.Button(
+        # Kept as an attribute so _with_progress can disable it during a run.
+        self.run_analysis_button = tk.Button(
             analyze_frame, text="Run All Analysis",
             command=self._run_analysis_and_switch_tab,
             bg="lightgreen", font=("Arial", 14, "bold"), height=2
-        ).pack()
+        )
+        self.run_analysis_button.pack()
 
         # Progress bar (hidden until analysis runs)
         self.analysis_progress = ttk.Progressbar(
@@ -290,6 +293,91 @@ class DataTabMixin:
     # CALIBRATION HELPER METHODS
     # =========================================================================
 
+    #: Result slots cached on LoadedTrajectoryFile that a calibration change
+    #: invalidates. See _invalidate_results_for().
+    _RESULT_SLOTS = ('processed_data', 'shoaling_results', 'thigmotaxis_results')
+
+    def _invalidate_results_for(self, nicknames) -> list:
+        """Discard cached analysis results for the given files.
+
+        Metrics are scaled by calibration.scale_factor at *processing* time
+        (processing.py), but the unit label is read at *export* time
+        (export.py). Keeping results across a calibration change would
+        therefore export the old numbers under the new unit name — silently.
+
+        Returns the nicknames that actually had results to discard, so the
+        caller can tell the user what was thrown away.
+        """
+        cleared = []
+        for nickname in nicknames:
+            loaded_file = self.loaded_files.get(nickname)
+            if loaded_file is None:
+                continue
+
+            had_results = any(
+                getattr(loaded_file, slot, None) is not None
+                for slot in self._RESULT_SLOTS
+            )
+            for slot in self._RESULT_SLOTS:
+                setattr(loaded_file, slot, None)
+
+            # Bout results are keyed by nickname on the GUI, not on the file.
+            if nickname in self.bout_results:
+                del self.bout_results[nickname]
+                had_results = True
+
+            if had_results:
+                cleared.append(nickname)
+
+        if cleared:
+            # Clear the [#]=Analyzed markers in the spatial file list.
+            self._update_spatial_files_list()
+
+        return cleared
+
+    def _purge_file_state(self, nickname: str):
+        """Drop every piece of per-file state keyed by `nickname`.
+
+        These side dictionaries are keyed by nickname rather than held on the
+        LoadedTrajectoryFile, so removing or replacing a file used to leave
+        them behind: the stale bout results were still exported, the stale
+        video reader was still displayed, and its cv2.VideoCapture was never
+        released. Call this whenever a nickname stops referring to the session
+        it originally referred to.
+        """
+        reader = self.video_readers.pop(nickname, None)
+        if reader is not None:
+            try:
+                reader.close()
+            except Exception as e:
+                # Releasing a capture must never block removing a file.
+                print(f"Note: could not close video for '{nickname}': {e}")
+
+        self.file_arena_definitions.pop(nickname, None)
+        self.file_roi_definitions.pop(nickname, None)
+        self.file_groups.pop(nickname, None)
+        self.bout_results.pop(nickname, None)
+
+        # The spatial tab holds the arena currently being edited by value, not
+        # by lookup, so it has to be dropped too.
+        if self.current_arena_file == nickname:
+            self.current_arena_file = None
+            self.arena_definition = None
+            self.arena_vertices = []
+
+    @staticmethod
+    def _invalidation_notice(cleared: list) -> str:
+        """Message fragment naming the results a calibration change discarded."""
+        if not cleared:
+            return ""
+        if len(cleared) == 1:
+            what = f"'{cleared[0]}'"
+        else:
+            what = f"{len(cleared)} file(s)"
+        return (f"\n\nExisting analysis results for {what} were discarded, "
+                f"because metrics computed under the old calibration cannot "
+                f"be relabelled with the new unit.\nRe-run the analysis.")
+
     def _on_calibration_method_changed(self):
         """Enable/disable custom calibration inputs based on selection."""
         method = self.calibration_method.get()
@@ -327,12 +415,17 @@ class DataTabMixin:
         if not nickname:
             return
 
-        if nickname in self.loaded_files:
+        replacing = nickname in self.loaded_files
+        if replacing:
             if not messagebox.askyesno("Nickname Exists", f"'{nickname}' already exists. Replace it?"):
                 return
 
         try:
             loaded_file = TrajectoryFileLoader.load_from_session_folder(folder_path, nickname)
+            if replacing:
+                # Purge only after the new session loads, so a failed load
+                # leaves the existing one intact.
+                self._purge_file_state(nickname)
             self.loaded_files[nickname] = loaded_file
 
             if self.active_file is None:
@@ -386,12 +479,15 @@ class DataTabMixin:
         if not nickname:
             return
 
-        if nickname in self.loaded_files:
+        replacing = nickname in self.loaded_files
+        if replacing:
             if not messagebox.askyesno("Nickname Exists", f"'{nickname}' already exists. Replace it?"):
                 return
 
         try:
             loaded_file = TrajectoryFileLoader.load_file(file_path, nickname)
+            if replacing:
+                self._purge_file_state(nickname)
             self.loaded_files[nickname] = loaded_file
 
             if self.active_file is None:
@@ -441,6 +537,7 @@ class DataTabMixin:
         if not messagebox.askyesno("Confirm Removal", f"Remove '{nickname}'?"):
             return
         del self.loaded_files[nickname]
+        self._purge_file_state(nickname)
         if self.active_file == nickname:
             self.active_file = next(iter(self.loaded_files), None)
         self._update_files_list()
@@ -517,8 +614,12 @@ class DataTabMixin:
                 return
 
             loaded_file.calibration = calibration
+            cleared = self._invalidate_results_for([self.active_file])
             self._update_calibration_display()
-            messagebox.showinfo("Calibration Applied", f"Applied:\n\n{calibration}")
+            messagebox.showinfo(
+                "Calibration Applied",
+                f"Applied:\n\n{calibration}" + self._invalidation_notice(cleared)
+            )
         except Exception as e:
             messagebox.showerror("Calibration Error", f"Failed:\n\n{e}")
 
@@ -558,8 +659,13 @@ class DataTabMixin:
                     calibration = CalibrationSettings.no_calibration(frame_rate)
                 loaded_file.calibration = calibration
 
+            cleared = self._invalidate_results_for(list(self.loaded_files.keys()))
             self._update_calibration_display()
-            messagebox.showinfo("Done", f"Applied calibration to {file_count} file(s).")
+            messagebox.showinfo(
+                "Done",
+                f"Applied calibration to {file_count} file(s)."
+                + self._invalidation_notice(cleared)
+            )
         except Exception as e:
             messagebox.showerror("Error", str(e))
 
@@ -591,54 +697,57 @@ class DataTabMixin:
             messagebox.showerror("Invalid Parameters", str(e))
             return
 
-        self.set_status(f"Processing {len(self.loaded_files)} file(s)...")
+        # Record the parameters actually used — the Methods tab reads these to
+        # describe the run, so they must not stay at the constructor defaults.
+        self.processing_params = params
 
-        # Show and configure progress bar
         total = len(self.loaded_files)
-        self.analysis_progress.pack(pady=(5, 0))
-        self.analysis_progress['maximum'] = total
-        self.analysis_progress['value'] = 0
-        self.root.update()
+        # Per-file outcomes, so a partial failure is reported honestly instead
+        # of the run ending with no dialog and stale plots still on screen.
+        succeeded, failed, degraded = [], [], []
 
-        try:
-            for idx, (nickname, loaded_file) in enumerate(self.loaded_files.items(), 1):
-                self.set_status(f"Processing {idx}/{total}: {nickname}...")
-                self.set_status(f"Processing {idx}/{total}: {nickname}...")
-                self.analysis_progress['value'] = idx - 1
-                self.root.update()
-
+        for nickname in self._with_progress(
+                list(self.loaded_files.keys()), label="Processing",
+                button=self.run_analysis_button,
+                progressbar=self.analysis_progress):
+            loaded_file = self.loaded_files[nickname]
+            try:
                 fish_list = process_and_analyze_file(loaded_file, params)
                 loaded_file.processed_data = fish_list
+                succeeded.append(nickname)
 
+                if len(fish_list) < loaded_file.n_fish:
+                    degraded.append(
+                        f"{nickname}: only {len(fish_list)} of "
+                        f"{loaded_file.n_fish} fish analyzed"
+                    )
                 failed_smoothing = [f.fish_id for f in fish_list if f.smoothing_failed]
                 if failed_smoothing:
-                    self.set_status(
-                        f"  [OK] {nickname}: {len(fish_list)}/{loaded_file.n_fish} fish analyzed "
-                        f"(smoothing failed for fish {failed_smoothing} — raw trajectories used)"
+                    degraded.append(
+                        f"{nickname}: smoothing failed for fish "
+                        f"{failed_smoothing}, raw trajectories used"
                     )
-                else:
-                    self.set_status(f"  [OK] {nickname}: {len(fish_list)}/{loaded_file.n_fish} fish analyzed")
-                self.analysis_progress['value'] = idx
-                self.root.update()
+            except Exception as e:
+                # One bad file must not abandon the rest, and must not leave a
+                # previous run's results attached pretending to be current.
+                loaded_file.processed_data = None
+                failed.append(f"{nickname}: {e}")
+                print(f"[FAILED] {nickname}: {e}")
+                traceback.print_exc()
 
-            # Update file lists and auto-select all
-            self._update_analysis_files_listbox()
-            for i in range(self.analysis_files_listbox.size()):
-                self.analysis_files_listbox.selection_set(i)
+        # Update file lists and auto-select all
+        self._update_analysis_files_listbox()
+        for i in range(self.analysis_files_listbox.size()):
+            self.analysis_files_listbox.selection_set(i)
 
+        if succeeded:
             self._update_analysis_visualizations()
 
-            self.set_status(f"Analysis complete \u2014 {total} file(s) processed")
-            messagebox.showinfo("Complete", f"Processed {total} file(s).\n"
-                              "View results in the Individual Analysis tab.")
-        except Exception as e:
-            self.set_status(f"Error: {str(e)}")
-            self.set_status(f"Analysis failed: {e}")
-            import traceback
-            traceback.print_exc()
-        finally:
-            # Hide progress bar when done
-            self.analysis_progress.pack_forget()
+        self.set_status(
+            f"Analysis complete: {len(succeeded)} of {total} file(s) processed"
+        )
+        self._report_batch_outcome("Individual Analysis", total, succeeded,
+                                   failed, degraded)
 
     def _get_processing_parameters_from_gui(self) -> ProcessingParameters:
         """Read processing parameters from the GUI inputs."""

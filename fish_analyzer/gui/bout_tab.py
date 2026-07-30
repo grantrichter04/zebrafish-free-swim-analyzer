@@ -15,6 +15,7 @@ The interactive bout viewer has been moved to inspector_tab.py.
 
 from typing import List, Dict, Any
 from pathlib import Path
+import traceback
 import numpy as np
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
@@ -137,11 +138,13 @@ class BoutTabMixin:
                  fg="gray", wraplength=280,
                  justify=tk.LEFT).pack(padx=10, pady=5)
 
-        # Run button
-        tk.Button(parent, text="Run Bout Analysis",
-                  font=("Arial", 11, "bold"),
-                  bg="lightgreen", command=self._run_bout_analysis,
-                  width=25).pack(pady=10)
+        # Run button (kept as an attribute so it can be disabled mid-run)
+        self.run_bout_button = tk.Button(parent, text="Run Bout Analysis",
+                                         font=("Arial", 11, "bold"),
+                                         bg="lightgreen",
+                                         command=self._run_bout_analysis,
+                                         width=25)
+        self.run_bout_button.pack(pady=10)
 
         # Export button
         tk.Button(parent, text="Export Bout Data to CSV",
@@ -301,19 +304,29 @@ class BoutTabMixin:
         params = self._get_bout_params()
         self._bout_run_params = params   # remembered for inspector stale-check
 
-        self.set_status("Running bout analysis...")
         self.bout_results.clear()
+        failed = []
 
-        for filename in selected_files:
+        for filename in self._with_progress(selected_files,
+                                            label="Bout analysis",
+                                            button=self.run_bout_button):
             loaded_file = self.loaded_files[filename]
-            print(f"\nBout analysis: {filename}")
             try:
                 results = analyze_bouts_for_file(loaded_file, params)
                 self.bout_results[filename] = results
             except Exception as e:
-                print(f"  Error: {e}")
-                import traceback
+                # Previously this printed to a status bar that the next file
+                # immediately overwrote, so the file just vanished from the
+                # results and from the combined export.
+                failed.append(f"{filename}: {e}")
+                print(f"[FAILED] Bout analysis for {filename}: {e}")
                 traceback.print_exc()
+
+        if failed:
+            self._report_batch_outcome(
+                "Bout Analysis", len(selected_files),
+                list(self.bout_results.keys()), failed, []
+            )
 
         if self.bout_results:
             # Populate fish filter dropdown

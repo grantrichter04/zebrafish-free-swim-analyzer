@@ -435,6 +435,11 @@ class InspectorTabMixin:
         ).pack(expand=True)
 
         # Inspector figure state
+        # NOTE: rebuild is tracked by its own flag, not by "_insp_fig is None".
+        # _insp_fig is only ever assigned when a time panel is shown, so using
+        # it as the sentinel made every update rebuild the whole widget tree
+        # whenever Time Panel was set to "None" (the default).
+        self._insp_needs_rebuild = True
         self._insp_fig = None
         self._insp_canvas = None
         self._insp_ax_main = None
@@ -504,7 +509,7 @@ class InspectorTabMixin:
         self._inspector_try_auto_load_video(selected)
 
         # Force rebuild
-        self._insp_fig = None
+        self._insp_needs_rebuild = True
         self._update_inspector_info()
         self._inspector_update_fast()
 
@@ -519,7 +524,7 @@ class InspectorTabMixin:
         self.inspector_frame_slider.configure(to=max_steps)
         self.inspector_frame_var.set(0)
         self._update_inspector_info()
-        self._insp_fig = None
+        self._insp_needs_rebuild = True
         self._inspector_update_fast()
 
     # =========================================================================
@@ -737,8 +742,18 @@ class InspectorTabMixin:
 
             self._update_inspector_info()
             self._inspector_update_fast()
-        except Exception:
-            pass  # Never let a render error break the animation chain
+        except Exception as e:
+            # This used to be a bare `pass`, on the grounds that a render error
+            # must not break the animation chain. But it swallowed the error on
+            # every channel: the frame counter kept advancing while the image
+            # stayed frozen, which is indistinguishable from a still video.
+            # Stopping playback first means the error is reported exactly once
+            # instead of on every frame.
+            self._inspector_stop_playback()
+            print(f"[FAILED] Inspector render at frame "
+                  f"{self._get_inspector_frame_idx()}: {e}")
+            self._report_uncaught(e)
+            return
 
         # Subtract render time; keep a floor of 8 ms so Tkinter can breathe
         elapsed_ms = (time.perf_counter() - t_start) * 1000
@@ -772,12 +787,12 @@ class InspectorTabMixin:
             else:
                 self.bout_overlay_status.config(
                     text="No bout data — run Bout Analysis first", fg="red")
-        self._insp_fig = None
+        self._insp_needs_rebuild = True
         self._inspector_update_fast()
 
     def _inspector_rebuild_needed(self, event=None):
         """Force a figure rebuild on next update."""
-        self._insp_fig = None
+        self._insp_needs_rebuild = True
         self._inspector_update_fast()
 
     # =========================================================================
@@ -875,7 +890,7 @@ class InspectorTabMixin:
             )
 
             self.inspector_video_var.set(True)
-            self._insp_fig = None
+            self._insp_needs_rebuild = True
             self._inspector_update_fast()
 
             messagebox.showinfo(
@@ -900,7 +915,7 @@ class InspectorTabMixin:
                     self.inspector_video_var.set(False)
                     return
 
-        self._insp_fig = None
+        self._insp_needs_rebuild = True
         self._inspector_update_fast()
 
     # =========================================================================
@@ -924,7 +939,7 @@ class InspectorTabMixin:
         video_on = self.inspector_video_var.get()
 
         rebuild = (
-            self._insp_fig is None
+            self._insp_needs_rebuild
             or self._insp_cached_file != selected
             or self._insp_cached_time_mode != time_mode
             or self._insp_cached_overlays != video_on
@@ -939,6 +954,7 @@ class InspectorTabMixin:
                 selected, loaded, frame_idx, time_mode
             )
             self.set_status("Ready")
+            self._insp_needs_rebuild = False
             self._insp_cached_file = selected
             self._insp_cached_time_mode = time_mode
             self._insp_cached_overlays = video_on
