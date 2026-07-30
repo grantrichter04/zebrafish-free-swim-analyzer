@@ -11,5 +11,17 @@ dist/
 .claude/
 CLAUDE.md
 
+# Virtual environments
+venv/
+.venv/
+env/
+
 # Data files — track in storage, not git
 *.npy
+*.avi
+*.mp4
+*.mov
+*.mkv
+*.pickle
+session_*/
+

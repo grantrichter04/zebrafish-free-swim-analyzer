@@ -14,13 +14,15 @@ PACKAGE STRUCTURE:
         data_structures.py   - Data classes (metadata, calibration, etc.)
         file_loading.py      - Load .npy files from idtracker.ai
         processing.py        - Trajectory processing and metrics
+        bout_analysis.py     - Swim bout detection and laterality
         shoaling.py          - Group behavior analysis (NND, IID, hull)
         spatial.py           - Thigmotaxis and heatmaps
-        gui.py               - The graphical user interface
+        export.py            - CSV export utilities
+        video_utils.py       - Optional video frame reading
+        gui/                 - The graphical user interface (subpackage)
 
 DEPENDENCIES:
-    pip install numpy pandas matplotlib traja scipy
-    pip install shapely  # Optional, for thigmotaxis
+    pip install -r requirements.txt
 
 ALTERNATIVE: Using components programmatically (without the GUI):
 
@@ -57,13 +59,13 @@ if str(script_dir) not in sys.path:
     sys.path.insert(0, str(script_dir))
 
 # Now import and run the application
-from fish_analyzer import EnhancedFishAnalyzer
+from fish_analyzer import EnhancedFishAnalyzer, __version__
 
 
 def main():
     """Launch the Fish Trajectory Analyzer GUI."""
     print("=" * 60)
-    print("Fish Trajectory Analyzer v2.0")
+    print(f"Fish Trajectory Analyzer v{__version__}")
     print("=" * 60)
     print()
     print("Starting GUI application...")

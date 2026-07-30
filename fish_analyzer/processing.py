@@ -184,11 +184,11 @@ class TrajectoryProcessor:
                 fish_traj = self._process_single_fish(fish_idx)
                 if fish_traj is not None:
                     processed_fish.append(fish_traj)
-                    print(f"  Fish {fish_idx}: ✓ ({fish_traj.valid_percentage:.1%} valid data)")
+                    print(f"  Fish {fish_idx}: [ok] ({fish_traj.valid_percentage:.1%} valid data)")
                 else:
-                    print(f"  Fish {fish_idx}: ✗ (insufficient valid data)")
+                    print(f"  Fish {fish_idx}: [skip] (insufficient valid data)")
             except Exception as e:
-                print(f"  Fish {fish_idx}: ✗ (error: {e})")
+                print(f"  Fish {fish_idx}: [FAILED] (error: {e})")
                 continue
 
         print(f"Successfully processed {len(processed_fish)}/{self.file.n_fish} fish\n")

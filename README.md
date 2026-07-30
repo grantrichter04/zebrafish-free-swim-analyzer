@@ -29,6 +29,7 @@ fish_analyzer/
 ├── data_structures.py   # Core data classes (metadata, calibration, loaded files)
 ├── file_loading.py      # Load .npy trajectory files from idtracker.ai
 ├── processing.py        # Trajectory processing and individual metrics
+├── bout_analysis.py     # Swim bout detection, per-bout metrics, laterality
 ├── shoaling.py          # Group behavior analysis (NND, IID, convex hull)
 ├── spatial.py           # Thigmotaxis and heatmap generation
 ├── export.py            # CSV export utilities for all analysis results
@@ -38,40 +39,58 @@ fish_analyzer/
     ├── base.py          # Shared GUI base class, status bar, log redirect
     ├── data_tab.py      # GUI tab: data loading, calibration, processing
     ├── analysis_tab.py  # GUI tab: individual trajectory metrics
+    ├── bout_tab.py      # GUI tab: bout detection and laterality
     ├── shoaling_tab.py  # GUI tab: shoaling metrics and frame viewer
     ├── spatial_tab.py   # GUI tab: thigmotaxis and heatmaps
+    ├── inspector_tab.py # GUI tab: frame-by-frame trajectory inspector
     └── utils.py         # Shared GUI utility functions
+
+fish_posture_analyzer.py # Standalone: midline/skeleton extraction from crops
+head_detection/          # Standalone: head-vs-tail and turn analysis
 ```
+
+> `fish_posture_analyzer.py` and `head_detection/` are standalone scripts. They
+> are not reachable from the GUI and have their own dependencies — see
+> [Installation](#installation).
 
 ---
 
 ## Installation
 
-### Quick setup with conda (recommended)
+### Quick setup with pip (recommended)
 
 ```bash
-# Create a new environment with all dependencies
-conda create -n fishanalyzer python=3.10 numpy pandas matplotlib scipy shapely scikit-learn -c conda-forge
-conda activate fishanalyzer
+python -m venv venv
+venv\Scripts\activate          # macOS/Linux: source venv/bin/activate
+pip install -r requirements.txt
+```
 
-# Install remaining packages via pip (not available on conda-forge)
-pip install traja opencv-python
+### Alternative: conda
+
+```bash
+conda create -n fishanalyzer python=3.12 numpy pandas matplotlib scipy shapely scikit-learn opencv -c conda-forge
+conda activate fishanalyzer
+pip install traja==25.0.1
 ```
 
 ### Requirements
 
-- Python 3.8+
-- Core dependencies:
-  ```
-  pip install numpy pandas matplotlib scipy traja
-  ```
-- Optional dependencies:
-  ```
-  pip install shapely       # Enables thigmotaxis analysis
-  pip install opencv-python # Enables video frame reading
-  ```
+- **Python 3.9 or newer.** Verified end to end on 3.9, 3.12 and 3.13; 3.12 is the
+  recommended default. Note that `trajectorytools` and idtracker.ai 6.x both
+  require 3.10+, so pick 3.12 if you expect to use them alongside this tool.
+- Everything the package needs is in [`requirements.txt`](requirements.txt).
+  `scikit-learn` is listed there and is **not** optional — `traja` imports it
+  without declaring it, so `import traja` fails if it is missing.
+- `shapely` (thigmotaxis) and `opencv-python` (video frame reading) are
+  functionally optional: without them those features are disabled rather than
+  crashing. They are installed by default because most workflows use them.
 
-> The application handles missing optional dependencies gracefully — features that require them will be disabled rather than crashing.
+The standalone scripts need more:
+
+```bash
+pip install scikit-image      # fish_posture_analyzer.py and head_detection/
+# head_detection/ additionally needs idtrackerai — install per idtracker.ai's docs
+```
 
 ---
 
@@ -84,6 +103,9 @@ python run_analyzer.py
 ```
 
 ### Programmatic API
+
+Run this from the repository root — `fish_analyzer` is not installed as a
+package, so it is only importable from there.
 
 ```python
 from pathlib import Path
@@ -99,10 +121,12 @@ loaded_file = TrajectoryFileLoader.load_file(Path("trajectories.npy"))
 
 # Process trajectories and compute individual metrics
 fish_list = process_and_analyze_file(loaded_file)
+for fish in fish_list:
+    print(f"Fish {fish.fish_id}: {fish.metrics['total_distance']:.1f} BL traveled")
 
-# Compute shoaling metrics
+# Compute shoaling metrics — note this takes the loaded file, not the fish list
 params = ShoalingParameters()
-results = ShoalingCalculator.calculate(fish_list, params)
+results = ShoalingCalculator(loaded_file, params).calculate()
 print(f"Mean NND: {results.mean_nnd:.2f}")
 ```
 

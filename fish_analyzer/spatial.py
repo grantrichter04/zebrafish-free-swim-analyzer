@@ -452,9 +452,9 @@ class ThigmotaxisCalculator:
                     f"the arena boundary. The arena polygon may be misaligned or too small. "
                     f"Thigmotaxis results may be unreliable."
                 )
-                print(f"  ⚠ {outside_pct:.1f}% of positions outside arena — check arena alignment!")
+                print(f"  [warn] {outside_pct:.1f}% of positions outside arena - check arena alignment!")
             elif outside_pct > 0:
-                print(f"  Note: {outside_pct:.1f}% of positions outside arena (minor — likely tracking noise)")
+                print(f"  Note: {outside_pct:.1f}% of positions outside arena (minor - likely tracking noise)")
 
         # Calculate overall percentages
         time_in_border_pct = np.zeros(n_fish)
@@ -479,7 +479,7 @@ class ThigmotaxisCalculator:
         mean_pct = np.mean(time_in_border_pct)
         std_pct = np.std(time_in_border_pct)
 
-        print(f"  Mean time in border: {mean_pct:.1f}% ± {std_pct:.1f}%")
+        print(f"  Mean time in border: {mean_pct:.1f}% +/- {std_pct:.1f}%")
 
         return ThigmotaxisResults(
             time_in_border_pct=time_in_border_pct,

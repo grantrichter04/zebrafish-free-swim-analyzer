@@ -288,7 +288,7 @@ class ShoalingCalculator:
 
         print(f"  Mean NND: {mean_nnd:.3f} BL (std: {std_nnd:.3f})")
         print(f"  Mean IID: {mean_iid:.3f} BL (std: {std_iid:.3f})")
-        print(f"  Mean Hull Area: {mean_hull_area:.2f} BL² (std: {std_hull_area:.2f})")
+        print(f"  Mean Hull Area: {mean_hull_area:.2f} BL^2 (std: {std_hull_area:.2f})")
         print(f"  Analysis complete.\n")
 
         return ShoalingResults(
