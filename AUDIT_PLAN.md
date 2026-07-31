@@ -20,7 +20,7 @@ Every prompt carries the same shared rules: **report don't fix**, **verify don't
 | **A** | [PASS_A_reproducibility.md](audit/PASS_A_reproducibility.md) | Environment, packaging, doc truth | ✅ **done** → [AUDIT_A_REPRODUCIBILITY.md](AUDIT_A_REPRODUCIBILITY.md), fixes applied, real-data addendum added |
 | **H** | [PASS_H_approach.md](audit/PASS_H_approach.md) | Is this the right approach at all | ✅ **done** → [AUDIT_H_APPROACH.md](AUDIT_H_APPROACH.md), verdict: build, don't rewrite |
 | **D** | [PASS_D_gui_architecture.md](audit/PASS_D_gui_architecture.md) | GUI structure, failure visibility | ✅ **done** → [AUDIT_D_GUI.md](AUDIT_D_GUI.md), 8 fixes applied + 15 regression tests |
-| **B** | [PASS_B_correctness.md](audit/PASS_B_correctness.md) | Are the exported numbers right | ⏭ **next — run in full** |
+| **B** | [PASS_B_correctness.md](audit/PASS_B_correctness.md) | Are the exported numbers right | ✅ **done** → [AUDIT_B_CORRECTNESS.md](AUDIT_B_CORRECTNESS.md), 17 findings + 113 tests; **fully remediated** — 8 columns withdrawn, all 10 code findings fixed, no xfail left |
 | **E** | [PASS_E_integration.md](audit/PASS_E_integration.md) | Where head_detection / posture belong | ⏳ re-scoped — see amendment in the prompt |
 | **C** | [PASS_C_cleanliness.md](audit/PASS_C_cleanliness.md) | One source of truth + code cleanliness | 🔀 **folded** — see below |
 | **F** | [PASS_F_performance.md](audit/PASS_F_performance.md) | Speed, memory, hot paths | 🔀 **folded** — see below |
@@ -36,6 +36,47 @@ audit would cost more than acting on what has been found.
 correct. A verified the environment, D verified failure *visibility*, H
 verified direction — all scaffolding. B is the pass that decides whether the
 tool's output is trustworthy, and real data is now available for it.
+
+> **B has landed, and Phase 0 of the remediation is applied.** Verdict: of the
+> 26 combined-summary columns, 10 are trustworthy, 5 are trustworthy but
+> mislabelled or not comparable across files, and **11 were not measuring fish
+> behaviour**. Angular velocity, erratic-movement counts and all three burst
+> columns are readouts of centroid noise — a straight-line swimmer with
+> 0.5–1.0 px of jitter reproduces the entire observed range. `IBI_Median_ms` is
+> largely tracking dropout (18–86% of exported intervals coincide with a frame
+> gap). Running the exporter on real data also caught two metrics that are
+> exact on synthetic input and broken on real input: `NetDisplacement` is NaN
+> for 12 of 24 fish, and `MaxSpeed` reports tracking teleports up to 321 BL/s.
+>
+> **Eight columns have been removed** from the exports, the GUI and the
+> computation (2026-08-01). Distance, mean/median speed, path straightness,
+> laterality, NND, IID and hull area are exact against analytic ground truth
+> and survive the real-data check. Full detail, the remaining findings, and the
+> phased fix order in [AUDIT_B_CORRECTNESS.md](AUDIT_B_CORRECTNESS.md).
+>
+> **Phase 1 has landed too.** `fish_analyzer/segments.py` now owns one
+> definition of a tracking gap, and both the freeze and bout paths call it, so
+> B4, B5, B6, B16 and B17 are closed together. Across the 24 real fish:
+> `NetDisplacement` is populated 24/24 (was 12/24), top speed reads 6.3–12.8
+> BL/s (was 32–321), the freeze denominators reconcile exactly for every fish,
+> and no exported inter-bout interval is a tracking gap. Episodes cut short by
+> a gap are reported as censored rather than counted.
+>
+> That censoring is itself a result: complete bouts run 6–101 per fish against
+> 26–252 censored, which is B13 arriving from a new direction — the bout model
+> does not fit adult free swim.
+>
+> **Phase 2 closes the rest.** B7 (calibration bypass, 12 sites), B8 (bout
+> heading guards), B9 (thigmotaxis zone sum) and B10 (failures
+> indistinguishable from measurements) are all fixed. **The suite has no
+> `xfail` markers left — 113 tests, all passing.** Calibrating in cm now
+> actually reaches NND/IID/hull: the cm/BL ratio comes out at exactly each
+> file's body length, and cross-session comparison works for the first time.
+>
+> Every finding in Pass B is now fixed or a decision. The two remaining
+> decisions are **B11** (`min_valid_percentage = 0.01`, `min_freeze_frames = 5`
+> — both indefensible as defaults) and **B13** (the bout model does not fit
+> adult free swim).
 
 **Re-scope: E.** Per H's amendment (4), check `polavieja_lab/midline` *before*
 deciding where the posture modules belong — "vendor upstream and keep only our

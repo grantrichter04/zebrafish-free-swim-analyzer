@@ -1006,7 +1006,7 @@ class InspectorTabMixin:
 
         vid_h = loaded.metadata.video_height
         vid_w = loaded.metadata.video_width
-        pixels_to_bl = 1.0 / loaded.metadata.body_length
+        pixels_to_bl = loaded.calibration.scale_factor
         self._insp_cached_width_bl = vid_w * pixels_to_bl
         self._insp_cached_height_bl = vid_h * pixels_to_bl
 

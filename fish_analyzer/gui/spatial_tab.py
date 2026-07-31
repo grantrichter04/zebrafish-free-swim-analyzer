@@ -387,7 +387,7 @@ class SpatialTabMixin:
         self.arena_fig = Figure(figsize=(8, 6), dpi=100)
         self.arena_ax = self.arena_fig.add_subplot(111)
 
-        pixels_to_bl = 1.0 / loaded_file.metadata.body_length
+        pixels_to_bl = loaded_file.calibration.scale_factor
         width_bl = loaded_file.metadata.video_width * pixels_to_bl
         height_bl = loaded_file.metadata.video_height * pixels_to_bl
 
@@ -408,8 +408,9 @@ class SpatialTabMixin:
 
         self.arena_ax.set_xlim(0, width_bl)
         self.arena_ax.set_ylim(0, height_bl)
-        self.arena_ax.set_xlabel('X (BL)', fontsize=10)
-        self.arena_ax.set_ylabel('Y (BL)', fontsize=10)
+        unit = loaded_file.calibration.unit_name
+        self.arena_ax.set_xlabel(f'X ({unit})', fontsize=10)
+        self.arena_ax.set_ylabel(f'Y ({unit})', fontsize=10)
         
         title = f'Define arena for: {filename}'
         if background_loaded:
@@ -541,7 +542,7 @@ class SpatialTabMixin:
             return
 
         loaded_file = self.loaded_files[self.current_arena_file]
-        pixels_to_bl = 1.0 / loaded_file.metadata.body_length
+        pixels_to_bl = loaded_file.calibration.scale_factor
 
         vertices_bl = np.array(self.arena_vertices)
         vertices_pixels = vertices_bl / pixels_to_bl
@@ -629,19 +630,19 @@ class SpatialTabMixin:
         """Re-express an arena in the target file's body-length coordinates.
 
         `vertices_pixels` is image geometry and transfers between files with
-        the same frame size. `vertices_bl` does not: it was divided by the
-        *source* file's body_length and Y-flipped with the source's video
+        the same frame size. `vertices_bl` does not: it was scaled with the
+        *source* file's calibration and Y-flipped with the source's video
         height, while ThigmotaxisCalculator converts fish positions using the
-        *target's* body_length (spatial.py:344) and compares against
-        `vertices_bl` (spatial.py:365). Copying vertices_bl across files with
-        different body lengths therefore silently resizes the arena relative
-        to the fish. This inverts _complete_arena() using the target's values.
+        *target's* calibration and compares against `vertices_bl`. Copying
+        vertices_bl across files with different scale factors therefore
+        silently resizes the arena relative to the fish. This inverts
+        _complete_arena() using the target's values.
         """
         px = arena.vertices_pixels.copy()
         px[:, 1] = target.metadata.video_height - px[:, 1]   # image Y → plot Y
         return ArenaDefinition(
             vertices_pixels=arena.vertices_pixels.copy(),
-            vertices_bl=px / target.metadata.body_length
+            vertices_bl=px * target.calibration.scale_factor
         )
 
     def _apply_arena_to_selected(self):
@@ -701,7 +702,7 @@ class SpatialTabMixin:
                 self.file_arena_definitions[filename] = self._rescale_arena_for(
                     self.arena_definition, target
                 )
-                if target.metadata.body_length != source.metadata.body_length:
+                if target.calibration.scale_factor != source.calibration.scale_factor:
                     rescaled += 1
             count += 1
 
@@ -858,7 +859,7 @@ class SpatialTabMixin:
                 continue
 
             roi_poly = ShapelyPolygon(roi_bl)
-            pixels_to_bl = 1.0 / loaded_file.metadata.body_length
+            pixels_to_bl = loaded_file.calibration.scale_factor
             n_fish = loaded_file.n_fish
             n_frames = loaded_file.n_frames
 
@@ -1124,7 +1125,7 @@ class SpatialTabMixin:
             heatmaps.append(hm)
             edges_list.append((xe, ye))
             
-            pixels_to_bl = 1.0 / loaded_file.metadata.body_length
+            pixels_to_bl = loaded_file.calibration.scale_factor
             width_bl = loaded_file.metadata.video_width * pixels_to_bl
             height_bl = loaded_file.metadata.video_height * pixels_to_bl
             dimensions.append((width_bl, height_bl))
@@ -1153,8 +1154,9 @@ class SpatialTabMixin:
             
             ax.set_xlim(0, w)
             ax.set_ylim(0, h)
-            ax.set_xlabel('X (BL)', fontsize=9)
-            ax.set_ylabel('Y (BL)', fontsize=9)
+            unit = loaded_file.calibration.unit_name
+            ax.set_xlabel(f'X ({unit})', fontsize=9)
+            ax.set_ylabel(f'Y ({unit})', fontsize=9)
             ax.set_title(filename[:20], fontsize=10)
         
         if use_shared_scale and len(heatmaps) > 1 and im is not None:
@@ -1179,7 +1181,7 @@ class SpatialTabMixin:
         
         heatmaps, x_edges, y_edges = generator.generate_all_individual_heatmaps()
         
-        pixels_to_bl = 1.0 / loaded_file.metadata.body_length
+        pixels_to_bl = loaded_file.calibration.scale_factor
         width_bl = loaded_file.metadata.video_width * pixels_to_bl
         height_bl = loaded_file.metadata.video_height * pixels_to_bl
         

@@ -173,6 +173,10 @@ class LoadedTrajectoryFile:
     processed_data: Optional[List] = None
     shoaling_results: Optional[Any] = None  # Will be ShoalingResults
     thigmotaxis_results: Optional[Any] = None  # Will be ThigmotaxisResults
+    #: fish_idx -> why that fish is absent from processed_data (quality gate or
+    #: an exception). Populated by process_and_analyze_file so the CSV can show
+    #: a row for every fish in the recording rather than silently dropping one.
+    excluded_fish: Dict[int, str] = field(default_factory=dict)
 
     def __post_init__(self):
         """Validate trajectory array shape after initialization."""

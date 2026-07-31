@@ -64,7 +64,8 @@ class ShoalingResults:
     """
     Results from shoaling analysis for one file.
     
-    All distances are in body lengths (BL), areas in BL².
+    Distances are in the file's calibrated unit (``unit_name``), areas in
+    that unit squared. Not always body lengths.
     """
     # Time series data (at sampled intervals)
     timestamps: np.ndarray              # Time in seconds for each sample
@@ -109,6 +110,10 @@ class ShoalingResults:
     sample_interval_frames: int
     body_length_pixels: float
     frame_rate: float = 30.0
+    #: The unit every distance above is in — whatever the file was calibrated
+    #: in, not always "BL". Carried on the results so displays and exports
+    #: cannot label them wrongly (finding B7).
+    unit_name: str = "BL"
 
     def get_sample_index_for_frame(self, frame_idx: int) -> int:
         """Find the closest analyzed sample index for a given frame number."""
@@ -138,17 +143,17 @@ class ShoalingResults:
             "NEAREST NEIGHBOR DISTANCE (NND)",
             "-" * 60,
             "",
-            "Summary Statistics (in body lengths):",
-            f"  Mean NND:   {self.mean_nnd:.3f} BL",
+            f"Summary Statistics (in {self.unit_name}):",
+            f"  Mean NND:   {self.mean_nnd:.3f} {self.unit_name}",
             f"  Std Dev:    {self.std_nnd:.3f} BL",
             f"  Median:     {self.median_nnd:.3f} BL",
-            f"  Range:      {self.min_nnd:.3f} - {self.max_nnd:.3f} BL",
+            f"  Range:      {self.min_nnd:.3f} - {self.max_nnd:.3f} {self.unit_name}",
             "",
             "Per-Fish Mean NND:",
         ]
 
         for i, fish_nnd in enumerate(self.per_fish_mean_nnd):
-            lines.append(f"  Fish {i}: {fish_nnd:.3f} BL")
+            lines.append(f"  Fish {i}: {fish_nnd:.3f} {self.unit_name}")
 
         lines.append("")
         lines.append("-" * 60)
@@ -156,21 +161,21 @@ class ShoalingResults:
         lines.append("-" * 60)
         lines.append("  (Average distance between ALL fish pairs)")
         lines.append("")
-        lines.append(f"  Mean IID:   {self.mean_iid:.3f} BL")
+        lines.append(f"  Mean IID:   {self.mean_iid:.3f} {self.unit_name}")
         lines.append(f"  Std Dev:    {self.std_iid:.3f} BL")
         lines.append(f"  Median:     {self.median_iid:.3f} BL")
-        lines.append(f"  Range:      {self.min_iid:.3f} - {self.max_iid:.3f} BL")
+        lines.append(f"  Range:      {self.min_iid:.3f} - {self.max_iid:.3f} {self.unit_name}")
 
         lines.append("")
         lines.append("-" * 60)
         lines.append("CONVEX HULL AREA")
         lines.append("-" * 60)
         lines.append("")
-        lines.append("Summary Statistics (in body lengths²):")
-        lines.append(f"  Mean Area:  {self.mean_hull_area:.2f} BL²")
+        lines.append(f"Summary Statistics (in {self.unit_name}²):")
+        lines.append(f"  Mean Area:  {self.mean_hull_area:.2f} {self.unit_name}²")
         lines.append(f"  Std Dev:    {self.std_hull_area:.2f} BL²")
         lines.append(f"  Median:     {self.median_hull_area:.2f} BL²")
-        lines.append(f"  Range:      {self.min_hull_area:.2f} - {self.max_hull_area:.2f} BL²")
+        lines.append(f"  Range:      {self.min_hull_area:.2f} - {self.max_hull_area:.2f} {self.unit_name}²")
         lines.append("")
         lines.append("=" * 60)
 
@@ -199,10 +204,16 @@ class ShoalingCalculator:
         self.params = params
         self.params.validate()
 
-        # Store conversion factors for pixels → body lengths
+        # Conversion factors pixels -> whatever the user calibrated in.
+        # This used to be a hardcoded 1/body_length, so NND, IID and hull area
+        # stayed in body lengths however the file was calibrated -- and body
+        # length varies 15% across recordings, making the exported unit a
+        # different physical distance per file with no way to override it
+        # (finding B7).
         self.body_length_pixels = loaded_file.metadata.body_length
-        self.pixels_to_bl = 1.0 / self.body_length_pixels
-        self.pixels_sq_to_bl_sq = self.pixels_to_bl ** 2
+        self.unit_name = loaded_file.calibration.unit_name
+        self.pixels_to_unit = loaded_file.calibration.scale_factor
+        self.pixels_sq_to_unit_sq = self.pixels_to_unit ** 2
 
     def calculate(self) -> ShoalingResults:
         """
@@ -251,17 +262,17 @@ class ShoalingCalculator:
 
             # NND: nearest neighbor distance for each fish
             nnd_values = self._calculate_nnd_at_frame(positions)
-            nnd_values_bl = nnd_values * self.pixels_to_bl
-            mean_nnd_per_sample[i] = np.mean(nnd_values_bl)
-            individual_nnd_per_sample[i, :] = nnd_values_bl
+            nnd_values_u = nnd_values * self.pixels_to_unit
+            mean_nnd_per_sample[i] = np.mean(nnd_values_u)
+            individual_nnd_per_sample[i, :] = nnd_values_u
 
             # IID: mean of all pairwise distances
             iid_value = self._calculate_iid_at_frame(positions)
-            mean_iid_per_sample[i] = iid_value * self.pixels_to_bl
+            mean_iid_per_sample[i] = iid_value * self.pixels_to_unit
 
             # Convex hull area
             hull_area_pixels = self._calculate_convex_hull_area(positions)
-            convex_hull_area_per_sample[i] = hull_area_pixels * self.pixels_sq_to_bl_sq
+            convex_hull_area_per_sample[i] = hull_area_pixels * self.pixels_sq_to_unit_sq
 
             timestamps[i] = frame_idx / self.file.calibration.frame_rate
 
@@ -286,9 +297,9 @@ class ShoalingCalculator:
         min_hull_area = np.min(convex_hull_area_per_sample)
         max_hull_area = np.max(convex_hull_area_per_sample)
 
-        print(f"  Mean NND: {mean_nnd:.3f} BL (std: {std_nnd:.3f})")
-        print(f"  Mean IID: {mean_iid:.3f} BL (std: {std_iid:.3f})")
-        print(f"  Mean Hull Area: {mean_hull_area:.2f} BL^2 (std: {std_hull_area:.2f})")
+        print(f"  Mean NND: {mean_nnd:.3f} {self.unit_name} (std: {std_nnd:.3f})")
+        print(f"  Mean IID: {mean_iid:.3f} {self.unit_name} (std: {std_iid:.3f})")
+        print(f"  Mean Hull Area: {mean_hull_area:.2f} {self.unit_name}^2 (std: {std_hull_area:.2f})")
         print(f"  Analysis complete.\n")
 
         return ShoalingResults(
@@ -311,7 +322,8 @@ class ShoalingCalculator:
             completeness_percentage=(n_complete / n_total) * 100,
             sample_interval_frames=self.params.sample_interval_frames,
             body_length_pixels=self.body_length_pixels,
-            frame_rate=self.file.calibration.frame_rate
+            frame_rate=self.file.calibration.frame_rate,
+            unit_name=self.unit_name,
         )
 
     def _find_complete_frames(self) -> np.ndarray:
@@ -413,7 +425,7 @@ class ShoalingCalculator:
         # Convert to BL and flip Y for plotting
         positions_bl = positions_pixels.copy()
         positions_bl[:, 1] = self.file.metadata.video_height - positions_bl[:, 1]
-        positions_bl = positions_bl * self.pixels_to_bl
+        positions_bl = positions_bl * self.pixels_to_unit
         
         return positions_bl, is_complete
 
@@ -464,7 +476,7 @@ class ShoalingCalculator:
                 if not np.isnan(positions_pixels[i, 0]) and not np.isnan(positions_pixels[j, 0]):
                     dx = positions_pixels[i, 0] - positions_pixels[j, 0]
                     dy = positions_pixels[i, 1] - positions_pixels[j, 1]
-                    dist = np.sqrt(dx**2 + dy**2) * self.pixels_to_bl
+                    dist = np.sqrt(dx**2 + dy**2) * self.pixels_to_unit
                     pairs.append((i, j))
                     distances.append(dist)
 

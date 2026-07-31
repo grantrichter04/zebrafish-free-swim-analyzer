@@ -88,8 +88,8 @@ class DataTabMixin:
         self.analysis_progress.pack_forget()  # Hide initially
 
         tk.Label(
-            analyze_frame, text="Runs individual trajectory analysis (speed, distance, freezing, bursting,\n"
-                               "path straightness) AND bout analysis for all loaded files.\n"
+            analyze_frame, text="Runs individual trajectory analysis (speed, distance, freezing,\n"
+                               "path straightness, laterality) AND bout analysis for all loaded files.\n"
                                "Shoaling and spatial analyses are run separately from their own tabs.",
             font=("Arial", 9), fg="gray", justify=tk.CENTER
         ).pack(pady=5)

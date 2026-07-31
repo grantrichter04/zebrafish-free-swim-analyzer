@@ -271,9 +271,8 @@ class AnalysisTabMixin:
         file_columns = [
             ("file", "File", 150), ("fish", "Fish", 50),
             ("distance", f"Distance ({u})", 90), ("mean_spd", f"Mean Spd ({u}/s)", 90),
-            ("max_spd", f"Max Spd ({u}/s)", 90), ("freeze_n", "Freeze #", 70),
-            ("freeze_pct", "Freeze %", 70), ("burst_n", "Burst #", 70),
-            ("erratic", "Erratic /min", 80), ("straight", "Straightness", 80),
+            ("top_spd", f"Top Spd P99 ({u}/s)", 105), ("freeze_n", "Freeze #", 70),
+            ("freeze_pct", "Freeze %", 70), ("straight", "Straightness", 80),
             ("lateral", "Laterality", 70),
         ]
 
@@ -290,20 +289,17 @@ class AnalysisTabMixin:
 
             distances = [f.metrics.get('total_distance', np.nan) for f in fish_list]
             mean_speeds = [f.metrics.get('mean_speed', np.nan) for f in fish_list]
-            max_speeds = [f.metrics.get('max_speed', np.nan) for f in fish_list]
+            top_speeds = [f.metrics.get('speed_p99', np.nan) for f in fish_list]
             freeze_counts = [f.metrics.get('freeze_count', 0) for f in fish_list]
             freeze_pcts = [f.metrics.get('freeze_fraction_pct', 0) for f in fish_list]
-            burst_counts = [f.metrics.get('burst_count', 0) for f in fish_list]
-            erratic_rates = [f.metrics.get('erratic_movements_per_min', 0) for f in fish_list]
             straightness = [f.metrics.get('mean_path_straightness', np.nan) for f in fish_list]
             laterality = [f.metrics.get('laterality_index', np.nan) for f in fish_list]
 
             file_rows.append((
                 filename, len(fish_list),
                 f"{np.nanmean(distances):.1f}", f"{np.nanmean(mean_speeds):.2f}",
-                f"{np.nanmean(max_speeds):.2f}", f"{np.mean(freeze_counts):.1f}",
-                f"{np.mean(freeze_pcts):.1f}", f"{np.mean(burst_counts):.1f}",
-                f"{np.mean(erratic_rates):.1f}", f"{np.nanmean(straightness):.2f}",
+                f"{np.nanmean(top_speeds):.2f}", f"{np.mean(freeze_counts):.1f}",
+                f"{np.mean(freeze_pcts):.1f}", f"{np.nanmean(straightness):.2f}",
                 f"{np.nanmean(laterality):.2f}",
             ))
 
@@ -316,14 +312,10 @@ class AnalysisTabMixin:
                     f"{fish.valid_percentage:.0%}",
                     f"{m.get('total_distance', np.nan):.1f}",
                     f"{m.get('mean_speed', np.nan):.2f}",
-                    f"{m.get('max_speed', np.nan):.2f}",
+                    f"{m.get('speed_p99', np.nan):.2f}",
                     f"{m.get('freeze_count', 0)}",
                     f"{m.get('freeze_fraction_pct', 0):.1f}",
-                    f"{m.get('burst_count', 0)}",
-                    f"{m.get('burst_frequency_per_min', 0):.1f}",
-                    f"{m.get('erratic_movements_per_min', 0):.1f}",
                     f"{m.get('mean_path_straightness', np.nan):.2f}",
-                    f"{m.get('mean_angular_velocity_deg_s', np.nan):.1f}",
                     f"{lat:.3f}" if not np.isnan(lat) else "N/A",
                 ))
 
@@ -335,10 +327,8 @@ class AnalysisTabMixin:
             ("file", "File", 130), ("fish", "Fish", 60),
             ("quality", "Valid %", 60),
             ("distance", f"Distance ({u})", 85), ("mean_spd", f"Mean Spd", 75),
-            ("max_spd", f"Max Spd", 70), ("freeze_n", "Freeze #", 65),
-            ("freeze_pct", "Freeze %", 65), ("burst_n", "Burst #", 60),
-            ("burst_rate", "Burst /min", 70), ("erratic", "Erratic /min", 75),
-            ("straight", "Straight", 65), ("ang_vel", "Ang Vel", 65),
+            ("top_spd", "Top Spd P99", 85), ("freeze_n", "Freeze #", 65),
+            ("freeze_pct", "Freeze %", 65), ("straight", "Straight", 65),
             ("lateral", "Lateral", 60),
         ]
 
@@ -816,18 +806,23 @@ class AnalysisTabMixin:
         embed_figure_with_toolbar(fig, self.speed_distribution_frame)
 
     def _plot_behavioral_comparison(self, selected_files: List[str]):
-        """Plot behavioral comparison as bar charts: distance, freeze%, burst rate, straightness."""
+        """Plot behavioral comparison as bar charts.
+
+        Four panels: distance, freezing, path straightness, laterality. The
+        burst-frequency and erratic-movement panels were removed by Audit B —
+        both plotted centroid noise, so the bars compared tracking quality
+        between recordings rather than behaviour.
+        """
         for widget in self.distance_comparison_frame.winfo_children():
             widget.destroy()
 
-        fig = Figure(figsize=(14, 8), dpi=100)
+        fig = Figure(figsize=(12, 8), dpi=100)
 
         file_names = []
         avg_distances = []
         avg_freeze_pcts = []
-        avg_burst_rates = []
         avg_straightness = []
-        avg_erratic_rates = []
+        avg_laterality = []
         units = []
 
         for filename in selected_files:
@@ -837,62 +832,50 @@ class AnalysisTabMixin:
 
             distances = [f.metrics.get('total_distance', np.nan) for f in fish_list]
             freeze_pcts = [f.metrics.get('freeze_fraction_pct', 0) for f in fish_list]
-            burst_rates = [f.metrics.get('burst_frequency_per_min', 0) for f in fish_list]
             straightness = [f.metrics.get('mean_path_straightness', np.nan) for f in fish_list]
-            erratic_rates = [f.metrics.get('erratic_movements_per_min', 0) for f in fish_list]
+            laterality = [f.metrics.get('laterality_index', np.nan) for f in fish_list]
 
             file_names.append(filename[:20] if len(filename) > 20 else filename)
             avg_distances.append(np.nanmean(distances))
             avg_freeze_pcts.append(np.mean(freeze_pcts))
-            avg_burst_rates.append(np.mean(burst_rates))
             avg_straightness.append(np.nanmean(straightness))
-            avg_erratic_rates.append(np.mean(erratic_rates))
+            avg_laterality.append(np.nanmean(laterality))
             units.append(unit)
 
         x = np.arange(len(file_names))
         colors = plt.cm.tab10(np.linspace(0, 1, len(file_names)))
 
-        # 2x3 grid of subplots
-        ax1 = fig.add_subplot(2, 3, 1)
+        def _label(ax):
+            ax.set_xticks(x)
+            ax.set_xticklabels(file_names, rotation=45, ha='right', fontsize=8)
+
+        ax1 = fig.add_subplot(2, 2, 1)
         ax1.bar(x, avg_distances, color=colors, edgecolor='black')
         ax1.set_ylabel(f'Total Distance ({units[0] if units else "units"})', fontsize=10)
         ax1.set_title('Total Distance', fontsize=12, fontweight='bold')
-        ax1.set_xticks(x)
-        ax1.set_xticklabels(file_names, rotation=45, ha='right', fontsize=8)
+        _label(ax1)
 
-        ax2 = fig.add_subplot(2, 3, 2)
+        ax2 = fig.add_subplot(2, 2, 2)
         ax2.bar(x, avg_freeze_pcts, color=colors, edgecolor='black')
         ax2.set_ylabel('Time Frozen (%)', fontsize=10)
         ax2.set_title('Freezing', fontsize=12, fontweight='bold')
-        ax2.set_xticks(x)
-        ax2.set_xticklabels(file_names, rotation=45, ha='right', fontsize=8)
+        _label(ax2)
 
-        ax3 = fig.add_subplot(2, 3, 3)
-        ax3.bar(x, avg_burst_rates, color=colors, edgecolor='black')
-        ax3.set_ylabel('Bursts / min', fontsize=10)
-        ax3.set_title('Burst Frequency', fontsize=12, fontweight='bold')
-        ax3.set_xticks(x)
-        ax3.set_xticklabels(file_names, rotation=45, ha='right', fontsize=8)
+        ax3 = fig.add_subplot(2, 2, 3)
+        ax3.bar(x, avg_straightness, color=colors, edgecolor='black')
+        ax3.set_ylabel('Straightness (0–1)', fontsize=10)
+        ax3.set_title('Path Straightness', fontsize=12, fontweight='bold')
+        ax3.set_ylim(0, 1)
+        ax3.axhline(y=1.0, color='gray', linestyle='--', alpha=0.5)
+        _label(ax3)
 
-        ax4 = fig.add_subplot(2, 3, 4)
-        ax4.bar(x, avg_straightness, color=colors, edgecolor='black')
-        ax4.set_ylabel('Straightness (0–1)', fontsize=10)
-        ax4.set_title('Path Straightness', fontsize=12, fontweight='bold')
-        ax4.set_xticks(x)
-        ax4.set_xticklabels(file_names, rotation=45, ha='right', fontsize=8)
-        ax4.set_ylim(0, 1)
-        ax4.axhline(y=1.0, color='gray', linestyle='--', alpha=0.5)
-
-        ax5 = fig.add_subplot(2, 3, 5)
-        ax5.bar(x, avg_erratic_rates, color=colors, edgecolor='black')
-        ax5.set_ylabel('Erratic Movements / min', fontsize=10)
-        ax5.set_title('Erratic Movements', fontsize=12, fontweight='bold')
-        ax5.set_xticks(x)
-        ax5.set_xticklabels(file_names, rotation=45, ha='right', fontsize=8)
-
-        # Remove 6th subplot if unused
-        ax6 = fig.add_subplot(2, 3, 6)
-        ax6.axis('off')
+        ax4 = fig.add_subplot(2, 2, 4)
+        ax4.bar(x, avg_laterality, color=colors, edgecolor='black')
+        ax4.set_ylabel('Laterality (-1 left … +1 right)', fontsize=10)
+        ax4.set_title('Turning Bias', fontsize=12, fontweight='bold')
+        ax4.set_ylim(-1, 1)
+        ax4.axhline(y=0.0, color='gray', linestyle='--', alpha=0.5)
+        _label(ax4)
 
         fig.tight_layout()
 
@@ -1049,9 +1032,17 @@ class AnalysisTabMixin:
             f"{smooth_text} "
             f"Fish with fewer than {p.min_valid_points} valid position "
             f"frames were excluded from analysis.\n\n"
+            f"Frames in which idtracker.ai did not locate a fish were treated "
+            f"as unobserved rather than as stationary or as moving: all "
+            f"episode-based metrics were computed within stretches of "
+            f"continuous tracking and never across a gap, and all rates and "
+            f"fractions are per unit of *observed* time, reported alongside "
+            f"as ObservedDuration_s.\n\n"
             f"For each fish, the following metrics were computed: total "
-            f"distance traveled (sum of frame-to-frame displacements), "
-            f"mean and maximum speed, and path straightness (ratio of "
+            f"observed distance traveled (sum of frame-to-frame "
+            f"displacements, excluding steps that span a tracking gap), mean "
+            f"and 99th-percentile speed, net displacement between the first "
+            f"and last tracked positions, and path straightness (ratio of "
             f"net displacement to path distance over sliding "
             f"{p.straightness_window_seconds:.1f}-second windows; "
             f"1.0 = straight, 0.0 = circling). "
@@ -1059,17 +1050,22 @@ class AnalysisTabMixin:
             f"speed remained below {p.rest_speed_threshold} {cal.unit_name}/s "
             f"for at least {p.min_freeze_frames} frames "
             f"({p.min_freeze_frames / cal.frame_rate * 1000:.0f} ms). "
-            f"Burst events were detected when frame-to-frame acceleration "
-            f"exceeded {p.burst_accel_threshold} {cal.unit_name}/s\u00b2. "
-            f"Angular velocity was computed as the absolute frame-to-frame "
-            f"heading change (degrees/second), restricted to frames where "
-            f"the fish was actively moving. Erratic movements were counted "
-            f"as heading changes exceeding {p.erratic_turn_threshold}\u00b0 "
-            f"during active movement. "
+            f"Episodes interrupted by a tracking gap are reported separately "
+            f"as censored, since their true duration is a lower bound; only "
+            f"complete episodes contribute to the episode count and mean "
+            f"duration, while both contribute to the time-frozen fraction. "
             f"Turning bias was quantified using a laterality index "
-            f"(right turns \u2212 left turns) / total turns, where positive "
-            f"values indicate clockwise bias and negative values indicate "
-            f"counterclockwise bias.\n\n"
+            f"(right turns \u2212 left turns) / total turns, counting only "
+            f"frames where the fish was actively moving; positive values "
+            f"indicate clockwise bias and negative values counterclockwise, "
+            f"as seen from a camera above the tank.\n\n"
+            f"Angular velocity, erratic-movement counts and burst statistics "
+            f"are deliberately not reported. All three are derived from the "
+            f"direction of frame-to-frame centroid displacement, which at "
+            f"this tracker's noise level is dominated by tracking jitter "
+            f"rather than by fish movement; see AUDIT_B_CORRECTNESS.md. "
+            f"Reporting them requires head-direction tracking rather than "
+            f"centroid positions.\n\n"
             f"Analysis included {n_files} file(s) with {total_fish} fish total.\n\n"
             "---\n\n"
             "KEY PARAMETERS:\n"
@@ -1079,8 +1075,6 @@ class AnalysisTabMixin:
             f"  Smoothing:                 {'ON (window=' + str(p.smoothing_window) + ')' if p.apply_smoothing else 'OFF'}\n"
             f"  Rest speed threshold:      {p.rest_speed_threshold} {cal.unit_name}/s\n"
             f"  Min freeze duration:       {p.min_freeze_frames} frames ({p.min_freeze_frames / cal.frame_rate * 1000:.0f} ms)\n"
-            f"  Burst accel threshold:     {p.burst_accel_threshold} {cal.unit_name}/s\u00b2\n"
-            f"  Erratic turn threshold:    {p.erratic_turn_threshold}\u00b0\n"
             f"  Path straightness window:  {p.straightness_window_seconds} s\n"
             f"  Min valid frames:          {p.min_valid_points}\n"
         )

@@ -17,11 +17,23 @@ METRICS CALCULATED:
 - Distance: total path length, net displacement
 - Speed: mean, max, median, std
 - Freezing: freeze count, mean freeze duration, total freeze time
-- Bursting: burst count, mean burst speed, mean burst duration
-- Angular velocity: mean angular velocity (degrees/second)
-- Erratic movements: count of sudden large direction changes
 - Path straightness: sliding-window displacement/distance ratio
-- Turning bias: laterality index, cumulative heading change, signed angular velocity
+- Turning bias: laterality index, left/right turn counts
+
+WITHDRAWN 2026-08-01 (Audit B):
+Angular velocity, erratic-movement counts, all three burst metrics, cumulative
+heading change and mean signed angular velocity have been removed. All six
+derive from the direction of frame-to-frame centroid displacement, which at
+this tracker's noise level carries no usable signal: a *perfectly straight*
+synthetic swimmer at the observed median speed, with 0.5-1.0 px of centroid
+noise, reproduced the entire range those columns reported across four real
+sessions. They were removed rather than repaired because no amount of
+thresholding recovers a signal that is not there -- recovering them needs real
+head direction (see head_detection/), not better arithmetic.
+
+Laterality survives because it counts turn *directions*, which stay balanced
+under symmetric noise, rather than turn *rates*, which do not. See
+AUDIT_B_CORRECTNESS.md B1, B3 and B15, and tests/test_metric_correctness.py.
 """
 
 from dataclasses import dataclass, field
@@ -33,6 +45,9 @@ from traja import TrajaDataFrame
 
 # Import from our own package
 from .data_structures import LoadedTrajectoryFile
+from .segments import (backward_speed_slices, contiguous_tracked_segments,
+                       first_and_last_tracked, longest_gap_frames, run_lengths,
+                       tracked_frame_count)
 
 
 @dataclass
@@ -50,16 +65,10 @@ class ProcessingParameters:
     rest_speed_threshold for at least min_freeze_frames consecutive frames.
     Freezing is a key anxiety-related behavior in zebrafish.
 
-    BURST DETECTION:
-    A "burst" is a rapid acceleration event. Detected when acceleration
-    exceeds burst_accel_threshold. Consecutive above-threshold frames are
-    grouped into single burst events.
-
-    ERRATIC MOVEMENT:
-    Sudden large direction changes (heading change > erratic_turn_threshold
-    degrees) indicate stress or startle responses. Only counted when the
-    fish is actually moving (speed > rest_speed_threshold) to avoid noise
-    from stationary heading jitter.
+    TURNING BIAS:
+    rest_speed_threshold doubles as the gate on turn counting: a heading
+    change is only counted when the fish is actually moving, so a stationary
+    fish contributes nothing.
 
     PATH STRAIGHTNESS:
     Computed over a sliding window (straightness_window_seconds). For each
@@ -73,8 +82,6 @@ class ProcessingParameters:
     min_valid_percentage: float = 0.01
     rest_speed_threshold: float = 0.5       # BL/s below which fish is "frozen"
     min_freeze_frames: int = 5              # Minimum consecutive frames to count as a freeze
-    burst_accel_threshold: float = 2.0      # BL/s² acceleration to count as a burst
-    erratic_turn_threshold: float = 90.0    # Degrees — heading change above this = erratic
     straightness_window_seconds: float = 1.0  # Window for path straightness calculation
 
     def validate(self):
@@ -90,10 +97,6 @@ class ProcessingParameters:
             raise ValueError(f"Valid percentage must be between 0 and 1, got {self.min_valid_percentage}")
         if self.rest_speed_threshold < 0:
             raise ValueError(f"Rest threshold must be non-negative, got {self.rest_speed_threshold}")
-        if self.burst_accel_threshold <= 0:
-            raise ValueError(f"Burst acceleration threshold must be positive, got {self.burst_accel_threshold}")
-        if not 0 < self.erratic_turn_threshold <= 180:
-            raise ValueError(f"Erratic turn threshold must be between 0 and 180, got {self.erratic_turn_threshold}")
         if self.straightness_window_seconds <= 0:
             raise ValueError(f"Straightness window must be positive, got {self.straightness_window_seconds}")
 
@@ -108,8 +111,6 @@ class ProcessingParameters:
             min_valid_percentage=0.01,
             rest_speed_threshold=0.5,
             min_freeze_frames=5,
-            burst_accel_threshold=2.0,
-            erratic_turn_threshold=90.0,
             straightness_window_seconds=1.0,
         )
 
@@ -129,6 +130,18 @@ class FishTrajectory:
     n_valid_frames: int = 0
     n_total_frames: int = 0
     smoothing_failed: bool = False
+    #: Names of metric groups whose computation raised. A NaN in the export is
+    #: ambiguous on its own — it can mean "this fish never turned" as easily as
+    #: "the calculation crashed" — so the exporter reads this to tell them
+    #: apart (finding B10).
+    failed_metrics: List[str] = field(default_factory=list)
+
+    @property
+    def status(self) -> str:
+        """'ok' or 'partial: <what failed>', for the CSV's Status column."""
+        if not self.failed_metrics:
+            return "ok"
+        return "partial: " + ", ".join(sorted(self.failed_metrics))
 
     @property
     def valid_percentage(self) -> float:
@@ -176,6 +189,11 @@ class TrajectoryProcessor:
             Processed trajectory for each fish that had sufficient valid data
         """
         processed_fish = []
+        #: fish_idx -> why it is missing from the returned list. A fish that
+        #: failed or was gated out used to vanish silently, leaving nothing in
+        #: the export to say the file had more fish in it (finding B10).
+        self.excluded: Dict[int, str] = {}
+
         print(f"\nProcessing {self.file.n_fish} fish from {self.file.nickname}...")
         print(f"Using smoothing window: {self.params.smoothing_window} frames")
 
@@ -186,8 +204,10 @@ class TrajectoryProcessor:
                     processed_fish.append(fish_traj)
                     print(f"  Fish {fish_idx}: [ok] ({fish_traj.valid_percentage:.1%} valid data)")
                 else:
+                    self.excluded[fish_idx] = "insufficient valid data"
                     print(f"  Fish {fish_idx}: [skip] (insufficient valid data)")
             except Exception as e:
+                self.excluded[fish_idx] = f"failed: {e}"
                 print(f"  Fish {fish_idx}: [FAILED] (error: {e})")
                 continue
 
@@ -286,9 +306,7 @@ class MetricsCalculator:
     - Total distance traveled and net displacement
     - Speed statistics (mean, max, median, std)
     - Freeze analysis (count, duration, total time)
-    - Burst analysis (count, speed, duration)
-    - Angular velocity (mean rate of turning, degrees/second)
-    - Erratic movement count (sudden large direction changes)
+    - Turning bias (laterality index, left/right turn counts)
     - Path straightness (sliding-window displacement/distance ratio)
     """
 
@@ -310,7 +328,13 @@ class MetricsCalculator:
             speed_series = derivs['speed'].values
         except Exception as e:
             print(f"Warning: Could not compute derivatives for fish {fish.fish_id}: {e}")
+            fish.failed_metrics.append("derivatives")
             speed_series = np.full(len(trj), np.nan)
+
+        # Where the tracker actually had this fish. Every run-length metric
+        # below is computed inside these spans and never across them.
+        x, y = trj['x'].values, trj['y'].values
+        segments = contiguous_tracked_segments(x, y)
 
         # Distance metrics
         fish.metrics['total_distance'] = self._calc_total_distance(trj)
@@ -327,25 +351,26 @@ class MetricsCalculator:
             'speed': speed_series[:min_len]
         }
 
+        # Tracking quality — the context every metric below has to be read in
+        fish.metrics.update(self._calc_tracking_quality(x, y, frame_rate))
+
         # Freeze analysis
         fish.metrics.update(
-            self._calc_freeze_metrics(speed_series, frame_rate)
+            self._calc_freeze_metrics(speed_series, frame_rate, segments)
         )
 
-        # Burst analysis (needs acceleration)
-        fish.metrics.update(
-            self._calc_burst_metrics(speed_series, frame_rate)
-        )
-
-        # Angular velocity and erratic movement
-        fish.metrics.update(
-            self._calc_movement_direction_metrics(trj, speed_series, frame_rate)
-        )
-
-        # Path straightness (sliding window)
-        fish.metrics.update(
-            self._calc_path_straightness(trj, frame_rate)
-        )
+        # Turning bias and path straightness both catch their own exceptions
+        # and return NaN. They flag it with a private '_failed' key, which is
+        # stripped here into fish.failed_metrics so the export can distinguish
+        # "this fish never turned" from "the calculation raised" (B10).
+        for name, result in (
+            ("turning", self._calc_movement_direction_metrics(
+                trj, speed_series, frame_rate)),
+            ("straightness", self._calc_path_straightness(trj, frame_rate)),
+        ):
+            if result.pop('_failed', False):
+                fish.failed_metrics.append(name)
+            fish.metrics.update(result)
 
         return fish
 
@@ -354,199 +379,232 @@ class MetricsCalculator:
     # =========================================================================
 
     def _calc_total_distance(self, trj: TrajaDataFrame) -> float:
-        """Calculate total path length (sum of all step lengths)."""
+        """Total path length (sum of all step lengths).
+
+        Steps that span a tracking gap are NaN and drop out of the sum, so this
+        is distance *observed* rather than distance travelled — it under-counts
+        by however far the fish moved while untracked, and never invents a
+        straight-line jump across the gap. Read it next to tracked_fraction.
+        """
         return traja.length(trj)
 
     def _calc_net_displacement(self, trj: TrajaDataFrame) -> float:
-        """Calculate straight-line distance from start to end."""
-        return traja.distance(trj)
+        """Straight-line distance from the first tracked point to the last.
+
+        Not traja.distance(), which reads row 0 and row -1 unconditionally and
+        so returned NaN for any fish whose recording began or ended in a
+        tracking gap -- 12 of the 24 fish in the supplied sessions (B16).
+        """
+        x, y = trj['x'].values, trj['y'].values
+        first, last = first_and_last_tracked(x, y)
+        if first < 0 or first == last:
+            return np.nan
+        return float(np.hypot(x[last] - x[first], y[last] - y[first]))
 
     # =========================================================================
     # SPEED
     # =========================================================================
 
     def _calc_speed_metrics(self, speed_series: np.ndarray) -> Dict[str, float]:
-        """Calculate summary statistics for speed from pre-computed derivatives."""
-        speed = speed_series[~np.isnan(speed_series)]
+        """Summary statistics for speed from pre-computed derivatives.
+
+        TOP SPEED IS A PERCENTILE, NOT A MAXIMUM.
+        The old `max_speed` was a raw np.max, which on real recordings reports
+        the worst tracking glitch rather than the fastest swim: identity swaps
+        and re-acquisitions teleport a fish across the arena in one frame. The
+        supplied sessions gave 32-321 BL/s against a physiological ceiling near
+        25 BL/s, 2.4-7.9x each fish's own 99.9th percentile (finding B17).
+
+        `speed_p99` answers the same question -- how fast does this fish swim
+        when it is going flat out -- without being settable by a single bad
+        frame. The count of implausible samples is reported separately as a
+        data-quality signal rather than being silently folded into a
+        behavioural number.
+        """
+        speed = speed_series[np.isfinite(speed_series)]
 
         if len(speed) == 0:
             return {
                 'mean_speed': np.nan,
-                'max_speed': np.nan,
+                'speed_p99': np.nan,
                 'std_speed': np.nan,
                 'median_speed': np.nan,
+                'speed_max_raw': np.nan,
             }
 
         return {
             'mean_speed': float(np.mean(speed)),
-            'max_speed': float(np.max(speed)),
+            'speed_p99': float(np.percentile(speed, 99)),
             'std_speed': float(np.std(speed)),
             'median_speed': float(np.median(speed)),
+            # Kept out of the export: useful for spotting a bad recording,
+            # meaningless as a behavioural readout.
+            'speed_max_raw': float(np.max(speed)),
+        }
+
+    # =========================================================================
+    # TRACKING QUALITY
+    # =========================================================================
+
+    def _calc_tracking_quality(self, x: np.ndarray, y: np.ndarray,
+                               frame_rate: float) -> Dict[str, Any]:
+        """How much of this fish was actually observed.
+
+        Every duration and rate below is over *observed* time, so these two
+        numbers are what make them interpretable — and comparable between fish
+        that were tracked 99% and 87% of the time.
+        """
+        n_total = len(x)
+        n_tracked = tracked_frame_count(x, y)
+        return {
+            'tracked_fraction': (n_tracked / n_total) if n_total else 0.0,
+            'longest_gap_s': (longest_gap_frames(x, y) / frame_rate
+                              if frame_rate else np.nan),
         }
 
     # =========================================================================
     # FREEZE ANALYSIS
     # =========================================================================
 
-    def _calc_freeze_metrics(self, speed_series: np.ndarray,
-                              frame_rate: float) -> Dict[str, Any]:
+    def _calc_freeze_metrics(self, speed_series: np.ndarray, frame_rate: float,
+                             segments: List[tuple]) -> Dict[str, Any]:
         """
         Detect freezing episodes and compute freeze metrics.
 
-        A freeze is a consecutive run of frames where speed < rest_speed_threshold
-        lasting at least min_freeze_frames frames.
+        A freeze is a run of at least min_freeze_frames consecutive frames,
+        *within one stretch of continuous tracking*, where speed stays below
+        rest_speed_threshold.
 
-        Returns
-        -------
-        dict with keys:
-            freeze_count: number of freeze episodes
-            freeze_total_duration_s: total time spent frozen (seconds)
-            freeze_mean_duration_s: average freeze duration (seconds)
-            freeze_fraction_pct: % of time spent frozen
+        WHY SEGMENTS (finding B5)
+        -------------------------
+        This used to run over the whole speed array with NaN forced to
+        "not frozen", which meant every tracking gap severed a freeze run. One
+        motionless fish with 5% scattered dropout reported 22 freeze episodes
+        instead of 1. Forcing NaN the other way is no better -- then the gap
+        itself becomes a freeze. A gap is neither, so runs are now found inside
+        segments and gap frames enter no count at all.
+
+        COMPLETE VS CENSORED EPISODES
+        -----------------------------
+        Once tracking fragments, "how many freezes were there" stops being
+        answerable. A freeze run that ends because the tracker lost the fish
+        might be one episode or the first half of a longer one -- there is no
+        way to tell. Counting such runs as episodes is what produced 22 from a
+        fish that froze once; counting them as nothing throws away real data.
+
+        So episodes are split in two:
+
+        - **complete** -- the run begins and ends with an observed transition
+          (or at the recording boundary, which is conventional). Its duration
+          is a measurement. Only these are counted and averaged.
+        - **censored** -- the run touches a tracking gap, so its true extent is
+          unknown and its measured duration is only a lower bound. Its frames
+          still count toward the time-frozen totals, but it is not counted as
+          an episode.
+
+        A fish that froze once through 5% scattered dropout now reports 0
+        complete episodes, 22 censored, and ~100% of observed time frozen --
+        which is exactly what is known about it.
+
+        DENOMINATORS (finding B6)
+        -------------------------
+        freeze_fraction_pct used to divide by valid frames while
+        freeze_total_duration_s divided by the whole recording, so the two
+        disagreed by the dropout fraction with nothing to reconcile them.
+        Both are now over *observed* time, and the identity
+
+            freeze_total_duration_s / observed_duration_s * 100
+                == freeze_fraction_pct
+
+        holds exactly, because observed_duration_s is returned from here rather
+        than recomputed -- it counts the same speed samples the numerator does.
+        A reader who wants wall-clock can convert; the honest default is that
+        we cannot claim a fish was frozen during frames we could not see.
         """
         threshold = self.params.rest_speed_threshold
         min_frames = self.params.min_freeze_frames
+        n_frames = len(speed_series)
 
-        # Boolean mask: True where fish is below threshold
-        is_slow = speed_series < threshold
-        # Treat NaN as not-frozen
-        is_slow[np.isnan(speed_series)] = False
+        complete: List[int] = []
+        censored: List[int] = []
+        n_observed = 0
 
-        # Find consecutive runs of True (frozen)
-        freeze_durations = []  # in frames
-        run_length = 0
+        for seg_start, seg_stop in segments:
+            # traja's speed[i] spans frames [i-1, i), so a segment's first
+            # frame carries no speed — its predecessor is the gap.
+            start, stop = seg_start + 1, seg_stop
+            if stop <= start:
+                continue
 
-        for val in is_slow:
-            if val:
-                run_length += 1
-            else:
-                if run_length >= min_frames:
-                    freeze_durations.append(run_length)
-                run_length = 0
-        # Check final run
-        if run_length >= min_frames:
-            freeze_durations.append(run_length)
+            speeds = speed_series[start:stop]
+            # A finite speed here means both endpoint frames were tracked.
+            usable = np.isfinite(speeds)
+            n_observed += int(np.count_nonzero(usable))
 
-        freeze_count = len(freeze_durations)
-        total_freeze_frames = sum(freeze_durations)
-        n_valid = np.sum(~np.isnan(speed_series))
+            # Running out of recording is not the same as running into a gap:
+            # the first and last episodes of a recording are conventionally
+            # counted, an episode interrupted by lost tracking is not.
+            opens_at_recording_start = seg_start == 0
+            closes_at_recording_end = seg_stop == n_frames
+
+            is_slow = usable & (speeds < threshold)
+            for a, b in run_lengths(is_slow):
+                if b - a < min_frames:
+                    continue
+                touches_gap = (
+                    (a == 0 and not opens_at_recording_start)
+                    or (b == stop - start and not closes_at_recording_end)
+                )
+                (censored if touches_gap else complete).append(b - a)
+
+        total_freeze_frames = sum(complete) + sum(censored)
 
         return {
-            'freeze_count': freeze_count,
+            'freeze_count': len(complete),
+            'freeze_episodes_censored': len(censored),
             'freeze_total_duration_s': total_freeze_frames / frame_rate,
             'freeze_mean_duration_s': (
-                (total_freeze_frames / freeze_count / frame_rate)
-                if freeze_count > 0 else 0.0
+                (sum(complete) / len(complete) / frame_rate) if complete else 0.0
             ),
             'freeze_fraction_pct': (
-                (total_freeze_frames / n_valid * 100) if n_valid > 0 else 0.0
+                (total_freeze_frames / n_observed * 100) if n_observed > 0 else 0.0
             ),
+            # Returned from here, not recomputed elsewhere, so the identity
+            # above cannot drift.
+            'observed_duration_s': n_observed / frame_rate if frame_rate else np.nan,
         }
 
     # =========================================================================
-    # BURST ANALYSIS
-    # =========================================================================
-
-    def _calc_burst_metrics(self, speed_series: np.ndarray,
-                             frame_rate: float) -> Dict[str, Any]:
-        """
-        Detect burst events based on acceleration threshold.
-
-        A burst is a consecutive run of frames where acceleration exceeds
-        burst_accel_threshold. For each burst, we record the peak speed
-        and duration.
-
-        Returns
-        -------
-        dict with keys:
-            burst_count: number of burst events
-            burst_mean_speed: average peak speed during bursts
-            burst_mean_duration_s: average burst duration (seconds)
-            burst_frequency_per_min: bursts per minute
-        """
-        threshold = self.params.burst_accel_threshold
-
-        # Compute acceleration (change in speed per frame, scaled to per second)
-        speed_clean = speed_series.copy()
-        acceleration = np.diff(speed_clean) * frame_rate  # units/s²
-
-        # Treat NaN acceleration as non-burst
-        accel_valid = np.where(np.isnan(acceleration), 0.0, acceleration)
-
-        is_bursting = accel_valid > threshold
-
-        # Find burst episodes
-        burst_peak_speeds = []
-        burst_durations = []  # in frames
-        in_burst = False
-        burst_start = 0
-
-        for i, val in enumerate(is_bursting):
-            if val and not in_burst:
-                in_burst = True
-                burst_start = i
-            elif not val and in_burst:
-                in_burst = False
-                burst_end = i
-                duration = burst_end - burst_start
-                # Peak speed during this burst (index offset by 1 for speed vs accel)
-                speed_segment = speed_clean[burst_start:burst_end + 1]
-                peak = np.nanmax(speed_segment)
-                burst_peak_speeds.append(peak)
-                burst_durations.append(duration)
-
-        # Handle burst continuing to end
-        if in_burst:
-            duration = len(is_bursting) - burst_start
-            speed_segment = speed_clean[burst_start:]
-            peak = np.nanmax(speed_segment) if len(speed_segment) > 0 else np.nan
-            burst_peak_speeds.append(peak)
-            burst_durations.append(duration)
-
-        burst_count = len(burst_peak_speeds)
-        total_time_s = len(speed_series) / frame_rate
-
-        return {
-            'burst_count': burst_count,
-            'burst_mean_speed': (
-                float(np.nanmean(burst_peak_speeds)) if burst_count > 0 else 0.0
-            ),
-            'burst_mean_duration_s': (
-                float(np.mean(burst_durations) / frame_rate) if burst_count > 0 else 0.0
-            ),
-            'burst_frequency_per_min': (
-                (burst_count / total_time_s * 60) if total_time_s > 0 else 0.0
-            ),
-        }
-
-    # =========================================================================
-    # ANGULAR VELOCITY & ERRATIC MOVEMENT
+    # TURNING BIAS
     # =========================================================================
 
     def _calc_movement_direction_metrics(self, trj: TrajaDataFrame,
                                           speed_series: np.ndarray,
                                           frame_rate: float) -> Dict[str, float]:
         """
-        Calculate angular velocity, erratic movement count, and turning bias.
+        Calculate turning bias (laterality) from frame-to-frame heading.
 
-        Angular velocity: mean absolute rate of heading change (degrees/second).
-        Computed only when the fish is moving (speed > threshold) to avoid
-        noise from stationary heading jitter.
-
-        Erratic movement count: number of frames where the heading change
-        exceeds erratic_turn_threshold degrees AND the fish is moving.
-
-        Turning bias (laterality):
         - Laterality index: (right turns - left turns) / total turns.
           Ranges from -1 (all left/CCW) to +1 (all right/CW). Near 0 = no bias.
-        - Cumulative heading change: total signed heading change in degrees.
-          Positive = net CCW rotation, negative = net CW rotation.
-        - Mean signed angular velocity: mean turning rate with direction preserved.
-          Positive = CCW, negative = CW.
+        - n_right_turns / n_left_turns: the raw counts behind that ratio.
 
-        All turning metrics only count frames where the fish is actively moving,
-        which makes them robust for both adult continuous swimming and larval
-        bout-based locomotion (dart-glide).
+        Turns are only counted where the fish is actively moving (speed >
+        rest_speed_threshold), which makes this work for both adult continuous
+        swimming and larval bout-based locomotion (dart-glide).
+
+        WHY ONLY DIRECTIONS, NOT RATES:
+        This function used to also return mean angular velocity, erratic
+        movement counts, cumulative heading change and mean signed angular
+        velocity. Audit B removed all four. They are magnitudes derived from
+        the same frame-to-frame arctan2, and at this tracker's noise level the
+        magnitude is noise: a straight-line swimmer with 0.5 px of centroid
+        jitter reported 271 deg/s, and cumulative heading flipped sign for 4 of
+        24 real fish when smoothing was toggled.
+
+        The counts survive that noise because it is symmetric -- it adds turns
+        to the left and right in equal measure, so the ratio stays near zero
+        instead of running away. Verified against left- and right-biased
+        synthetic circlers in tests/test_metric_correctness.py.
 
         Heading is computed frame-to-frame (diff of 1) for consistency.
         """
@@ -568,9 +626,6 @@ class MetricsCalculator:
             dheading = (dheading + np.pi) % (2 * np.pi) - np.pi
             dheading_deg = np.degrees(dheading)
 
-            # Angular velocity in degrees/second (absolute)
-            angular_velocity = np.abs(dheading_deg) * frame_rate
-
             # Only consider frames where the fish is actually moving
             # speed_series is len(trj), dheading_deg is len(trj)-2
             # Align: dheading[i] corresponds to the turn between step i and step i+1,
@@ -579,8 +634,6 @@ class MetricsCalculator:
             if min_len <= 0:
                 return self._empty_direction_metrics()
 
-            angular_vel_aligned = angular_velocity[:min_len]
-            dheading_aligned_abs = np.abs(dheading_deg[:min_len])
             dheading_signed = dheading_deg[:min_len]
             speed_aligned = speed_series[1:min_len + 1]
 
@@ -588,28 +641,21 @@ class MetricsCalculator:
             moving_mask = (
                 (speed_aligned > self.params.rest_speed_threshold) &
                 ~np.isnan(speed_aligned) &
-                ~np.isnan(angular_vel_aligned)
+                ~np.isnan(dheading_signed)
             )
 
-            n_moving = int(np.sum(moving_mask))
-            if n_moving == 0:
+            if int(np.sum(moving_mask)) == 0:
                 return self._empty_direction_metrics()
-
-            mean_angular_velocity = float(np.mean(angular_vel_aligned[moving_mask]))
-
-            # Erratic movements: large turns while moving
-            erratic_mask = (
-                moving_mask & (dheading_aligned_abs > self.params.erratic_turn_threshold)
-            )
-            erratic_count = int(np.sum(erratic_mask))
-            total_time_s = len(speed_series) / frame_rate
-            erratic_per_min = (erratic_count / total_time_s * 60) if total_time_s > 0 else 0.0
 
             # --- Turning bias / laterality ---
             # Convention: positive dheading = counterclockwise (left turn in standard coords)
             #             negative dheading = clockwise (right turn)
             # We define laterality index as (right - left) / total,
             # so CW-biased fish → positive, CCW-biased → negative.
+            #
+            # This holds only because the camera looks down at the tank. A
+            # bottom-mounted camera or a mirror rig inverts it, and nothing in
+            # the idtracker.ai file records the viewing geometry.
             signed_turns = dheading_signed[moving_mask]
             n_right = int(np.sum(signed_turns < 0))  # CW = right
             n_left = int(np.sum(signed_turns > 0))    # CCW = left
@@ -618,38 +664,28 @@ class MetricsCalculator:
                 (n_right - n_left) / n_turns if n_turns > 0 else 0.0
             )
 
-            # Cumulative heading change (only during movement)
-            cumulative_heading_deg = float(np.sum(signed_turns))
-
-            # Mean signed angular velocity (direction-preserving)
-            mean_signed_angular_vel = float(np.mean(signed_turns)) * frame_rate
-
             return {
-                'mean_angular_velocity_deg_s': mean_angular_velocity,
-                'erratic_movement_count': erratic_count,
-                'erratic_movements_per_min': erratic_per_min,
                 'laterality_index': float(laterality_index),
-                'cumulative_heading_change_deg': cumulative_heading_deg,
-                'mean_signed_angular_velocity_deg_s': mean_signed_angular_vel,
                 'n_right_turns': n_right,
                 'n_left_turns': n_left,
             }
 
         except Exception as e:
             print(f"Warning: Direction metrics failed: {e}")
-            return self._empty_direction_metrics()
+            return self._empty_direction_metrics(failed=True)
 
-    def _empty_direction_metrics(self) -> Dict[str, float]:
-        """Return NaN/zero direction metrics when calculation fails."""
+    def _empty_direction_metrics(self, failed: bool = False) -> Dict[str, Any]:
+        """Direction metrics when there is nothing to measure.
+
+        ``failed=True`` marks the difference between a fish that never moved --
+        a real result, correctly zero -- and a computation that raised. Without
+        it both look identical in the CSV (finding B10).
+        """
         return {
-            'mean_angular_velocity_deg_s': np.nan,
-            'erratic_movement_count': 0,
-            'erratic_movements_per_min': 0.0,
             'laterality_index': np.nan,
-            'cumulative_heading_change_deg': np.nan,
-            'mean_signed_angular_velocity_deg_s': np.nan,
-            'n_right_turns': 0,
-            'n_left_turns': 0,
+            'n_right_turns': np.nan if failed else 0,
+            'n_left_turns': np.nan if failed else 0,
+            '_failed': failed,
         }
 
     # =========================================================================
@@ -709,7 +745,7 @@ class MetricsCalculator:
 
         except Exception as e:
             print(f"Warning: Path straightness calculation failed: {e}")
-            return {'mean_path_straightness': np.nan}
+            return {'mean_path_straightness': np.nan, '_failed': True}
 
 
 def process_and_analyze_file(
@@ -739,6 +775,10 @@ def process_and_analyze_file(
 
     processor = TrajectoryProcessor(loaded_file, params)
     fish_list = processor.process_all_fish()
+
+    # Carry the exclusions onto the file so the exporter can emit a row for
+    # every fish the recording contained, not only the ones that survived.
+    loaded_file.excluded_fish = dict(processor.excluded)
 
     calculator = MetricsCalculator(params)
     for fish in fish_list:

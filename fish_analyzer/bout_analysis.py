@@ -34,6 +34,9 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional
 import numpy as np
 
+from .segments import (contiguous_tracked_segments, run_lengths,
+                       tracked_frame_count)
+
 
 @dataclass
 class BoutParameters:
@@ -78,7 +81,13 @@ class BoutParameters:
 
 @dataclass
 class Bout:
-    """A single detected swim bout."""
+    """A single detected swim bout.
+
+    ``censored`` marks a bout that ran into a tracking gap rather than ending
+    because the fish slowed down. Its measured duration and displacement are
+    lower bounds, not measurements, so it is excluded from the duration and
+    interval statistics — see BoutDetector.detect_bouts.
+    """
     start_frame: int
     end_frame: int          # exclusive
     duration_s: float
@@ -87,6 +96,8 @@ class Bout:
     displacement: float     # BL (straight line start to end)
     distance: float         # BL (total path)
     heading_change_deg: float  # signed degrees (+ = CCW/left, - = CW/right)
+    censored: bool = False
+    segment_index: int = 0  # which continuously-tracked stretch it came from
 
 
 @dataclass
@@ -114,62 +125,66 @@ class BoutDetector:
         """
         Detect bouts from position and speed arrays.
 
+        Bouts are found **inside stretches of continuous tracking** and never
+        across them. This module used to set NaN speed to 0.0, which made a
+        tracking gap read as though the fish had stopped: it split one bout in
+        two and inserted a fake pause between them. On the four supplied
+        recordings, 18-86% of exported inter-bout intervals were gaps rather
+        than behaviour (finding B4).
+
+        A bout that begins or ends at a gap is flagged ``censored`` — the fish
+        may well have kept swimming while untracked, so its duration is a lower
+        bound. Bouts at the very start or end of the recording are *not*
+        censored; running out of recording is a different thing from losing the
+        fish, and counting the first and last episodes is conventional.
+
         Parameters
         ----------
-        x, y : array of positions in calibrated units (BL)
-        speed : array of speed in BL/s (same length as x, or len-1)
+        x, y : array of positions in calibrated units (BL). NaN marks an
+            untracked frame; this is what the segment boundaries come from.
+        speed : array of speed in BL/s, forward-difference indexed so that
+            ``speed[i]`` covers frames ``[i, i+1)``. Length ``len(x) - 1``.
 
         Returns
         -------
-        List of Bout objects
+        List of Bout objects, in frame order.
         """
         threshold = self.params.speed_threshold
+        n_frames = len(x)
+        bouts: List[Bout] = []
 
-        # Speed may be 1 shorter than x/y (from np.diff)
-        n = len(speed)
+        segments = contiguous_tracked_segments(x, y)
+        for seg_index, (seg_start, seg_stop) in enumerate(segments):
+            # np.diff's speed[i] spans frames [i, i+1), so a segment's last
+            # frame carries no speed — its successor is the gap.
+            lo, hi = seg_start, seg_stop - 1
+            if hi <= lo:
+                continue
 
-        # Boolean mask: above threshold
-        is_active = speed > threshold
-        # NaN → not active
-        is_active[np.isnan(speed)] = False
+            seg_speed = speed[lo:hi]
+            is_active = np.isfinite(seg_speed) & (seg_speed > threshold)
 
-        # Find raw bout intervals [start, end)
-        intervals = self._find_intervals(is_active)
+            intervals = run_lengths(is_active)
+            intervals = self._merge_intervals(intervals,
+                                              self.params.merge_gap_frames)
+            intervals = [(s, e) for s, e in intervals
+                         if (e - s) >= self.params.min_bout_frames]
 
-        # Merge close intervals
-        intervals = self._merge_intervals(intervals, self.params.merge_gap_frames)
+            opens_at_recording_start = seg_start == 0
+            closes_at_recording_end = seg_stop == n_frames
 
-        # Filter by minimum duration
-        intervals = [(s, e) for s, e in intervals
-                      if (e - s) >= self.params.min_bout_frames]
-
-        # Compute per-bout metrics
-        bouts = []
-        for start, end in intervals:
-            bout = self._compute_bout_metrics(x, y, speed, start, end)
-            if bout is not None:
-                bouts.append(bout)
+            for s, e in intervals:
+                censored = (
+                    (s == 0 and not opens_at_recording_start)
+                    or (e == hi - lo and not closes_at_recording_end)
+                )
+                bout = self._compute_bout_metrics(x, y, speed, lo + s, lo + e)
+                if bout is not None:
+                    bout.censored = censored
+                    bout.segment_index = seg_index
+                    bouts.append(bout)
 
         return bouts
-
-    def _find_intervals(self, mask: np.ndarray) -> List[tuple]:
-        """Find contiguous True intervals in a boolean array."""
-        intervals = []
-        in_interval = False
-        start = 0
-
-        for i, val in enumerate(mask):
-            if val and not in_interval:
-                in_interval = True
-                start = i
-            elif not val and in_interval:
-                in_interval = False
-                intervals.append((start, i))
-
-        if in_interval:
-            intervals.append((start, len(mask)))
-
-        return intervals
 
     def _merge_intervals(self, intervals: List[tuple],
                          max_gap: int) -> List[tuple]:
@@ -240,7 +255,7 @@ class BoutDetector:
     def _compute_heading_change(self, x: np.ndarray, y: np.ndarray,
                                  start: int, end: int) -> float:
         """
-        Compute total signed heading change during a bout.
+        Compute total signed heading change during a bout, or NaN.
 
         For 1-frame bouts (where the bout itself has only two position samples,
         giving a single displacement vector with no internal turn to measure),
@@ -250,6 +265,15 @@ class BoutDetector:
 
         For longer bouts, sum frame-to-frame heading changes, skipping any
         step whose displacement is below _MIN_DISP (tracking noise).
+
+        RETURNS NaN WHEN THE TURN CANNOT BE MEASURED (finding B8).
+        There are five ways that happens: no room for the look-back window, a
+        tracking gap inside it, or every step too short to carry a direction.
+        All five used to return a literal 0.0, which then landed inside the
+        +/-5 degree "straight" dead zone in compute_summary -- so an
+        unmeasurable bout was reported as a measured straight one. On the four
+        supplied recordings that was 490 of 2,866 bouts: 77% of everything
+        counted as straight was a guard return rather than a measurement.
         """
         lookback = self.params.heading_lookback_frames
         _MIN_DISP = 0.05       # BL — below this, displacement direction is unreliable
@@ -264,7 +288,7 @@ class BoutDetector:
             post = min(len(x) - 1, end + lookback)
 
             if pre == start or post == end:
-                return 0.0
+                return float('nan')
 
             dx_pre = x[start] - x[pre]
             dy_pre = y[start] - y[pre]
@@ -272,10 +296,10 @@ class BoutDetector:
             dy_post = y[post] - y[end]
 
             if any(np.isnan([dx_pre, dy_pre, dx_post, dy_post])):
-                return 0.0
+                return float('nan')
             if (np.hypot(dx_pre, dy_pre) < _MIN_DISP
                     or np.hypot(dx_post, dy_post) < _MIN_DISP):
-                return 0.0
+                return float('nan')
 
             h_pre = np.arctan2(dy_pre, dx_pre)
             h_post = np.arctan2(dy_post, dx_post)
@@ -297,16 +321,16 @@ class BoutDetector:
             pre = max(0, start - lookback)
             post = min(len(x) - 1, end + lookback)
             if pre == start or post == end:
-                return 0.0
+                return float('nan')
             dx_pre = x[start] - x[pre]
             dy_pre = y[start] - y[pre]
             dx_post = x[post] - x[end]
             dy_post = y[post] - y[end]
             if any(np.isnan([dx_pre, dy_pre, dx_post, dy_post])):
-                return 0.0
+                return float('nan')
             if (np.hypot(dx_pre, dy_pre) < _MIN_DISP
                     or np.hypot(dx_post, dy_post) < _MIN_DISP):
-                return 0.0
+                return float('nan')
             h_pre = np.arctan2(dy_pre, dx_pre)
             h_post = np.arctan2(dy_post, dx_post)
             dh = (h_post - h_pre + np.pi) % (2 * np.pi) - np.pi
@@ -317,15 +341,44 @@ class BoutDetector:
         dh = (dh + np.pi) % (2 * np.pi) - np.pi
         return float(np.degrees(np.sum(dh)))
 
+    def inter_bout_intervals_s(self, bouts: List[Bout]) -> np.ndarray:
+        """Gaps between consecutive bouts, in seconds.
+
+        Only pairs that sit in the **same** continuously-tracked stretch count.
+        An interval spanning a tracking gap is not an inter-bout interval — it
+        is the tracker blinking — and including them is what made 18-86% of
+        this column tracking artefact (finding B4).
+        """
+        return np.array([
+            (nxt.start_frame - cur.end_frame) / self.frame_rate
+            for cur, nxt in zip(bouts, bouts[1:])
+            if cur.segment_index == nxt.segment_index
+        ])
+
     def compute_summary(self, bouts: List[Bout],
-                        total_duration_s: float) -> Dict[str, Any]:
-        """Compute summary statistics from a list of bouts."""
-        if not bouts:
+                        observed_duration_s: float) -> Dict[str, Any]:
+        """Summary statistics from a list of bouts.
+
+        Censored bouts (those cut short by a tracking gap) are excluded from
+        every duration, speed and shape statistic, because their measured
+        extent is a lower bound rather than a measurement. They are reported
+        as their own count so the reader can see how much was set aside.
+
+        ``observed_duration_s`` is tracked time, not wall-clock: a bout rate
+        must be per unit of time the fish was actually visible, or it silently
+        reports worse-tracked recordings as less active.
+        """
+        measurable = [b for b in bouts if not b.censored]
+        n_censored = len(bouts) - len(measurable)
+
+        if not measurable:
             return {
                 'bout_count': 0,
+                'bout_censored': n_censored,
                 'bout_rate_per_min': 0.0,
                 'bout_duration_median_ms': np.nan,
                 'bout_duration_iqr_ms': (np.nan, np.nan),
+                'ibi_n': 0,
                 'ibi_median_ms': np.nan,
                 'ibi_iqr_ms': (np.nan, np.nan),
                 'bout_peak_speed_median': np.nan,
@@ -337,43 +390,46 @@ class BoutDetector:
                 'bout_n_left': 0,
                 'bout_n_right': 0,
                 'bout_n_straight': 0,
+                'bout_n_heading_unmeasurable': 0,
             }
 
-        durations_ms = np.array([b.duration_s * 1000 for b in bouts])
-        peak_speeds = np.array([b.peak_speed for b in bouts])
-        displacements = np.array([b.displacement for b in bouts])
-        distances = np.array([b.distance for b in bouts])
-        heading_changes = np.array([b.heading_change_deg for b in bouts])
+        durations_ms = np.array([b.duration_s * 1000 for b in measurable])
+        peak_speeds = np.array([b.peak_speed for b in measurable])
+        displacements = np.array([b.displacement for b in measurable])
+        distances = np.array([b.distance for b in measurable])
+        heading_changes = np.array([b.heading_change_deg for b in measurable])
 
-        # Inter-bout intervals
-        if len(bouts) > 1:
-            ibis_ms = np.array([
-                (bouts[i + 1].start_frame - bouts[i].end_frame)
-                / self.frame_rate * 1000
-                for i in range(len(bouts) - 1)
-            ])
-        else:
-            ibis_ms = np.array([])
+        # Inter-bout intervals, from the full list so a censored bout can still
+        # bound an interval — but never across a tracking gap.
+        ibis_ms = self.inter_bout_intervals_s(bouts) * 1000
 
-        # Laterality from per-bout heading changes
-        # Use a dead zone (5°) to avoid counting noise as a turn
+        # Laterality from per-bout heading changes.
+        # A 5-degree dead zone keeps noise from counting as a turn. NaN means
+        # the turn could not be measured at all, which is neither a turn nor a
+        # straight line, so those bouts are counted separately rather than
+        # being swept into n_straight (finding B8).
         dead_zone = 5.0
-        n_right = int(np.sum(heading_changes < -dead_zone))
-        n_left = int(np.sum(heading_changes > dead_zone))
-        n_straight = int(np.sum(np.abs(heading_changes) <= dead_zone))
+        measured = heading_changes[np.isfinite(heading_changes)]
+        n_unmeasurable = int(len(heading_changes) - len(measured))
+        n_right = int(np.sum(measured < -dead_zone))
+        n_left = int(np.sum(measured > dead_zone))
+        n_straight = int(np.sum(np.abs(measured) <= dead_zone))
         n_turns = n_right + n_left
         laterality_index = (
             (n_right - n_left) / n_turns if n_turns > 0 else 0.0
         )
 
         return {
-            'bout_count': len(bouts),
-            'bout_rate_per_min': len(bouts) / total_duration_s * 60 if total_duration_s > 0 else 0.0,
+            'bout_count': len(measurable),
+            'bout_censored': n_censored,
+            'bout_rate_per_min': (len(measurable) / observed_duration_s * 60
+                                  if observed_duration_s > 0 else 0.0),
             'bout_duration_median_ms': float(np.median(durations_ms)),
             'bout_duration_iqr_ms': (
                 float(np.percentile(durations_ms, 25)),
                 float(np.percentile(durations_ms, 75)),
             ),
+            'ibi_n': int(len(ibis_ms)),
             'ibi_median_ms': float(np.median(ibis_ms)) if len(ibis_ms) > 0 else np.nan,
             'ibi_iqr_ms': (
                 float(np.percentile(ibis_ms, 25)) if len(ibis_ms) > 0 else np.nan,
@@ -386,11 +442,14 @@ class BoutDetector:
             ),
             'bout_displacement_median': float(np.median(displacements)),
             'bout_distance_median': float(np.median(distances)),
-            'bout_heading_change_mean_abs_deg': float(np.mean(np.abs(heading_changes))),
+            'bout_heading_change_mean_abs_deg': (
+                float(np.mean(np.abs(measured))) if len(measured) else np.nan
+            ),
             'bout_laterality_index': float(laterality_index),
             'bout_n_left': n_left,
             'bout_n_right': n_right,
             'bout_n_straight': n_straight,
+            'bout_n_heading_unmeasurable': n_unmeasurable,
         }
 
 
@@ -410,8 +469,6 @@ def analyze_bouts_for_file(loaded_file, params: BoutParameters) -> List[BoutResu
     frame_rate = loaded_file.calibration.frame_rate
     scale = loaded_file.calibration.scale_factor
     n_fish = loaded_file.n_fish
-    n_frames = loaded_file.n_frames
-    total_duration_s = n_frames / frame_rate
 
     detector = BoutDetector(params, frame_rate)
     all_results = []
@@ -428,20 +485,14 @@ def analyze_bouts_for_file(loaded_file, params: BoutParameters) -> List[BoutResu
         step_lengths = np.sqrt(dx ** 2 + dy ** 2)
         speed = step_lengths * frame_rate  # units/s
 
-        # Handle NaN
-        speed[np.isnan(speed)] = 0.0
+        # NaN speed stays NaN. It used to be zeroed here, which told the
+        # detector the fish had stopped when in fact the tracker had lost it
+        # (finding B4); detect_bouts now excludes those frames by segment.
+        observed_duration_s = tracked_frame_count(x, y) / frame_rate
 
         bouts = detector.detect_bouts(x, y, speed)
-        summary = detector.compute_summary(bouts, total_duration_s)
-
-        # Compute IBIs
-        if len(bouts) > 1:
-            ibis = np.array([
-                (bouts[i + 1].start_frame - bouts[i].end_frame) / frame_rate
-                for i in range(len(bouts) - 1)
-            ])
-        else:
-            ibis = np.array([])
+        summary = detector.compute_summary(bouts, observed_duration_s)
+        ibis = detector.inter_bout_intervals_s(bouts)
 
         label = loaded_file.metadata.identity_labels[fish_idx]
         result = BoutResults(

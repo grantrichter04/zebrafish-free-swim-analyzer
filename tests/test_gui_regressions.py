@@ -338,3 +338,74 @@ def test_inspector_rebuild_flag_is_independent_of_the_time_panel(app):
     # _inspector_update_fast clears it only after actually rebuilding, which
     # needs a selected file; with none selected it returns early.
     assert app._insp_needs_rebuild is True
+
+
+# ---------------------------------------------------------------------------
+# Audit B Phase 0 — eight noise-dominated metrics were withdrawn
+# ---------------------------------------------------------------------------
+
+def test_analysis_tab_renders_after_the_metric_withdrawal(app, synthetic_npy):
+    """Drive the summary tables, the comparison figure and the Methods panel.
+
+    Removing columns from a treeview is the classic way to get a header list
+    and a row tuple out of step, which raises only once real rows are inserted
+    -- i.e. never during a construction-only smoke test.
+    """
+    from fish_analyzer.file_loading import TrajectoryFileLoader
+    from fish_analyzer.processing import (ProcessingParameters,
+                                          process_and_analyze_file)
+
+    loaded = TrajectoryFileLoader.load_file(synthetic_npy)
+    loaded.processed_data = process_and_analyze_file(
+        loaded, ProcessingParameters.default_for_fish())
+    app.loaded_files[loaded.nickname] = loaded
+    names = [loaded.nickname]
+
+    app._update_analysis_summary(names)
+    app._plot_behavioral_comparison(names)
+    app._update_analysis_methods_text(names)
+    app.root.update_idletasks()
+
+    methods = app.analysis_methods_text.get("1.0", "end")
+    for withdrawn in ("Burst accel threshold", "Erratic turn threshold",
+                      "Angular velocity was computed", "Burst events were detected"):
+        assert withdrawn not in methods
+    assert "deliberately not reported" in methods
+
+
+def test_shoaling_tab_labels_axes_with_the_files_own_unit(app, synthetic_npy):
+    """Audit B7: axis labels and table headers were hardcoded "BL" while the
+    calculator ignored the file's calibration, so a cm-calibrated session was
+    plotted against a BL axis."""
+    from fish_analyzer.data_structures import CalibrationSettings
+    from fish_analyzer.file_loading import TrajectoryFileLoader
+    from fish_analyzer.shoaling import ShoalingCalculator, ShoalingParameters
+
+    loaded = TrajectoryFileLoader.load_file(
+        synthetic_npy,
+        calibration=CalibrationSettings.from_physical_measurement(
+            10.0, "cm", 30.0))
+    results = {loaded.nickname:
+               ShoalingCalculator(loaded, ShoalingParameters(30)).calculate()}
+    app.loaded_files[loaded.nickname] = loaded
+
+    app._display_shoaling_comparison(results)
+    app._plot_nnd_comparison(results)
+    app._plot_hull_comparison(results)
+    app.root.update_idletasks()
+
+    from fish_analyzer.gui.shoaling_tab import _unit
+    assert _unit(results) == "cm"
+
+
+def test_mixed_calibrations_are_labelled_as_such_rather_than_guessed():
+    """Two files calibrated differently cannot share an axis; saying so beats
+    picking one of them."""
+    from fish_analyzer.gui.shoaling_tab import _unit
+
+    class R:
+        def __init__(self, u):
+            self.unit_name = u
+
+    assert _unit({"a": R("cm"), "b": R("cm")}) == "cm"
+    assert _unit({"a": R("cm"), "b": R("BL")}) == "mixed units"

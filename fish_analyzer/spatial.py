@@ -95,8 +95,8 @@ class ArenaDefinition:
             vertices_bl=self.vertices_bl.copy()
         )
     
-    def get_normalized_vertices(self, video_width: int, video_height: int, 
-                                 body_length: float) -> np.ndarray:
+    def get_normalized_vertices(self, video_width: int, video_height: int,
+                                 pixels_per_unit: float) -> np.ndarray:
         """
         Get vertices as normalized coordinates (0-1) relative to video dimensions.
         Useful for applying same arena shape to different files.
@@ -107,17 +107,19 @@ class ArenaDefinition:
             Video width in pixels
         video_height : int
             Video height in pixels
-        body_length : float
-            Body length in pixels for BL conversion
+        pixels_per_unit : float
+            Pixels per calibrated unit — calibration.pixels_per_unit, which is
+            body length when calibrated in BL. Was named body_length, which
+            was only true for the default calibration.
             
         Returns
         -------
         np.ndarray
             Normalized vertices (0-1 range)
         """
-        pixels_to_bl = 1.0 / body_length
-        width_bl = video_width * pixels_to_bl
-        height_bl = video_height * pixels_to_bl
+        pixels_to_unit = 1.0 / pixels_per_unit
+        width_bl = video_width * pixels_to_unit
+        height_bl = video_height * pixels_to_unit
         
         normalized = np.zeros_like(self.vertices_bl)
         normalized[:, 0] = self.vertices_bl[:, 0] / width_bl
@@ -125,9 +127,9 @@ class ArenaDefinition:
         return normalized
     
     @classmethod
-    def from_normalized(cls, normalized_vertices: np.ndarray, 
+    def from_normalized(cls, normalized_vertices: np.ndarray,
                         video_width: int, video_height: int,
-                        body_length: float) -> 'ArenaDefinition':
+                        pixels_per_unit: float) -> 'ArenaDefinition':
         """
         Create arena from normalized (0-1) coordinates.
         
@@ -139,24 +141,24 @@ class ArenaDefinition:
             Video width in pixels
         video_height : int  
             Video height in pixels
-        body_length : float
-            Body length in pixels
+        pixels_per_unit : float
+            Pixels per calibrated unit — calibration.pixels_per_unit.
             
         Returns
         -------
         ArenaDefinition
             New arena definition
         """
-        pixels_to_bl = 1.0 / body_length
-        width_bl = video_width * pixels_to_bl
-        height_bl = video_height * pixels_to_bl
+        pixels_to_unit = 1.0 / pixels_per_unit
+        width_bl = video_width * pixels_to_unit
+        height_bl = video_height * pixels_to_unit
         
         vertices_bl = np.zeros_like(normalized_vertices)
         vertices_bl[:, 0] = normalized_vertices[:, 0] * width_bl
         vertices_bl[:, 1] = normalized_vertices[:, 1] * height_bl
         
         # Convert to pixels
-        vertices_pixels = vertices_bl / pixels_to_bl
+        vertices_pixels = vertices_bl / pixels_to_unit
         vertices_pixels[:, 1] = video_height - vertices_pixels[:, 1]
         
         return cls(vertices_pixels=vertices_pixels, vertices_bl=vertices_bl)
@@ -172,9 +174,14 @@ class ThigmotaxisResults:
     
     ENHANCED: Now includes per-fish time series data for individual fish plotting.
     """
-    # Per-fish overall results
-    time_in_border_pct: np.ndarray      # Shape: (n_fish,) - % time in border zone
-    time_in_center_pct: np.ndarray      # Shape: (n_fish,) - % time in center zone
+    # Per-fish overall results.
+    # border + center == 100 for every fish, because both are percentages of
+    # the frames in which the fish was *inside the arena*. Positions outside
+    # the polygon used to sit in the denominator only, silently deflating both
+    # numbers with nothing in the export to say so (finding B9).
+    time_in_border_pct: np.ndarray      # Shape: (n_fish,) - % of in-arena time in border
+    time_in_center_pct: np.ndarray      # Shape: (n_fish,) - % of in-arena time in center
+    outside_arena_pct: np.ndarray       # Shape: (n_fish,) - % of tracked frames outside
 
     # Time series (sampled) - GROUP level
     timestamps: np.ndarray              # Time in seconds
@@ -297,8 +304,11 @@ class ThigmotaxisResults:
             "Per-Fish Time in Border Zone:",
         ]
 
-        for i, (border, center) in enumerate(zip(self.time_in_border_pct, self.time_in_center_pct)):
-            lines.append(f"  Fish {i}: {border:.1f}% border, {center:.1f}% center")
+        for i, (border, center, outside) in enumerate(zip(
+                self.time_in_border_pct, self.time_in_center_pct,
+                self.outside_arena_pct)):
+            note = f"  ({outside:.1f}% of tracked frames outside the arena)" if outside > 0 else ""
+            lines.append(f"  Fish {i}: {border:.1f}% border, {center:.1f}% center{note}")
 
         lines.append("")
         lines.append(f"Group mean: {self.mean_pct_in_border:.1f}% ± {self.std_pct_in_border:.1f}%")
@@ -340,8 +350,12 @@ class ThigmotaxisCalculator:
         self.border_pct = border_pct
         self.sample_interval = sample_interval
 
+        # Calibrated units, not a hardcoded 1/body_length (finding B7). The
+        # arena polygon's vertices_bl is built with the same scale factor in
+        # the GUI, so zone assignment stays self-consistent under any unit.
         self.body_length_pixels = loaded_file.metadata.body_length
-        self.pixels_to_bl = 1.0 / self.body_length_pixels
+        self.pixels_to_unit = loaded_file.calibration.scale_factor
+        self.unit_name = loaded_file.calibration.unit_name
 
         if not SHAPELY_AVAILABLE:
             raise RuntimeError(
@@ -413,8 +427,8 @@ class ThigmotaxisCalculator:
                     continue
 
                 # Convert to BL and flip y
-                x_bl = positions_pixels[fish_idx, 0] * self.pixels_to_bl
-                y_bl = (self.file.metadata.video_height - positions_pixels[fish_idx, 1]) * self.pixels_to_bl
+                x_bl = positions_pixels[fish_idx, 0] * self.pixels_to_unit
+                y_bl = (self.file.metadata.video_height - positions_pixels[fish_idx, 1]) * self.pixels_to_unit
 
                 point = Point(x_bl, y_bl)
                 frames_valid[fish_idx] += 1
@@ -440,11 +454,14 @@ class ThigmotaxisCalculator:
             if np.any(valid_mask):
                 fish_in_border_per_sample[sample_idx] = np.sum(fish_states[valid_mask])
 
-        # Warn if significant data falls outside the arena
+        # Warn if significant data falls outside the arena.
+        # frames_valid already includes the out-of-arena frames, so the old
+        # denominator (valid + outside) double-counted them and understated
+        # the problem: a fish 50% outside the polygon was reported at 33.3%.
         total_outside = np.sum(frames_outside_arena)
         total_valid = np.sum(frames_valid)
         if total_valid > 0:
-            outside_pct = (total_outside / (total_valid + total_outside)) * 100
+            outside_pct = (total_outside / total_valid) * 100
             if outside_pct > 5:
                 import warnings
                 warnings.warn(
@@ -456,14 +473,24 @@ class ThigmotaxisCalculator:
             elif outside_pct > 0:
                 print(f"  Note: {outside_pct:.1f}% of positions outside arena (minor - likely tracking noise)")
 
-        # Calculate overall percentages
+        # Calculate overall percentages.
+        # Border and center are shares of the time the fish was *in the arena*,
+        # so they sum to 100. The share of tracked frames that fell outside the
+        # polygon is reported separately instead of silently deflating both.
         time_in_border_pct = np.zeros(n_fish)
         time_in_center_pct = np.zeros(n_fish)
+        outside_arena_pct = np.zeros(n_fish)
 
         for i in range(n_fish):
+            in_arena = frames_in_border[i] + frames_in_center[i]
+            if in_arena > 0:
+                time_in_border_pct[i] = (frames_in_border[i] / in_arena) * 100
+                time_in_center_pct[i] = (frames_in_center[i] / in_arena) * 100
+            else:
+                time_in_border_pct[i] = np.nan
+                time_in_center_pct[i] = np.nan
             if frames_valid[i] > 0:
-                time_in_border_pct[i] = (frames_in_border[i] / frames_valid[i]) * 100
-                time_in_center_pct[i] = (frames_in_center[i] / frames_valid[i]) * 100
+                outside_arena_pct[i] = (frames_outside_arena[i] / frames_valid[i]) * 100
 
         # Calculate group time series percentage using only fish with valid data
         pct_in_border_per_sample = np.zeros(n_samples)
@@ -476,14 +503,15 @@ class ThigmotaxisCalculator:
                     np.sum(fish_states[valid_mask]) / n_valid_at_sample
                 ) * 100
 
-        mean_pct = np.mean(time_in_border_pct)
-        std_pct = np.std(time_in_border_pct)
+        mean_pct = float(np.nanmean(time_in_border_pct))
+        std_pct = float(np.nanstd(time_in_border_pct))
 
         print(f"  Mean time in border: {mean_pct:.1f}% +/- {std_pct:.1f}%")
 
         return ThigmotaxisResults(
             time_in_border_pct=time_in_border_pct,
             time_in_center_pct=time_in_center_pct,
+            outside_arena_pct=outside_arena_pct,
             timestamps=timestamps,
             frame_indices=sample_frames,
             fish_in_border_per_sample=fish_in_border_per_sample,
@@ -529,11 +557,12 @@ class HeatmapGenerator:
         self.arena = arena
 
         self.body_length_pixels = loaded_file.metadata.body_length
-        self.pixels_to_bl = 1.0 / self.body_length_pixels
+        self.pixels_to_unit = loaded_file.calibration.scale_factor
+        self.unit_name = loaded_file.calibration.unit_name
 
-        # Calculate bounds in body lengths
-        self.width_bl = loaded_file.metadata.video_width * self.pixels_to_bl
-        self.height_bl = loaded_file.metadata.video_height * self.pixels_to_bl
+        # Calculate bounds in calibrated units
+        self.width_bl = loaded_file.metadata.video_width * self.pixels_to_unit
+        self.height_bl = loaded_file.metadata.video_height * self.pixels_to_unit
 
     def generate_combined_heatmap(self) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
@@ -555,8 +584,8 @@ class HeatmapGenerator:
             positions = self.file.trajectories[:, fish_idx, :]
             valid_mask = ~np.isnan(positions[:, 0])
 
-            x_bl = positions[valid_mask, 0] * self.pixels_to_bl
-            y_bl = (self.file.metadata.video_height - positions[valid_mask, 1]) * self.pixels_to_bl
+            x_bl = positions[valid_mask, 0] * self.pixels_to_unit
+            y_bl = (self.file.metadata.video_height - positions[valid_mask, 1]) * self.pixels_to_unit
 
             all_x.extend(x_bl)
             all_y.extend(y_bl)
@@ -596,8 +625,8 @@ class HeatmapGenerator:
         positions = self.file.trajectories[:, fish_idx, :]
         valid_mask = ~np.isnan(positions[:, 0])
 
-        x_bl = positions[valid_mask, 0] * self.pixels_to_bl
-        y_bl = (self.file.metadata.video_height - positions[valid_mask, 1]) * self.pixels_to_bl
+        x_bl = positions[valid_mask, 0] * self.pixels_to_unit
+        y_bl = (self.file.metadata.video_height - positions[valid_mask, 1]) * self.pixels_to_unit
 
         heatmap, x_edges, y_edges = np.histogram2d(
             x_bl, y_bl,

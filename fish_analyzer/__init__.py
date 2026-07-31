@@ -3,7 +3,7 @@ fish_analyzer - A modular tool for analyzing fish trajectory data from idtracker
 
 This package provides tools for:
 - Loading and calibrating trajectory data
-- Individual behavior metrics (speed, distance, freezing, bursting, path straightness)
+- Individual behavior metrics (speed, distance, freezing, path straightness, laterality)
 - Bout analysis (swim bout detection, laterality, per-bout metrics)
 - Shoaling analysis (NND, IID, convex hull)
 - Spatial analysis (thigmotaxis, heatmaps)
