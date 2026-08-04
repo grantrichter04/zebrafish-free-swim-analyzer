@@ -15,6 +15,7 @@ The interactive frame viewer has been moved to inspector_tab.py.
 
 from typing import Dict, Any
 from pathlib import Path
+import traceback
 import numpy as np
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
@@ -25,6 +26,19 @@ import matplotlib.pyplot as plt
 from ..shoaling import ShoalingParameters, ShoalingResults, ShoalingCalculator
 from ..export import export_shoaling_metrics_csv, export_shoaling_summary_csv
 from .utils import smooth_time_series, create_sortable_treeview, embed_figure_with_toolbar
+
+
+
+def _unit(all_results: Dict[str, Any]) -> str:
+    """The calibrated unit shared by these results, or a warning label.
+
+    Axis labels used to be hardcoded "BL" while the calculator ignored the
+    file's calibration entirely, so a cm-calibrated session was plotted with a
+    BL axis (finding B7). Files with different calibrations cannot share an
+    axis at all, and saying so is better than picking one.
+    """
+    units = {r.unit_name for r in all_results.values()}
+    return units.pop() if len(units) == 1 else "mixed units"
 
 
 class ShoalingTabMixin:
@@ -109,11 +123,13 @@ class ShoalingTabMixin:
                                           expand=True)
         scrollbar.config(command=self.shoaling_files_listbox.yview)
 
-        tk.Button(
+        # Kept as an attribute so it can be disabled while a run is in flight.
+        self.run_shoaling_button = tk.Button(
             parent, text="Run Shoaling Analysis",
             command=self._run_shoaling_analysis,
             bg="lightgreen", font=("Arial", 12, "bold"), height=2
-        ).pack(fill="x", padx=10, pady=10)
+        )
+        self.run_shoaling_button.pack(fill="x", padx=10, pady=10)
 
         tk.Button(
             parent, text="Export Shoaling Results to CSV",
@@ -235,7 +251,10 @@ class ShoalingTabMixin:
             return
 
         all_results = {}
-        for filename in selected_files:
+        failed = []
+        for filename in self._with_progress(selected_files,
+                                            label="Shoaling analysis",
+                                            button=self.run_shoaling_button):
             loaded_file = self.loaded_files[filename]
             try:
                 calculator = ShoalingCalculator(loaded_file, params)
@@ -243,14 +262,16 @@ class ShoalingTabMixin:
                 loaded_file.shoaling_results = results
                 all_results[filename] = results
             except Exception as e:
-                messagebox.showwarning("Analysis Warning",
-                                        f"Failed '{filename}':\n{e}")
-                import traceback
+                # Drop any earlier result rather than leaving one computed
+                # under different parameters attached and exportable.
+                loaded_file.shoaling_results = None
+                failed.append(f"{filename}: {e}")
+                print(f"[FAILED] Shoaling analysis for {filename}: {e}")
                 traceback.print_exc()
 
         if not all_results:
-            messagebox.showerror("Analysis Failed",
-                                  "Could not analyze any files.")
+            self._report_batch_outcome("Shoaling Analysis",
+                                       len(selected_files), [], failed, [])
             return
 
         self._display_shoaling_comparison(all_results)
@@ -263,11 +284,15 @@ class ShoalingTabMixin:
         if hasattr(self, '_inspector_rebuild_needed'):
             self._inspector_rebuild_needed()
 
-        messagebox.showinfo(
-            "Analysis Complete",
-            f"Shoaling analysis complete for {len(all_results)} file(s).\n\n"
-            "Use the Video Inspector tab to visualize overlays."
-        )
+        if failed:
+            self._report_batch_outcome("Shoaling Analysis", len(selected_files),
+                                       list(all_results.keys()), failed, [])
+        else:
+            messagebox.showinfo(
+                "Analysis Complete",
+                f"Shoaling analysis complete for {len(all_results)} file(s).\n\n"
+                "Use the Video Inspector tab to visualize overlays."
+            )
 
     def _display_shoaling_comparison(self,
                                       all_results: Dict[str, ShoalingResults]):
@@ -324,11 +349,11 @@ class ShoalingTabMixin:
                                                effective_fps)
 
             ax.plot(time_minutes, nnd_data, color=color, linewidth=2,
-                    label=f'{filename} ({results.mean_nnd:.2f} BL)',
+                    label=f'{filename} ({results.mean_nnd:.2f} {results.unit_name})',
                     alpha=0.9)
 
         ax.set_xlabel('Time (minutes)', fontsize=12)
-        ax.set_ylabel('Mean Nearest Neighbor Distance (BL)', fontsize=12)
+        ax.set_ylabel(f'Mean Nearest Neighbor Distance ({_unit(all_results)})', fontsize=12)
         ax.set_title('NND Comparison Over Time', fontsize=14,
                       fontweight='bold')
         ax.legend(loc='best', fontsize=9)
@@ -366,11 +391,11 @@ class ShoalingTabMixin:
                                                effective_fps)
 
             ax.plot(time_minutes, iid_data, color=color, linewidth=2,
-                    label=f'{filename} ({results.mean_iid:.2f} BL)',
+                    label=f'{filename} ({results.mean_iid:.2f} {results.unit_name})',
                     alpha=0.9)
 
         ax.set_xlabel('Time (minutes)', fontsize=12)
-        ax.set_ylabel('Mean Inter-Individual Distance (BL)', fontsize=12)
+        ax.set_ylabel(f'Mean Inter-Individual Distance ({_unit(all_results)})', fontsize=12)
         ax.set_title('IID (Group Cohesion) Over Time', fontsize=14,
                       fontweight='bold')
         ax.legend(loc='best', fontsize=9)

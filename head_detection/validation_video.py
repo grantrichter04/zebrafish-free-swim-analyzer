@@ -416,7 +416,7 @@ for fid in range(1, n_fish + 1):
     fish_max_count[fid] = max(int(cum_l[-1]) + int(cum_r[-1]), 1)
 
     dur = n_frames / fps
-    print(f"    Turns — left: {counts['left']}  right: {counts['right']}  "
+    print(f"    Turns - left: {counts['left']}  right: {counts['right']}  "
           f"total: {counts['total']}  ({counts['total']/dur*60:.1f}/min)")
 
 

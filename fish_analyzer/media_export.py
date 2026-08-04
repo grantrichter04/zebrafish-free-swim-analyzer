@@ -1,0 +1,343 @@
+"""
+fish_analyzer/media_export.py
+=============================
+Writing Video Inspector overlays out as images and clips.
+
+No tkinter: the GUI supplies settings and a progress callback, this module
+does the work. Frames are RGB uint8 throughout; only the sinks convert to BGR,
+because that is what cv2.VideoWriter and cv2.imwrite expect.
+"""
+from dataclasses import dataclass
+from pathlib import Path
+
+import numpy as np
+
+from .overlay_render import compose_frame, fish_colors
+
+try:
+    import cv2
+    CV2_AVAILABLE = True
+except ImportError:
+    CV2_AVAILABLE = False
+
+
+class CodecUnavailable(RuntimeError):
+    """No usable video encoder. Raised instead of leaving a 0-byte file."""
+
+
+def save_frame_png(rgb, path):
+    """Write an RGB frame as a PNG. Raises IOError if cv2 refuses."""
+    ok = cv2.imwrite(str(path), cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
+    if not ok:
+        raise IOError(f"cv2.imwrite refused to write {path}")
+
+
+class PngSequenceSink:
+    """Numbered lossless frames. Cannot fail on a missing codec."""
+
+    def __init__(self, directory, fps, size):
+        self.path = Path(directory)
+        self.path.mkdir(parents=True, exist_ok=True)
+        self.fps = fps
+        self.size = size
+        self._n = 0
+
+    def write(self, rgb):
+        out = self.path / f"frame_{self._n:06d}.png"
+        save_frame_png(rgb, out)
+        self._n += 1
+
+    def close(self):
+        pass
+
+    def discard_partial(self):
+        """Completed PNGs are individually valid, so cancelling keeps them."""
+
+
+class Mp4Sink:
+    """MP4 via mp4v, falling back to MJPG/.avi when the encoder will not open.
+
+    OpenCV signals a missing codec by returning a writer whose isOpened() is
+    False and then silently accepting writes, which leaves an empty file. Every
+    codec is checked before use.
+    """
+
+    CODECS = [("mp4v", ".mp4"), ("MJPG", ".avi")]
+
+    def __init__(self, path, fps, size):
+        path = Path(path)
+        self.fps = fps
+        self.size = size
+        self._writer = None
+        self.path = None
+        self.fourcc = None
+
+        for fourcc, ext in self.CODECS:
+            candidate = path.with_suffix(ext)
+            writer = cv2.VideoWriter(
+                str(candidate), cv2.VideoWriter_fourcc(*fourcc), fps, size
+            )
+            if writer.isOpened():
+                self._writer = writer
+                self.path = candidate
+                self.fourcc = fourcc
+                return
+            writer.release()
+            if candidate.exists() and candidate.stat().st_size == 0:
+                candidate.unlink()
+
+        raise CodecUnavailable(
+            "No usable video encoder was found (tried "
+            + ", ".join(c for c, _ in self.CODECS)
+            + "). Export as a PNG sequence instead."
+        )
+
+    def write(self, rgb):
+        self._writer.write(cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
+
+    def close(self):
+        if self._writer is not None:
+            self._writer.release()
+            self._writer = None
+
+    def discard_partial(self):
+        """A truncated MP4 is unplayable, so a cancelled export removes it."""
+        self.close()
+        if self.path is not None and self.path.exists():
+            self.path.unlink()
+
+
+class ExportFrameSource:
+    """Sequential frame reader owned by one export.
+
+    Deliberately not VideoFrameReader: that class runs a background preload
+    thread which calls cap.set() and cap.read() on the same capture the
+    foreground uses, with only the frame cache locked. It also copies every
+    frame twice through an LRU that a single forward pass cannot benefit from.
+
+    Measured on a 1288x964 MJPG session: 9.9 ms/frame reading sequentially
+    against 64.7 ms/frame when seeking per frame.
+    """
+
+    def __init__(self, video_path, start_frame=0):
+        self.cap = cv2.VideoCapture(str(video_path))
+        if not self.cap.isOpened():
+            raise ValueError(f"Could not open video file: {video_path}")
+        if start_frame:
+            self.cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+
+    def read(self):
+        """Next frame as RGB uint8, or None at end of stream."""
+        ok, frame = self.cap.read()
+        if not ok:
+            return None
+        return cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+    def close(self):
+        if self.cap is not None:
+            self.cap.release()
+            self.cap = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+
+
+def cursor_x(t, x0, px_per_unit):
+    """Pixel column for time `t` on a linear axis.
+
+    Kept as a function of the transform rather than of a matplotlib axes so it
+    can be tested without rendering anything.
+    """
+    return int(round(x0 + t * px_per_unit))
+
+
+class TimeStrip:
+    """The time panel rasterised once, with the cursor stamped per frame.
+
+    Valid only while the axes are fixed for the whole session, which is true of
+    the NND, IID and Hull panels (xlim is set once at rebuild) and false of the
+    Bout panel, which scrolls its xlim every frame - use ScrollingStrip there.
+
+    Rendering the figure per frame costs 50-100 ms; this costs a memcpy and a
+    line, which is the same trick the live view uses when it blits.
+    """
+
+    def __init__(self, figure, axes, target_width=None, time_scale=1.0,
+                 color=(255, 60, 60), width=2):
+        """
+        time_scale : float
+            Data units per second on this axis. The inspector's NND, IID and
+            Hull panels are plotted against minutes, so they need 1/60; an axis
+            already in seconds needs 1.0. Getting this wrong does not fail
+            loudly - the cursor is simply clamped to an edge and never appears
+            to move.
+        """
+        self._time_scale = time_scale
+        figure.canvas.draw()
+        rgba = np.asarray(figure.canvas.buffer_rgba())
+        self._pristine = rgba[:, :, :3].copy()
+        self.color = color
+        self.width = width
+
+        x_at_0 = axes.transData.transform((0.0, 0.0))[0]
+        x_at_1 = axes.transData.transform((1.0, 0.0))[0]
+        self._x0 = x_at_0
+        self._px_per_unit = x_at_1 - x_at_0
+
+        # The figure is sized in inches, so its raster width has nothing to do
+        # with the video width. Scale it to match, and scale the cursor
+        # mapping with it, or the strip will not fit the output canvas.
+        self._scale = 1.0
+        if target_width is not None and target_width != self._pristine.shape[1]:
+            self._scale = target_width / self._pristine.shape[1]
+            new_h = max(1, int(round(self._pristine.shape[0] * self._scale)))
+            self._pristine = cv2.resize(self._pristine,
+                                        (target_width, new_h),
+                                        interpolation=cv2.INTER_AREA)
+        self._buffer = self._pristine.copy()
+
+    @property
+    def height(self):
+        return self._pristine.shape[0]
+
+    @property
+    def width_px(self):
+        return self._pristine.shape[1]
+
+    def at(self, t):
+        """The strip with the cursor at time `t`, in seconds."""
+        np.copyto(self._buffer, self._pristine)
+        x = cursor_x(t * self._time_scale, self._x0 * self._scale,
+                     self._px_per_unit * self._scale)
+        x = max(0, min(self._buffer.shape[1] - 1, x))
+        cv2.line(self._buffer, (x, 0), (x, self._buffer.shape[0]),
+                 self.color, self.width)
+        return self._buffer
+
+
+class ScrollingStrip:
+    """Time panel re-rendered per frame, for panels whose axes move.
+
+    The Bout panel resets xlim to a window around the current frame on every
+    update, so a strip rasterised once cannot represent it - cropping a
+    pre-rendered image would drag the y-axis out of frame. This costs a full
+    matplotlib draw per frame, which is why the export dialog warns first.
+    """
+
+    def __init__(self, figure, axes, window_s, total_s, target_width=None,
+                 color=(255, 60, 60), width=2):
+        self._figure = figure
+        self._axes = axes
+        self._window_s = window_s
+        self._total_s = total_s
+        self._target_width = target_width
+        self.color = color
+        self.width = width
+
+        figure.canvas.draw()
+        raster = np.asarray(figure.canvas.buffer_rgba())
+        self._scale = 1.0
+        if target_width is not None and target_width != raster.shape[1]:
+            self._scale = target_width / raster.shape[1]
+        self._height = max(1, int(round(raster.shape[0] * self._scale)))
+
+    @property
+    def height(self):
+        return self._height
+
+    def at(self, t):
+        """Redraw the panel with its window centred on `t`."""
+        start = max(0.0, t - self._window_s / 2)
+        end = start + self._window_s
+        if end > self._total_s:
+            end = self._total_s
+            start = max(0.0, end - self._window_s)
+
+        self._axes.set_xlim(start, end)
+        self._figure.canvas.draw()
+        strip = np.asarray(self._figure.canvas.buffer_rgba())[:, :, :3].copy()
+
+        x_at_start = self._axes.transData.transform((start, 0.0))[0]
+        x_at_end = self._axes.transData.transform((end, 0.0))[0]
+        px_per_s = (x_at_end - x_at_start) / max(1e-9, end - start)
+
+        if self._scale != 1.0:
+            strip = cv2.resize(strip, (self._target_width, self._height),
+                               interpolation=cv2.INTER_AREA)
+            x_at_start *= self._scale
+            px_per_s *= self._scale
+
+        x = cursor_x(t - start, x_at_start, px_per_s)
+        x = max(0, min(strip.shape[1] - 1, x))
+        cv2.line(strip, (x, 0), (x, strip.shape[0]), self.color, self.width)
+        return strip
+
+
+@dataclass
+class ExportResult:
+    frames_written: int
+    cancelled: bool
+    path: object = None
+
+
+def export_clip(source, sink, strip, trajectories, settings, scale,
+                start_frame, end_frame, step=1, fps=30.0,
+                on_progress=None, should_cancel=None):
+    """Composite `start_frame`..`end_frame` inclusive and write them to `sink`.
+
+    The output canvas is allocated once and written into, so there is no
+    per-frame vstack allocation. Overlay settings are taken as given and never
+    re-read, so a clip cannot change appearance halfway through because a
+    checkbox moved.
+
+    `strip` is any object with `.height` and `.at(t) -> ndarray`, or None for
+    no time panel. `should_cancel` is polled once per frame; on cancellation
+    the sink is asked to discard whatever it has written.
+    """
+    n_fish = trajectories.shape[1]
+    colors = fish_colors(n_fish)
+    total = len(range(start_frame, end_frame + 1, step))
+
+    out = None
+    written = 0
+    try:
+        for i, frame_idx in enumerate(range(start_frame, end_frame + 1, step)):
+            if should_cancel is not None and should_cancel():
+                sink.discard_partial()
+                return ExportResult(written, True, getattr(sink, "path", None))
+
+            base = source.read()
+            if base is None:
+                break
+
+            composed = compose_frame(base, trajectories, frame_idx, settings,
+                                     scale, colors)
+
+            if strip is None:
+                out = composed
+            else:
+                if out is None:
+                    h, w = composed.shape[:2]
+                    out = np.zeros((h + strip.height, w, 3), dtype=np.uint8)
+                h = composed.shape[0]
+                out[:h] = composed
+                out[h:] = strip.at(frame_idx / fps)
+
+            sink.write(out)
+            written += 1
+
+            if on_progress is not None:
+                on_progress(i + 1, total)
+
+            # step > 1 means skipping frames; read past them sequentially
+            # rather than seeking, which is 6.5x cheaper on MJPG sources.
+            for _ in range(step - 1):
+                if source.read() is None:
+                    break
+    finally:
+        sink.close()
+
+    return ExportResult(written, False, getattr(sink, "path", None))

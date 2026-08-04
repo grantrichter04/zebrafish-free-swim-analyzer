@@ -1,17 +1,35 @@
-# Core dependencies (required)
+# Zebrafish Free Swim Analyzer - Python dependencies
+#
+#   pip install -r requirements.txt
+#
+# Requires Python >= 3.9. Verified working on 3.9, 3.12 and 3.13.
+# See README.md for the conda alternative.
+
+# --- Core (required) ---------------------------------------------------------
 numpy>=1.24
-pandas>=2.0
+pandas>=1.5
 matplotlib>=3.7
 scipy>=1.10
-traja>=0.6
+traja==25.0.1
 
-# Optional: spatial analysis (thigmotaxis)
+# traja imports sklearn unconditionally but does not declare it as a
+# dependency, so `import traja` fails without this. Not optional.
+scikit-learn>=1.0
+
+# --- Optional: spatial analysis (thigmotaxis) --------------------------------
+# Without shapely, thigmotaxis and arena tools are disabled, not fatal.
 shapely>=2.0
 
-# Optional: video frame reading
+# --- Optional: video frame reading (Inspector tab) ---------------------------
+# Without opencv, the frame inspector is disabled, not fatal.
 opencv-python>=4.8
 
+# --- Development only --------------------------------------------------------
+# Needed to run the test suite (pytest -q); not needed to use the application.
+#   pip install pytest
 
-conda create -n fishanalyzer python=3.10 "numpy=1.26.4" "pandas=1.5.3" matplotlib scipy shapely scikit-learn opencv -c conda-forge
-conda activate fishanalyzer
-pip install traja
+# --- Not installed here ------------------------------------------------------
+# fish_posture_analyzer.py and head_detection/ are standalone scripts with
+# heavier requirements the main package does not need:
+#   scikit-image   (both)
+#   idtrackerai    (head_detection/ only - install per idtracker.ai's own docs)

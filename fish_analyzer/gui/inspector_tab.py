@@ -21,6 +21,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import matplotlib.pyplot as plt
 
 from ..shoaling import ShoalingParameters, ShoalingCalculator
+from ..overlay_render import OverlaySettings, compose_frame, fish_colors
 
 try:
     import cv2 as _cv2
@@ -135,19 +136,9 @@ class InspectorTabMixin:
                                    font=("Arial", 10, "bold"))
         nav_frame.pack(fill="x", padx=5, pady=5)
 
-        # Frame slider
-        slider_row = tk.Frame(nav_frame)
-        slider_row.pack(fill="x", padx=5, pady=3)
-        tk.Label(slider_row, text="Frame:").pack(side="left")
-        self.inspector_frame_var = tk.IntVar(value=0)
-        self.inspector_frame_slider = tk.Scale(
-            slider_row, from_=0, to=100, orient=tk.HORIZONTAL,
-            variable=self.inspector_frame_var,
-            command=self._on_inspector_slider_change,
-            length=180, showvalue=False
-        )
-        self.inspector_frame_slider.pack(side="left", padx=3, fill="x",
-                                          expand=True)
+        # The frame slider and the transport controls live under the video
+        # instead, where there is room to scrub precisely - see
+        # _create_inspector_transport.
 
         # Step size
         step_row = tk.Frame(nav_frame)
@@ -184,42 +175,6 @@ class InspectorTabMixin:
 
         tk.Button(jump_row, text="Go", command=self._inspector_jump_to_input,
                   width=3).pack(side="left", padx=3)
-
-        # Frame info
-        self.inspector_info_label = tk.Label(
-            nav_frame, text="Frame: -- | Time: --", font=("Arial", 9)
-        )
-        self.inspector_info_label.pack(anchor="w", padx=5, pady=2)
-
-        # Playback
-        play_row = tk.Frame(nav_frame)
-        play_row.pack(fill="x", padx=5, pady=3)
-        self.inspector_play_button = tk.Button(
-            play_row, text="> Play",
-            command=self._inspector_toggle_playback,
-            bg="lightblue", width=8
-        )
-        self.inspector_play_button.pack(side="left", padx=2)
-
-        tk.Label(play_row, text="Speed:").pack(side="left", padx=(10, 2))
-        self.inspector_speed_var = tk.StringVar(value="1x")
-        ttk.Combobox(
-            play_row, textvariable=self.inspector_speed_var,
-            values=["0.25x", "0.5x", "1x", "2x", "4x", "8x"],
-            width=5, state="readonly"
-        ).pack(side="left")
-
-        # Single-frame step buttons
-        step_btn_row = tk.Frame(nav_frame)
-        step_btn_row.pack(fill="x", padx=5, pady=2)
-        tk.Button(
-            step_btn_row, text="\u25C0 -1 frame",
-            command=self._inspector_step_back, width=10
-        ).pack(side="left", padx=2)
-        tk.Button(
-            step_btn_row, text="+1 frame \u25B6",
-            command=self._inspector_step_forward, width=10
-        ).pack(side="left", padx=2)
 
         # --- Trails (collapsible) ---
         _, trail_frame = self._make_collapsible(scroll_frame, "Trails")
@@ -350,6 +305,12 @@ class InspectorTabMixin:
             state="readonly", width=4
         )
         self.inspector_iid_focus_combo.pack(side="left")
+        # Without this the selection changed nothing until some other event
+        # happened to trigger a redraw.
+        self.inspector_iid_focus_combo.bind(
+            "<<ComboboxSelected>>",
+            lambda e: self._inspector_on_overlay_change()
+        )
 
         # --- Bout Overlay (collapsible) ---
         _, bout_frame = self._make_collapsible(scroll_frame, "Bout Overlay")
@@ -419,12 +380,107 @@ class InspectorTabMixin:
                 command=self._inspector_rebuild_needed
             ).pack(anchor="w", padx=5)
 
+        # --- Export (collapsible) ---
+        _, export_frame = self._make_collapsible(scroll_frame, "Export")
+
+        tk.Button(export_frame, text="Save Frame (PNG)...",
+                  command=self._inspector_save_frame,
+                  bg="lightgreen").pack(fill="x", padx=5, pady=2)
+        tk.Button(export_frame, text="Export Clip...",
+                  command=self._inspector_export_clip_dialog,
+                  bg="lightgreen").pack(fill="x", padx=5, pady=2)
+        tk.Label(export_frame,
+                 text="Exports what this tab is showing,\n"
+                      "at full video resolution.",
+                 font=("Arial", 8), fg="gray",
+                 justify="left").pack(anchor="w", padx=5, pady=(0, 4))
+
     # =========================================================================
     # DISPLAY AREA
     # =========================================================================
 
+    def _create_inspector_transport(self, parent):
+        """Player-style transport bar: playback, scrubber, range markers.
+
+        Lives under the video rather than in the left column, where the slider
+        was only 180px wide and scrubbing an 18,000 frame recording meant about
+        100 frames per pixel.
+        """
+        row = tk.Frame(parent, bg="#ececec")
+        row.pack(fill="x", padx=8, pady=(4, 2))
+
+        self.inspector_play_button = tk.Button(
+            row, text="> Play", command=self._inspector_toggle_playback,
+            bg="lightblue", width=8
+        )
+        self.inspector_play_button.pack(side="left", padx=2)
+
+        tk.Button(row, text="◀", width=3,
+                  command=self._inspector_step_back).pack(side="left", padx=1)
+        tk.Button(row, text="▶", width=3,
+                  command=self._inspector_step_forward).pack(side="left",
+                                                             padx=1)
+
+        tk.Label(row, text="Speed:", bg="#ececec").pack(side="left",
+                                                        padx=(8, 2))
+        self.inspector_speed_var = tk.StringVar(value="1x")
+        ttk.Combobox(
+            row, textvariable=self.inspector_speed_var,
+            values=["0.25x", "0.5x", "1x", "2x", "4x", "8x"],
+            width=5, state="readonly"
+        ).pack(side="left")
+
+        self.inspector_frame_var = tk.IntVar(value=0)
+        self.inspector_frame_slider = tk.Scale(
+            row, from_=0, to=100, orient=tk.HORIZONTAL,
+            variable=self.inspector_frame_var,
+            command=self._on_inspector_slider_change,
+            showvalue=False, bg="#ececec", highlightthickness=0,
+            sliderlength=18, width=14
+        )
+        self.inspector_frame_slider.pack(side="left", fill="x", expand=True,
+                                         padx=8)
+
+        mark_row = tk.Frame(parent, bg="#ececec")
+        mark_row.pack(fill="x", padx=8, pady=(0, 4))
+        tk.Button(mark_row, text="Set In", command=self._inspector_set_mark_in,
+                  bg="lightblue").pack(side="left", padx=2)
+        tk.Button(mark_row, text="Set Out",
+                  command=self._inspector_set_mark_out,
+                  bg="lightblue").pack(side="left", padx=2)
+        tk.Button(mark_row, text="Clear",
+                  command=self._inspector_clear_marks).pack(side="left",
+                                                            padx=2)
+        self.inspector_mark_label = tk.Label(
+            mark_row, text="In -- | Out --", font=("Arial", 9), bg="#ececec"
+        )
+        self.inspector_mark_label.pack(side="left", padx=10)
+
+        # On the second row, so row one is buttons plus a scrubber that gets
+        # everything else. The readout is long - frame, time, NND, IID, hull.
+        self.inspector_info_label = tk.Label(
+            mark_row, text="Frame: -- | Time: --", font=("Arial", 9),
+            bg="#ececec", anchor="e"
+        )
+        self.inspector_info_label.pack(side="right", padx=(8, 2))
+
     def _create_inspector_display(self, parent):
-        """Create the inspector display area."""
+        """Create the inspector display area.
+
+        Three stacked regions, top to bottom: the video, the transport bar and
+        the time panel. The transport and the time panel each get their own
+        persistent container because _inspector_rebuild_figure destroys and
+        recreates everything in the video region.
+        """
+        # Packed bottom-first, so the visual order ends up video, transport,
+        # time panel.
+        self.inspector_time_frame = tk.Frame(parent, bg="white")
+        self.inspector_time_frame.pack(side="bottom", fill="x")
+
+        transport = tk.Frame(parent, bg="#ececec")
+        transport.pack(side="bottom", fill="x")
+        self._create_inspector_transport(transport)
+
         self.inspector_plot_frame = tk.Frame(parent, bg="white")
         self.inspector_plot_frame.pack(fill="both", expand=True)
 
@@ -435,6 +491,11 @@ class InspectorTabMixin:
         ).pack(expand=True)
 
         # Inspector figure state
+        # NOTE: rebuild is tracked by its own flag, not by "_insp_fig is None".
+        # _insp_fig is only ever assigned when a time panel is shown, so using
+        # it as the sentinel made every update rebuild the whole widget tree
+        # whenever Time Panel was set to "None" (the default).
+        self._insp_needs_rebuild = True
         self._insp_fig = None
         self._insp_canvas = None
         self._insp_ax_main = None
@@ -448,6 +509,7 @@ class InspectorTabMixin:
         self._insp_cached_overlays = None
         self._insp_cached_time_mode = None
         self._insp_cached_bout_fish = None
+        self._insp_cached_iid_focus = None
         self._insp_video_bg_artist = None
         self._insp_cached_background = None
         self._insp_cached_width_bl = None
@@ -464,6 +526,49 @@ class InspectorTabMixin:
         self._insp_zoom_canvas = None
         self._insp_zoom_photo = None
         self._insp_zoom_canvas_item = None
+        # Per-fish colours, recomputed only when the fish count changes.
+        self._insp_fish_colors = None
+        # Export range. None means "not marked", not "frame 0".
+        self.inspector_mark_in = None
+        self.inspector_mark_out = None
+        self._insp_export_after_id = None
+        self._insp_recapture_after_id = None
+
+
+    def _inspector_iid_focus_index(self, n_fish):
+        """The IID focus fish, clamped to a fish that exists."""
+        try:
+            focus = int(self.inspector_iid_focus_var.get())
+        except (ValueError, TypeError):
+            return 0
+        return focus if 0 <= focus < n_fish else 0
+
+    def render_settings_from_vars(self) -> OverlaySettings:
+        """Snapshot the overlay controls.
+
+        The single place tk state becomes an OverlaySettings - the live view
+        and the exporter both go through here, so they cannot disagree about
+        what is being drawn.
+        """
+        def _int(var, default=0):
+            try:
+                return int(var.get())
+            except (ValueError, TypeError):
+                return default
+
+        return OverlaySettings(
+            show_positions=self.inspector_show_positions_var.get(),
+            show_nnd=self.inspector_show_nnd_var.get(),
+            show_hull=self.inspector_show_hull_var.get(),
+            show_iid=self.inspector_show_iid_var.get(),
+            iid_focus=_int(self.inspector_iid_focus_var),
+            show_bout_ring=self.inspector_show_bouts_var.get(),
+            bout_fish=_int(self.inspector_bout_fish_var),
+            trail_length=_int(self.inspector_trail_var),
+            trail_opacity=float(self.inspector_trail_opacity_var.get()),
+            trail_width=float(self.inspector_trail_width_var.get()),
+            dot_radius=_int(self.inspector_dot_size_var, 6),
+        )
 
     # =========================================================================
     # FILE SELECTION
@@ -492,6 +597,10 @@ class InspectorTabMixin:
         self.inspector_frame_slider.configure(to=max_steps)
         self.inspector_frame_var.set(0)
 
+        # A range marked on one recording means nothing on another, and
+        # silently carrying it over would export the wrong stretch.
+        self._inspector_clear_marks()
+
         # Update fish dropdowns
         fish_opts = [str(i) for i in range(loaded.n_fish)]
         self.inspector_iid_focus_combo['values'] = fish_opts
@@ -504,7 +613,7 @@ class InspectorTabMixin:
         self._inspector_try_auto_load_video(selected)
 
         # Force rebuild
-        self._insp_fig = None
+        self._insp_needs_rebuild = True
         self._update_inspector_info()
         self._inspector_update_fast()
 
@@ -519,7 +628,7 @@ class InspectorTabMixin:
         self.inspector_frame_slider.configure(to=max_steps)
         self.inspector_frame_var.set(0)
         self._update_inspector_info()
-        self._insp_fig = None
+        self._insp_needs_rebuild = True
         self._inspector_update_fast()
 
     # =========================================================================
@@ -667,6 +776,38 @@ class InspectorTabMixin:
             self.root.after_cancel(self.animation_after_id)
             self.animation_after_id = None
 
+    def _on_inspector_time_canvas_resize(self, event=None):
+        """Drop the blit background when the time panel changes size.
+
+        A cached background is only valid for the canvas size it was captured
+        at. Restoring a stale one leaves the previous, differently-sized
+        rendering visible alongside it - the plot appears duplicated.
+
+        Until it is recaptured the cursor path falls back to draw_idle(), which
+        is correct but slower, so the recapture is debounced rather than run on
+        every <Configure> during a drag.
+        """
+        self._insp_bg_cache = None
+
+        if getattr(self, '_insp_recapture_after_id', None):
+            self.root.after_cancel(self._insp_recapture_after_id)
+        self._insp_recapture_after_id = self.root.after(
+            200, self._inspector_recapture_time_background
+        )
+
+    def _inspector_recapture_time_background(self):
+        """Redraw the time panel and cache it for blitting at the new size."""
+        self._insp_recapture_after_id = None
+        if self._insp_canvas is None or self._insp_fig is None:
+            return
+        try:
+            self._insp_canvas.draw()
+            self._insp_bg_cache = self._insp_canvas.copy_from_bbox(
+                self._insp_fig.bbox
+            )
+        except Exception:
+            self._insp_bg_cache = None
+
     def _on_inspector_resize(self, event=None):
         """Pause animation during window resize to prevent UI freeze.
 
@@ -691,6 +832,9 @@ class InspectorTabMixin:
         # Invalidate the canvas items so they get repositioned on next draw
         self._insp_video_canvas_item = None
         self._insp_title_item = None
+        # The time panel resizes with the window too, and its cached blit
+        # background is only valid at the size it was captured.
+        self._insp_bg_cache = None
 
         def _resume():
             self._resize_after_id = None
@@ -737,8 +881,18 @@ class InspectorTabMixin:
 
             self._update_inspector_info()
             self._inspector_update_fast()
-        except Exception:
-            pass  # Never let a render error break the animation chain
+        except Exception as e:
+            # This used to be a bare `pass`, on the grounds that a render error
+            # must not break the animation chain. But it swallowed the error on
+            # every channel: the frame counter kept advancing while the image
+            # stayed frozen, which is indistinguishable from a still video.
+            # Stopping playback first means the error is reported exactly once
+            # instead of on every frame.
+            self._inspector_stop_playback()
+            print(f"[FAILED] Inspector render at frame "
+                  f"{self._get_inspector_frame_idx()}: {e}")
+            self._report_uncaught(e)
+            return
 
         # Subtract render time; keep a floor of 8 ms so Tkinter can breathe
         elapsed_ms = (time.perf_counter() - t_start) * 1000
@@ -772,12 +926,12 @@ class InspectorTabMixin:
             else:
                 self.bout_overlay_status.config(
                     text="No bout data — run Bout Analysis first", fg="red")
-        self._insp_fig = None
+        self._insp_needs_rebuild = True
         self._inspector_update_fast()
 
     def _inspector_rebuild_needed(self, event=None):
         """Force a figure rebuild on next update."""
-        self._insp_fig = None
+        self._insp_needs_rebuild = True
         self._inspector_update_fast()
 
     # =========================================================================
@@ -875,7 +1029,7 @@ class InspectorTabMixin:
             )
 
             self.inspector_video_var.set(True)
-            self._insp_fig = None
+            self._insp_needs_rebuild = True
             self._inspector_update_fast()
 
             messagebox.showinfo(
@@ -900,7 +1054,7 @@ class InspectorTabMixin:
                     self.inspector_video_var.set(False)
                     return
 
-        self._insp_fig = None
+        self._insp_needs_rebuild = True
         self._inspector_update_fast()
 
     # =========================================================================
@@ -923,13 +1077,19 @@ class InspectorTabMixin:
         # Video toggle needs rebuild (changes background compositing source)
         video_on = self.inspector_video_var.get()
 
+        # The IID panel plots one fish, so switching focus has to redraw it -
+        # otherwise the trace keeps describing the previously selected fish.
+        iid_focus = self._inspector_iid_focus_index(loaded.n_fish)
+
         rebuild = (
-            self._insp_fig is None
+            self._insp_needs_rebuild
             or self._insp_cached_file != selected
             or self._insp_cached_time_mode != time_mode
             or self._insp_cached_overlays != video_on
             or (time_mode == 'bout'
                 and self._insp_cached_bout_fish != bout_fish)
+            or (time_mode == 'iid'
+                and self._insp_cached_iid_focus != iid_focus)
         )
 
         if rebuild:
@@ -939,10 +1099,12 @@ class InspectorTabMixin:
                 selected, loaded, frame_idx, time_mode
             )
             self.set_status("Ready")
+            self._insp_needs_rebuild = False
             self._insp_cached_file = selected
             self._insp_cached_time_mode = time_mode
             self._insp_cached_overlays = video_on
             self._insp_cached_bout_fish = bout_fish
+            self._insp_cached_iid_focus = iid_focus
 
         self._inspector_update_dynamic(
             selected, loaded, frame_idx, time_mode
@@ -961,6 +1123,10 @@ class InspectorTabMixin:
         for the static chart + moving cursor (blitting works well there).
         """
         for widget in self.inspector_plot_frame.winfo_children():
+            widget.destroy()
+        # The time panel has its own container so the transport bar between
+        # them survives a rebuild.
+        for widget in self.inspector_time_frame.winfo_children():
             widget.destroy()
 
         # Reset all canvas/artist state
@@ -990,7 +1156,7 @@ class InspectorTabMixin:
 
         vid_h = loaded.metadata.video_height
         vid_w = loaded.metadata.video_width
-        pixels_to_bl = 1.0 / loaded.metadata.body_length
+        pixels_to_bl = loaded.calibration.scale_factor
         self._insp_cached_width_bl = vid_w * pixels_to_bl
         self._insp_cached_height_bl = vid_h * pixels_to_bl
 
@@ -1013,10 +1179,11 @@ class InspectorTabMixin:
             main_col.pack(side="left", fill="both", expand=True)
 
             video_parent = main_col
-            time_parent = main_col
         else:
             video_parent = self.inspector_plot_frame
-            time_parent = self.inspector_plot_frame
+
+        # Always its own container, below the transport bar.
+        time_parent = self.inspector_time_frame
 
         # --- Video canvas (PIL/ImageTk — replaces matplotlib imshow) ---
         self._insp_video_canvas = tk.Canvas(video_parent, bg="black",
@@ -1043,7 +1210,16 @@ class InspectorTabMixin:
             self._insp_canvas = FigureCanvasTkAgg(
                 self._insp_fig, master=time_parent
             )
-            self._insp_canvas.get_tk_widget().pack(fill="x", side="bottom")
+            time_widget = self._insp_canvas.get_tk_widget()
+            time_widget.pack(fill="x", side="bottom")
+            # The figure is created 10in wide but the widget is packed fill="x",
+            # so Tk stretches it. FigureCanvasTkAgg has its own <Configure>
+            # binding that resizes the figure to match; add="+" is essential
+            # here, because a plain bind() would replace it and leave the
+            # figure painting only part of its widget - which is what produced
+            # a second, stale copy of the plot beside the real one.
+            time_widget.bind("<Configure>",
+                             self._on_inspector_time_canvas_resize, add="+")
 
             # Populate the time axes
             if time_mode in ('nnd', 'iid', 'hull') and loaded.shoaling_results:
@@ -1055,9 +1231,18 @@ class InspectorTabMixin:
                               'b-', lw=1, alpha=0.7)
                     ax_t.set_ylabel('NND (BL)', fontsize=8)
                 elif time_mode == 'iid':
-                    ax_t.plot(time_min, results.mean_iid_per_sample,
+                    # The IID overlay draws one focus fish's distances, so the
+                    # panel plots that same fish. Plotting the all-pairs mean
+                    # here captioned the picture with a different quantity:
+                    # on a real six-fish session the two differed by a median
+                    # of 1.9 BL against a typical IID of 5.5.
+                    focus = self._inspector_iid_focus_index(loaded.n_fish)
+                    ax_t.plot(time_min,
+                              results.individual_iid_per_sample[:, focus],
                               'g-', lw=1, alpha=0.7)
-                    ax_t.set_ylabel('IID (BL)', fontsize=8)
+                    ax_t.set_ylabel(f'Fish {focus} mean dist. '
+                                    f'({loaded.calibration.unit_name})',
+                                    fontsize=8)
                 else:
                     ax_t.plot(time_min, results.convex_hull_area_per_sample,
                               'r-', lw=1, alpha=0.7)
@@ -1342,25 +1527,15 @@ class InspectorTabMixin:
         self._insp_zoom_raw_frame = display.copy()
 
         # --- Get fish positions in pixel coordinates ---
-        raw_pos = loaded.trajectories[frame_idx].copy()  # (n_fish, 2) pixels
-        tab10 = plt.cm.tab10(np.linspace(0, 1, n_fish))
+        raw_pos = loaded.trajectories[frame_idx]  # (n_fish, 2) pixels
 
-        # Reading settings
-        dot_radius = self.inspector_dot_size_var.get()
-        trail_len = self.inspector_trail_var.get()
-        trail_opacity = self.inspector_trail_opacity_var.get()
-        trail_width_setting = self.inspector_trail_width_var.get()
+        if (self._insp_fish_colors is None
+                or len(self._insp_fish_colors) != n_fish):
+            self._insp_fish_colors = fish_colors(n_fish)
 
-        if _CV2_AVAILABLE:
-            self._inspector_draw_cv2(
-                display, loaded, raw_pos, frame_idx, n_fish, tab10,
-                dot_radius, trail_len, trail_opacity, trail_width_setting,
-                vid_h, vid_w, scale
-            )
-        else:
-            self._inspector_draw_numpy(
-                display, raw_pos, n_fish, tab10, dot_radius
-            )
+        display = compose_frame(display, loaded.trajectories, frame_idx,
+                                self.render_settings_from_vars(), scale,
+                                self._insp_fish_colors)
 
         # --- Render video frame via PIL/ImageTk (fast direct pixel display) ---
         canvas_w = self._insp_video_canvas.winfo_width()
@@ -1458,180 +1633,6 @@ class InspectorTabMixin:
             if self._insp_bout_cursor_speed:
                 self._insp_bout_cursor_speed.set_xdata([center_s, center_s])
             self._insp_canvas.draw_idle()
-
-    # =========================================================================
-    # CV2 DRAWING (fast path — draws overlays directly on the frame)
-    # =========================================================================
-
-    @staticmethod
-    def _rgba_to_bgr(rgba):
-        """Convert matplotlib RGBA (0-1) to OpenCV BGR (0-255)."""
-        return (int(rgba[2] * 255), int(rgba[1] * 255), int(rgba[0] * 255))
-
-    @staticmethod
-    def _rgba_to_rgb_uint8(rgba):
-        """Convert matplotlib RGBA (0-1) to RGB (0-255) tuple."""
-        return (int(rgba[0] * 255), int(rgba[1] * 255), int(rgba[2] * 255))
-
-    def _inspector_draw_cv2(self, display, loaded, raw_pos, frame_idx,
-                             n_fish, tab10, dot_radius, trail_len,
-                             trail_opacity, trail_width_setting,
-                             vid_h, vid_w, scale):
-        """Draw all overlays directly onto the frame using OpenCV.
-
-        This is 10-50x faster than creating matplotlib scatter/line/text
-        artists because cv2 drawing operates directly on the numpy array.
-        """
-        # --- Trails ---
-        if trail_len > 0:
-            start = max(0, frame_idx - trail_len)
-            end = frame_idx + 1
-            for i in range(n_fish):
-                traj = loaded.trajectories[start:end, i, :]
-                valid = ~np.isnan(traj[:, 0])
-                if np.sum(valid) < 2:
-                    continue
-                color_bgr = self._rgba_to_bgr(tab10[i])
-                pts = traj[valid].astype(np.int32)
-                thickness = max(1, int(trail_width_setting * 2))
-                # Create overlay for alpha blending
-                overlay = display.copy()
-                _cv2.polylines(overlay, [pts], False, color_bgr, thickness,
-                              lineType=_cv2.LINE_AA)
-                alpha = min(1.0, trail_opacity)
-                _cv2.addWeighted(overlay, alpha, display, 1 - alpha, 0,
-                                display)
-
-        # --- NND lines (white lines with black-outlined text) ---
-        if self.inspector_show_nnd_var.get():
-            for i in range(n_fish):
-                if np.isnan(raw_pos[i, 0]):
-                    continue
-                min_dist_px = np.inf
-                nn_idx = -1
-                for j in range(n_fish):
-                    if i == j or np.isnan(raw_pos[j, 0]):
-                        continue
-                    d = np.sqrt((raw_pos[i, 0] - raw_pos[j, 0]) ** 2
-                                + (raw_pos[i, 1] - raw_pos[j, 1]) ** 2)
-                    if d < min_dist_px:
-                        min_dist_px = d
-                        nn_idx = j
-                if nn_idx >= 0:
-                    p1 = (int(raw_pos[i, 0]), int(raw_pos[i, 1]))
-                    p2 = (int(raw_pos[nn_idx, 0]), int(raw_pos[nn_idx, 1]))
-                    _cv2.line(display, p1, p2, (255, 255, 255), 2,
-                             lineType=_cv2.LINE_AA)
-                    dist_bl = min_dist_px * scale
-                    mid = ((p1[0] + p2[0]) // 2, (p1[1] + p2[1]) // 2)
-                    # Black outline then white text for readability
-                    _cv2.putText(display, f'{dist_bl:.1f}', mid,
-                                _cv2.FONT_HERSHEY_SIMPLEX, 0.5,
-                                (0, 0, 0), 3, _cv2.LINE_AA)
-                    _cv2.putText(display, f'{dist_bl:.1f}', mid,
-                                _cv2.FONT_HERSHEY_SIMPLEX, 0.5,
-                                (255, 255, 255), 1, _cv2.LINE_AA)
-
-        # --- Convex hull ---
-        if self.inspector_show_hull_var.get():
-            valid_pts = []
-            for i in range(n_fish):
-                if not np.isnan(raw_pos[i, 0]):
-                    valid_pts.append(raw_pos[i])
-            if len(valid_pts) >= 3:
-                pts_arr = np.array(valid_pts, dtype=np.float32)
-                hull = _cv2.convexHull(pts_arr.astype(np.int32))
-                overlay = display.copy()
-                _cv2.fillPoly(overlay, [hull], (100, 200, 100))
-                _cv2.addWeighted(overlay, 0.2, display, 0.8, 0, display)
-                _cv2.polylines(display, [hull], True, (0, 180, 0), 2,
-                              lineType=_cv2.LINE_AA)
-
-        # --- IID lines (magenta lines with outlined text) ---
-        if self.inspector_show_iid_var.get():
-            try:
-                focus = int(self.inspector_iid_focus_var.get())
-            except (ValueError, TypeError):
-                focus = 0
-            if focus < n_fish and not np.isnan(raw_pos[focus, 0]):
-                pf = (int(raw_pos[focus, 0]), int(raw_pos[focus, 1]))
-                for j in range(n_fish):
-                    if j == focus or np.isnan(raw_pos[j, 0]):
-                        continue
-                    pj = (int(raw_pos[j, 0]), int(raw_pos[j, 1]))
-                    _cv2.line(display, pf, pj, (255, 100, 255), 2,
-                             lineType=_cv2.LINE_AA)
-                    d_bl = np.sqrt((raw_pos[focus, 0] - raw_pos[j, 0]) ** 2
-                                   + (raw_pos[focus, 1] - raw_pos[j, 1]) ** 2
-                                   ) * scale
-                    mid = ((pf[0] + pj[0]) // 2, (pf[1] + pj[1]) // 2)
-                    _cv2.putText(display, f'{d_bl:.1f}', mid,
-                                _cv2.FONT_HERSHEY_SIMPLEX, 0.5,
-                                (0, 0, 0), 3, _cv2.LINE_AA)
-                    _cv2.putText(display, f'{d_bl:.1f}', mid,
-                                _cv2.FONT_HERSHEY_SIMPLEX, 0.5,
-                                (255, 100, 255), 1, _cv2.LINE_AA)
-
-        # --- Fish positions ---
-        if self.inspector_show_positions_var.get():
-            for i in range(n_fish):
-                if np.isnan(raw_pos[i, 0]):
-                    continue
-                px, py = int(raw_pos[i, 0]), int(raw_pos[i, 1])
-                color_bgr = self._rgba_to_bgr(tab10[i])
-                # Filled circle
-                _cv2.circle(display, (px, py), dot_radius, color_bgr, -1,
-                           lineType=_cv2.LINE_AA)
-                # Black border
-                _cv2.circle(display, (px, py), dot_radius, (0, 0, 0), 2,
-                           lineType=_cv2.LINE_AA)
-                # Fish number (white text)
-                font_scale = max(0.3, dot_radius / 20.0)
-                text = str(i)
-                (tw, th), _ = _cv2.getTextSize(
-                    text, _cv2.FONT_HERSHEY_SIMPLEX, font_scale, 1
-                )
-                _cv2.putText(display, text,
-                            (px - tw // 2, py + th // 2),
-                            _cv2.FONT_HERSHEY_SIMPLEX, font_scale,
-                            (255, 255, 255), 1, _cv2.LINE_AA)
-
-        # --- Bout fish highlight ring ---
-        if self.inspector_show_bouts_var.get():
-            try:
-                bout_fish = int(self.inspector_bout_fish_var.get())
-                if (bout_fish < n_fish
-                        and not np.isnan(raw_pos[bout_fish, 0])):
-                    px = int(raw_pos[bout_fish, 0])
-                    py = int(raw_pos[bout_fish, 1])
-                    ring_r = int(dot_radius * 1.8)
-                    _cv2.circle(display, (px, py), ring_r, (0, 255, 255),
-                               3, lineType=_cv2.LINE_AA)
-            except (ValueError, TypeError):
-                pass
-
-    def _inspector_draw_numpy(self, display, raw_pos, n_fish, tab10,
-                               dot_radius):
-        """Minimal fallback drawing using numpy (no cv2 needed)."""
-        if not self.inspector_show_positions_var.get():
-            return
-        for i in range(n_fish):
-            if np.isnan(raw_pos[i, 0]):
-                continue
-            px, py = int(raw_pos[i, 0]), int(raw_pos[i, 1])
-            r = dot_radius
-            color = self._rgba_to_rgb_uint8(tab10[i])
-            # Draw filled circle via numpy
-            y_grid, x_grid = np.ogrid[-r:r + 1, -r:r + 1]
-            mask = x_grid ** 2 + y_grid ** 2 <= r ** 2
-            y_start = max(0, py - r)
-            y_end = min(display.shape[0], py + r + 1)
-            x_start = max(0, px - r)
-            x_end = min(display.shape[1], px + r + 1)
-            mask_y = slice(max(0, r - py), r + 1 + min(0, display.shape[0] - py - r - 1))
-            mask_x = slice(max(0, r - px), r + 1 + min(0, display.shape[1] - px - r - 1))
-            sub_mask = mask[mask_y, mask_x]
-            display[y_start:y_end, x_start:x_end][sub_mask] = color
 
     def _inspector_update_zoom(self, display, raw_pos, fish_id, vid_h, vid_w):
         """Update the crop-zoom panel centered on the bout fish."""

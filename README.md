@@ -2,7 +2,7 @@
 
 A desktop application for analyzing zebrafish locomotor behavior from free-swimming assays. Built for researchers using [idtracker.ai](https://idtrackerai.readthedocs.io/) to track multiple fish in open-field arenas.
 
-The tool takes raw trajectory data (x, y positions per frame per fish) and produces calibrated behavioral metrics — swimming speed, distance traveled, freezing, bursting, erratic movements, path straightness, group cohesion (shoaling), and anxiety-related wall-hugging (thigmotaxis) — through an interactive GUI or a scriptable Python API.
+The tool takes raw trajectory data (x, y positions per frame per fish) and produces calibrated behavioral metrics — swimming speed, distance traveled, freezing, path straightness, turning bias, group cohesion (shoaling), and anxiety-related wall-hugging (thigmotaxis) — through an interactive GUI or a scriptable Python API.
 
 Designed for the Morsch lab at Macquarie University to support zebrafish neurobehavioral research.
 
@@ -12,11 +12,12 @@ Designed for the Morsch lab at Macquarie University to support zebrafish neurobe
 
 ## Features
 
-- **Individual behavior metrics** — speed, distance, freezing (count/duration), bursting (count/speed), angular velocity, erratic movements, path straightness
+- **Individual behavior metrics** — speed, distance, freezing (count/duration), path straightness, turning bias (laterality index)
 - **Shoaling analysis** — nearest neighbor distance (NND), inter-individual distance (IID), convex hull area
 - **Spatial analysis** — thigmotaxis (wall-hugging behavior), position heatmaps
 - **Calibration** — converts raw pixel coordinates to real-world units (body lengths, cm, etc.)
 - **GUI** — interactive tkinter + matplotlib interface with tabs for each analysis type
+- **Figure and clip export** — save any inspector frame as a full-resolution PNG, or export a marked range as an MP4 or PNG sequence with the overlays and the time-series panel
 - **Programmable API** — use individual components directly in your own scripts
 
 ---
@@ -29,6 +30,7 @@ fish_analyzer/
 ├── data_structures.py   # Core data classes (metadata, calibration, loaded files)
 ├── file_loading.py      # Load .npy trajectory files from idtracker.ai
 ├── processing.py        # Trajectory processing and individual metrics
+├── bout_analysis.py     # Swim bout detection, per-bout metrics, laterality
 ├── shoaling.py          # Group behavior analysis (NND, IID, convex hull)
 ├── spatial.py           # Thigmotaxis and heatmap generation
 ├── export.py            # CSV export utilities for all analysis results
@@ -38,40 +40,58 @@ fish_analyzer/
     ├── base.py          # Shared GUI base class, status bar, log redirect
     ├── data_tab.py      # GUI tab: data loading, calibration, processing
     ├── analysis_tab.py  # GUI tab: individual trajectory metrics
+    ├── bout_tab.py      # GUI tab: bout detection and laterality
     ├── shoaling_tab.py  # GUI tab: shoaling metrics and frame viewer
     ├── spatial_tab.py   # GUI tab: thigmotaxis and heatmaps
+    ├── inspector_tab.py # GUI tab: frame-by-frame trajectory inspector
     └── utils.py         # Shared GUI utility functions
+
+fish_posture_analyzer.py # Standalone: midline/skeleton extraction from crops
+head_detection/          # Standalone: head-vs-tail and turn analysis
 ```
+
+> `fish_posture_analyzer.py` and `head_detection/` are standalone scripts. They
+> are not reachable from the GUI and have their own dependencies — see
+> [Installation](#installation).
 
 ---
 
 ## Installation
 
-### Quick setup with conda (recommended)
+### Quick setup with pip (recommended)
 
 ```bash
-# Create a new environment with all dependencies
-conda create -n fishanalyzer python=3.10 numpy pandas matplotlib scipy shapely scikit-learn -c conda-forge
-conda activate fishanalyzer
+python -m venv venv
+venv\Scripts\activate          # macOS/Linux: source venv/bin/activate
+pip install -r requirements.txt
+```
 
-# Install remaining packages via pip (not available on conda-forge)
-pip install traja opencv-python
+### Alternative: conda
+
+```bash
+conda create -n fishanalyzer python=3.12 numpy pandas matplotlib scipy shapely scikit-learn opencv -c conda-forge
+conda activate fishanalyzer
+pip install traja==25.0.1
 ```
 
 ### Requirements
 
-- Python 3.8+
-- Core dependencies:
-  ```
-  pip install numpy pandas matplotlib scipy traja
-  ```
-- Optional dependencies:
-  ```
-  pip install shapely       # Enables thigmotaxis analysis
-  pip install opencv-python # Enables video frame reading
-  ```
+- **Python 3.9 or newer.** Verified end to end on 3.9, 3.12 and 3.13; 3.12 is the
+  recommended default. Note that `trajectorytools` and idtracker.ai 6.x both
+  require 3.10+, so pick 3.12 if you expect to use them alongside this tool.
+- Everything the package needs is in [`requirements.txt`](requirements.txt).
+  `scikit-learn` is listed there and is **not** optional — `traja` imports it
+  without declaring it, so `import traja` fails if it is missing.
+- `shapely` (thigmotaxis) and `opencv-python` (video frame reading) are
+  functionally optional: without them those features are disabled rather than
+  crashing. They are installed by default because most workflows use them.
 
-> The application handles missing optional dependencies gracefully — features that require them will be disabled rather than crashing.
+The standalone scripts need more:
+
+```bash
+pip install scikit-image      # fish_posture_analyzer.py and head_detection/
+# head_detection/ additionally needs idtrackerai — install per idtracker.ai's docs
+```
 
 ---
 
@@ -84,6 +104,9 @@ python run_analyzer.py
 ```
 
 ### Programmatic API
+
+Run this from the repository root — `fish_analyzer` is not installed as a
+package, so it is only importable from there.
 
 ```python
 from pathlib import Path
@@ -99,12 +122,63 @@ loaded_file = TrajectoryFileLoader.load_file(Path("trajectories.npy"))
 
 # Process trajectories and compute individual metrics
 fish_list = process_and_analyze_file(loaded_file)
+for fish in fish_list:
+    print(f"Fish {fish.fish_id}: {fish.metrics['total_distance']:.1f} BL traveled")
 
-# Compute shoaling metrics
+# Compute shoaling metrics — note this takes the loaded file, not the fish list
 params = ShoalingParameters()
-results = ShoalingCalculator.calculate(fish_list, params)
+results = ShoalingCalculator(loaded_file, params).calculate()
 print(f"Mean NND: {results.mean_nnd:.2f}")
 ```
+
+### Verifying against your own recordings
+
+The test suite (`pytest -q`) is entirely synthetic so it runs for anyone who
+clones the repo. Two defects were invisible to synthetic input and only showed
+up on real recordings, so there is a second check that takes real sessions:
+
+```bash
+python scripts/verify_on_session.py path/to/session_folder
+```
+
+Point it at one session or at a folder containing several. It re-verifies
+every claim in [AUDIT_B_CORRECTNESS.md](AUDIT_B_CORRECTNESS.md) that depends
+on real data — the freeze denominators reconciling, net displacement surviving
+tracking gaps, top speed staying physiologically plausible, no inter-bout
+interval spanning a gap, and group metrics following the calibration. It exits
+non-zero if any check fails, and contains no data or paths of its own.
+
+### Exporting figures and clips
+
+The Video Inspector composites overlays — fish positions, NND lines, convex
+hull, IID lines, trails — onto video frames. To get them out:
+
+- **Save Frame (PNG)** writes the current composite at full video resolution,
+  not the downscaled image the canvas displays.
+- **Export Clip** writes a marked range as an MP4, or as a numbered PNG
+  sequence if you want lossless frames. Mark the range with **Set In** /
+  **Set Out** beside the frame slider; leaving them unset exports the whole
+  recording, and the dialog says so before it starts.
+
+Both export exactly what the tab is showing, including the time-series panel
+when the Time Panel is set to NND, IID, Hull or Bout. An export whose time
+panel needs shoaling or bout results refuses until those have been run, rather
+than writing a clip with "Run Shoaling Analysis first" printed across the
+bottom.
+
+In an exported clip the time panel is narrowed to the exported range, so the
+cursor sweeps the full width rather than creeping across a plot of the whole
+session. That means a very short clip shows only the few samples falling
+inside it — at the default shoaling interval of 30 frames that is one sample
+per second, so drop the interval if you want a denser trace under a short clip.
+
+Expect roughly 28 ms per frame at 1288×964 with a time panel — about 8 seconds
+for a 10-second clip. The Bout panel scrolls, so it has to be redrawn every
+frame and runs around three times slower; the dialog warns you first.
+
+The source video is auto-detected only when it sits beside the session folder.
+If your raw recordings and processed sessions live in separate trees, attach it
+with **Browse Video…**.
 
 ---
 
@@ -118,16 +192,24 @@ This tool expects `.npy` trajectory files in the format exported by **idtracker.
 
 | Module | Key Metrics |
 |---|---|
-| `processing.py` | Speed, distance, freezing, bursting, angular velocity, erratic movements, path straightness |
+| `processing.py` | Speed, distance, freezing, path straightness, turning bias |
 | `shoaling.py` | NND, IID, convex hull area (group cohesion) |
 | `spatial.py` | Thigmotaxis % (border vs center), position heatmaps |
+| `segments.py` | Tracking-gap boundaries, shared by every episode metric |
+
+All distances and areas are in the unit you calibrated in — the `Unit` column
+in each export says which. Metrics that count episodes (freezes, bouts) are
+computed within stretches of continuous tracking and never across a gap; an
+episode cut short by lost tracking is reported as *censored* rather than
+counted, and rates are per unit of observed time. See
+[AUDIT_B_CORRECTNESS.md](AUDIT_B_CORRECTNESS.md).
 
 ### Thigmotaxis
 Quantifies anxiety-like wall-hugging behavior. The arena boundary is defined by the user; a configurable inner zone (default 15% inward) separates the border region from the center. High thigmotaxis (more time near walls) typically indicates stress or novelty response.
 
 ### Shoaling Metrics
 - **NND** (Nearest Neighbor Distance): distance from each fish to its closest neighbor — sensitive to tight schooling
-- **IID** (Inter-Individual Distance): mean pairwise distance across all fish pairs — less sensitive to outliers
+- **IID** (Inter-Individual Distance): mean pairwise distance across all fish pairs — less sensitive to outliers. The Shoaling tab and the CSV report this group value; the Video Inspector's IID panel instead plots the *focus fish's* mean distance to the others, so that it describes the same thing the IID lines drawn on the frame do
 - **Convex Hull**: area of the polygon enclosing all fish — proxy for group spread
 
 ---
@@ -149,11 +231,46 @@ Quantifies anxiety-like wall-hugging behavior. The arena boundary is defined by 
 
 **New behavioral metrics** replacing sinuosity and turn angles:
 - **Freeze analysis** — episode count, mean duration, total time frozen (anxiety indicator)
-- **Burst analysis** — burst count, peak speed, frequency per minute (locomotor vigor)
-- **Angular velocity** — mean turning rate in degrees/second
-- **Erratic movements** — count of sudden large direction changes per minute (startle/stress)
+- ~~**Burst analysis** — burst count, peak speed, frequency per minute (locomotor vigor)~~ **withdrawn, see below**
+- ~~**Angular velocity** — mean turning rate in degrees/second~~ **withdrawn**
+- ~~**Erratic movements** — count of sudden large direction changes per minute (startle/stress)~~ **withdrawn**
 - **Path straightness** — sliding-window displacement/distance ratio (0 = circling, 1 = straight)
-- **Turning bias** — laterality index, cumulative heading change, signed angular velocity
+- **Turning bias** — laterality index and left/right turn counts (~~cumulative heading change, signed angular velocity~~ **withdrawn**)
+
+> **Withdrawn 2026-08-01 — read this before using any 2.1.0 export.**
+> Audit B tested every metric against synthetic trajectories with known
+> answers and found eight columns to be measuring idtracker.ai centroid noise
+> rather than fish behaviour: `MeanAngularVelocity_deg_s`,
+> `ErraticMovementCount`, `ErraticMovements_per_min`, `BurstCount`,
+> `BurstMeanSpeed`, `BurstFrequency_per_min`, `CumulativeHeading_deg` and
+> `MeanSignedAngVel_deg_s`. A *perfectly straight* synthetic swimmer with
+> 0.5–1.0 px of tracking noise reproduced the entire range those columns
+> reported across four real recordings. They have been removed from the
+> exports and the GUI rather than repaired, because they are not recoverable
+> from centroid positions — restoring them needs head-direction tracking.
+> Distance, speed, path straightness, laterality, NND, IID and hull area were
+> verified exact against analytic ground truth and are unaffected.
+> Full detail: [AUDIT_B_CORRECTNESS.md](AUDIT_B_CORRECTNESS.md).
+>
+> **Also changed 2026-08-01 (Phase 1).** A frame in which idtracker.ai did not
+> locate the fish is now treated as *unobserved* rather than as "still"
+> (bout analysis) or "moving" (freeze analysis) — the two modules previously
+> disagreed. Episode metrics are computed within stretches of continuous
+> tracking and never across a gap, and every rate and fraction is per unit of
+> observed time. New columns: `ObservedDuration_s`, `LongestGap_s`,
+> `FreezeEpisodes_Censored`, `Bout_Censored`, `IBI_N`. Renamed: `MaxSpeed` →
+> `SpeedP99` (the raw max reported tracking teleports up to 321 BL/s),
+> `FreezeCount` → `FreezeEpisodes_Complete`. `NetDisplacement` is now
+> populated for every fish rather than NaN for half of them.
+>
+> **And Phase 2.** Calibration is no longer bypassed: NND, IID, hull area,
+> thigmotaxis zones and heatmap axes all follow `calibration.scale_factor`,
+> so calibrating in cm finally makes group metrics comparable across
+> recordings of different-sized fish. Shoaling columns lost their hardcoded
+> `_BL` suffixes and gained a `Unit` column. Every row now carries a `Status`
+> column, and a fish excluded by the quality gate appears in the CSV with the
+> reason rather than vanishing. Bout turns that cannot be measured are counted
+> as `Bout_N_TurnUnmeasurable` instead of being reported as straight.
 
 **Bug fixes:**
 - Thigmotaxis border percentage now correctly handles missing fish data

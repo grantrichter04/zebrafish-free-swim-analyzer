@@ -324,8 +324,8 @@ def process_video(video_path: Path, output_dir: Path):
         w.writerow(header)
         w.writerows(rows)
 
-    print(f"  → {csv_path.name}  ({len(rows)} frames, {n_valid} valid midlines)")
-    print(f"  → {avi_path.name}")
+    print(f"  -> {csv_path.name}  ({len(rows)} frames, {n_valid} valid midlines)")
+    print(f"  -> {avi_path.name}")
 
 
 # =============================================================================
@@ -357,7 +357,7 @@ def browse_target() -> Optional[Path]:
 def main():
     target = browse_target()
     if target is None:
-        print("No file selected — exiting.")
+        print("No file selected - exiting.")
         sys.exit(0)
 
     # Collect video files to process
