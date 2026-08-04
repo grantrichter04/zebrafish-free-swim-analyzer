@@ -243,6 +243,20 @@ class InspectorExportMixin:
         self._inspector_run_export(loaded, selected, start, end, target,
                                    as_png)
 
+    @staticmethod
+    def _inspector_time_scale_for(time_mode):
+        """Data units per second on the time panel's x axis.
+
+        The NND, IID and Hull panels are plotted against minutes
+        (_inspector_rebuild_figure divides timestamps by 60, and the live
+        cursor does the same), while the export loop counts seconds. The Bout
+        panel's window is already in seconds.
+
+        A wrong value here does not raise: the cursor is clamped to an edge and
+        silently never moves.
+        """
+        return 1.0 if time_mode == 'bout' else 1.0 / 60.0
+
     def _inspector_run_export(self, loaded, selected, start, end, target,
                               as_png):
         """Run the export in chunks so Tk keeps painting and Cancel works.
@@ -285,8 +299,11 @@ class InspectorExportMixin:
                     target_width=frame_w,
                 )
             else:
-                strip = TimeStrip(self._insp_fig, self._insp_ax_time,
-                                  target_width=frame_w)
+                strip = TimeStrip(
+                    self._insp_fig, self._insp_ax_time,
+                    target_width=frame_w,
+                    time_scale=self._inspector_time_scale_for(time_mode),
+                )
 
         out_h = frame_h + (strip.height if strip is not None else 0)
 
@@ -325,6 +342,9 @@ class InspectorExportMixin:
                 progress.destroy()
             except Exception:
                 pass
+            # Leaving this set means a later after_cancel could target a
+            # scheduled callback that has already run.
+            self._insp_export_after_id = None
             source.close()
             # ScrollingStrip leaves the live axes on the last exported window,
             # and both strips force a draw on the shared canvas. Rebuild so

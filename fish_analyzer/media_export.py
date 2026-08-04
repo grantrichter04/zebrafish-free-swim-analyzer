@@ -165,8 +165,17 @@ class TimeStrip:
     line, which is the same trick the live view uses when it blits.
     """
 
-    def __init__(self, figure, axes, target_width=None, color=(255, 60, 60),
-                 width=2):
+    def __init__(self, figure, axes, target_width=None, time_scale=1.0,
+                 color=(255, 60, 60), width=2):
+        """
+        time_scale : float
+            Data units per second on this axis. The inspector's NND, IID and
+            Hull panels are plotted against minutes, so they need 1/60; an axis
+            already in seconds needs 1.0. Getting this wrong does not fail
+            loudly - the cursor is simply clamped to an edge and never appears
+            to move.
+        """
+        self._time_scale = time_scale
         figure.canvas.draw()
         rgba = np.asarray(figure.canvas.buffer_rgba())
         self._pristine = rgba[:, :, :3].copy()
@@ -199,9 +208,9 @@ class TimeStrip:
         return self._pristine.shape[1]
 
     def at(self, t):
-        """The strip with the cursor at time `t`. Reuses one buffer."""
+        """The strip with the cursor at time `t`, in seconds."""
         np.copyto(self._buffer, self._pristine)
-        x = cursor_x(t, self._x0 * self._scale,
+        x = cursor_x(t * self._time_scale, self._x0 * self._scale,
                      self._px_per_unit * self._scale)
         x = max(0, min(self._buffer.shape[1] - 1, x))
         cv2.line(self._buffer, (x, 0), (x, self._buffer.shape[0]),

@@ -602,3 +602,16 @@ def test_recapture_is_a_noop_when_there_is_no_time_panel(app):
     app._inspector_recapture_time_background()
 
     assert app._insp_bg_cache is None
+
+
+def test_export_converts_seconds_to_the_panel_time_units(app):
+    """The NND/IID/Hull panels are drawn against minutes, the export counts
+    seconds. Without the conversion the exported cursor pins to the right edge
+    and never advances, which is silent - nothing raises."""
+    assert app._inspector_time_scale_for("nnd") == pytest.approx(1.0 / 60.0)
+    assert app._inspector_time_scale_for("iid") == pytest.approx(1.0 / 60.0)
+    assert app._inspector_time_scale_for("hull") == pytest.approx(1.0 / 60.0)
+
+
+def test_bout_panel_is_already_in_seconds(app):
+    assert app._inspector_time_scale_for("bout") == pytest.approx(1.0)

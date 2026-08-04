@@ -366,3 +366,69 @@ def test_scaled_strip_keeps_the_cursor_inside_the_image():
     at_start = strip.at(0.0).copy()
     at_end = strip.at(10.0).copy()
     assert not np.array_equal(at_start, at_end)
+
+
+def _minutes_axis_figure(total_minutes=10.0):
+    """A panel shaped like the inspector's NND/IID/Hull axes: x is minutes."""
+    from matplotlib.figure import Figure
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+
+    fig = Figure(figsize=(10, 2), dpi=100)
+    FigureCanvasAgg(fig)
+    ax = fig.add_axes([0.08, 0.22, 0.88, 0.68])
+    minutes = np.linspace(0, total_minutes, 200)
+    ax.plot(minutes, np.sin(minutes))
+    ax.set_xlim(0, total_minutes)
+    return fig, ax
+
+
+def _cursor_column(strip_img, pristine):
+    """Where the cursor was drawn: the column that changed most."""
+    diff = np.abs(strip_img.astype(int) - pristine.astype(int)).sum(axis=(0, 2))
+    return int(np.argmax(diff))
+
+
+def test_cursor_advances_across_a_minutes_axis_given_seconds():
+    """The panels are plotted against minutes; the export loop counts seconds.
+
+    Without the conversion the cursor is asked for x at "300 minutes" on a
+    ten-minute axis, gets clamped to the last column, and sits at the right
+    edge for the whole clip instead of tracking playback.
+    """
+    from fish_analyzer.media_export import TimeStrip
+
+    fig, ax = _minutes_axis_figure(total_minutes=10.0)
+    strip = TimeStrip(fig, ax, time_scale=1.0 / 60.0)
+
+    pristine = strip.at(0.0).copy()
+    early = _cursor_column(strip.at(60.0).copy(), pristine)     # 1 min in
+    middle = _cursor_column(strip.at(300.0).copy(), pristine)   # 5 min in
+    late = _cursor_column(strip.at(540.0).copy(), pristine)     # 9 min in
+
+    assert early < middle < late, "cursor did not advance across the panel"
+    # And it must not be pinned to the edge, which is what clamping produced.
+    assert late < strip.width_px - 5
+
+
+def test_cursor_without_the_conversion_would_pin_to_the_edge():
+    """Guards the guard: with time_scale left at 1.0 the bug comes back."""
+    from fish_analyzer.media_export import TimeStrip
+
+    fig, ax = _minutes_axis_figure(total_minutes=10.0)
+    strip = TimeStrip(fig, ax, time_scale=1.0)
+
+    pristine = strip.at(0.0).copy()
+    middle = _cursor_column(strip.at(300.0).copy(), pristine)
+    late = _cursor_column(strip.at(540.0).copy(), pristine)
+
+    assert middle == late, "expected both to clamp to the same edge column"
+
+
+def test_scrolling_strip_stays_in_seconds():
+    """The bout panel's own axis is in seconds, so it needs no conversion."""
+    from fish_analyzer.media_export import ScrollingStrip
+
+    fig, ax = _minutes_axis_figure(total_minutes=600.0)
+    strip = ScrollingStrip(fig, ax, window_s=10.0, total_s=600.0)
+
+    assert not np.array_equal(strip.at(100.0), strip.at(400.0))
