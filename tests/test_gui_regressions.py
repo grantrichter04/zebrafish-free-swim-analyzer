@@ -565,3 +565,40 @@ def test_export_refuses_with_no_file_selected(app):
 
     assert ok is False
     assert "Select a file" in reason
+
+
+# ---------------------------------------------------------------------------
+# Time-panel blitting across a resize
+# ---------------------------------------------------------------------------
+
+def test_resizing_the_time_panel_drops_the_stale_blit_background(app):
+    """A background cached at one canvas size must not be restored at another.
+
+    The figure is created 10 inches wide but its widget is packed fill="x", so
+    Tk stretches it and matplotlib redraws at the new width. Restoring the
+    narrow cached raster over the wide canvas left the earlier rendering
+    visible beside it — the plot appeared duplicated at the bottom of the tab.
+    """
+    app._insp_bg_cache = object()          # stand-in for a cached raster
+
+    app._on_inspector_time_canvas_resize()
+
+    assert app._insp_bg_cache is None
+
+
+def test_window_resize_also_drops_the_time_panel_background(app):
+    app._insp_bg_cache = object()
+
+    app._on_inspector_resize()
+
+    assert app._insp_bg_cache is None
+
+
+def test_recapture_is_a_noop_when_there_is_no_time_panel(app):
+    """Time Panel 'none' means no figure at all; recapture must not raise."""
+    app._insp_canvas = None
+    app._insp_fig = None
+
+    app._inspector_recapture_time_background()
+
+    assert app._insp_bg_cache is None

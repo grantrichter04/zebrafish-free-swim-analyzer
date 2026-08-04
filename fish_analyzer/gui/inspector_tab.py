@@ -508,6 +508,7 @@ class InspectorTabMixin:
         self.inspector_mark_in = None
         self.inspector_mark_out = None
         self._insp_export_after_id = None
+        self._insp_recapture_after_id = None
 
 
     def render_settings_from_vars(self) -> OverlaySettings:
@@ -743,6 +744,38 @@ class InspectorTabMixin:
             self.root.after_cancel(self.animation_after_id)
             self.animation_after_id = None
 
+    def _on_inspector_time_canvas_resize(self, event=None):
+        """Drop the blit background when the time panel changes size.
+
+        A cached background is only valid for the canvas size it was captured
+        at. Restoring a stale one leaves the previous, differently-sized
+        rendering visible alongside it - the plot appears duplicated.
+
+        Until it is recaptured the cursor path falls back to draw_idle(), which
+        is correct but slower, so the recapture is debounced rather than run on
+        every <Configure> during a drag.
+        """
+        self._insp_bg_cache = None
+
+        if getattr(self, '_insp_recapture_after_id', None):
+            self.root.after_cancel(self._insp_recapture_after_id)
+        self._insp_recapture_after_id = self.root.after(
+            200, self._inspector_recapture_time_background
+        )
+
+    def _inspector_recapture_time_background(self):
+        """Redraw the time panel and cache it for blitting at the new size."""
+        self._insp_recapture_after_id = None
+        if self._insp_canvas is None or self._insp_fig is None:
+            return
+        try:
+            self._insp_canvas.draw()
+            self._insp_bg_cache = self._insp_canvas.copy_from_bbox(
+                self._insp_fig.bbox
+            )
+        except Exception:
+            self._insp_bg_cache = None
+
     def _on_inspector_resize(self, event=None):
         """Pause animation during window resize to prevent UI freeze.
 
@@ -767,6 +800,9 @@ class InspectorTabMixin:
         # Invalidate the canvas items so they get repositioned on next draw
         self._insp_video_canvas_item = None
         self._insp_title_item = None
+        # The time panel resizes with the window too, and its cached blit
+        # background is only valid at the size it was captured.
+        self._insp_bg_cache = None
 
         def _resume():
             self._resize_after_id = None
@@ -1130,7 +1166,16 @@ class InspectorTabMixin:
             self._insp_canvas = FigureCanvasTkAgg(
                 self._insp_fig, master=time_parent
             )
-            self._insp_canvas.get_tk_widget().pack(fill="x", side="bottom")
+            time_widget = self._insp_canvas.get_tk_widget()
+            time_widget.pack(fill="x", side="bottom")
+            # The figure is created 10in wide but the widget is packed fill="x",
+            # so Tk stretches it. FigureCanvasTkAgg has its own <Configure>
+            # binding that resizes the figure to match; add="+" is essential
+            # here, because a plain bind() would replace it and leave the
+            # figure painting only part of its widget - which is what produced
+            # a second, stale copy of the plot beside the real one.
+            time_widget.bind("<Configure>",
+                             self._on_inspector_time_canvas_resize, add="+")
 
             # Populate the time axes
             if time_mode in ('nnd', 'iid', 'hull') and loaded.shoaling_results:
