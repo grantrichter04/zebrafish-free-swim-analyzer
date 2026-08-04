@@ -186,6 +186,23 @@ class InspectorTabMixin:
         tk.Button(jump_row, text="Go", command=self._inspector_jump_to_input,
                   width=3).pack(side="left", padx=3)
 
+        # Export range markers
+        mark_row = tk.Frame(nav_frame)
+        mark_row.pack(fill="x", padx=5, pady=2)
+        tk.Button(mark_row, text="Set In", command=self._inspector_set_mark_in,
+                  bg="lightblue").pack(side="left", padx=2)
+        tk.Button(mark_row, text="Set Out",
+                  command=self._inspector_set_mark_out,
+                  bg="lightblue").pack(side="left", padx=2)
+        tk.Button(mark_row, text="Clear",
+                  command=self._inspector_clear_marks).pack(side="left",
+                                                            padx=2)
+
+        self.inspector_mark_label = tk.Label(
+            nav_frame, text="In -- | Out --", font=("Arial", 9)
+        )
+        self.inspector_mark_label.pack(anchor="w", padx=5)
+
         # Frame info
         self.inspector_info_label = tk.Label(
             nav_frame, text="Frame: -- | Time: --", font=("Arial", 9)
@@ -472,6 +489,61 @@ class InspectorTabMixin:
         self._insp_zoom_canvas_item = None
         # Per-fish colours, recomputed only when the fish count changes.
         self._insp_fish_colors = None
+        # Export range. None means "not marked", not "frame 0".
+        self.inspector_mark_in = None
+        self.inspector_mark_out = None
+
+    # =========================================================================
+    # EXPORT RANGE
+    # =========================================================================
+
+    def _inspector_export_range(self, n_frames):
+        """The marked range, normalised and clamped, inclusive of both ends.
+
+        An unset marker means "from the start" or "to the end" rather than
+        frame 0, so marking only one end still gives a usable range.
+        """
+        start = self.inspector_mark_in
+        end = self.inspector_mark_out
+        if start is None:
+            start = 0
+        if end is None:
+            end = n_frames - 1
+        if start > end:
+            start, end = end, start
+        return max(0, start), min(n_frames - 1, end)
+
+    def _inspector_set_mark_in(self):
+        self.inspector_mark_in = self._get_inspector_frame_idx()
+        self._inspector_update_mark_label()
+
+    def _inspector_set_mark_out(self):
+        self.inspector_mark_out = self._get_inspector_frame_idx()
+        self._inspector_update_mark_label()
+
+    def _inspector_clear_marks(self):
+        self.inspector_mark_in = None
+        self.inspector_mark_out = None
+        self._inspector_update_mark_label()
+
+    def _inspector_update_mark_label(self):
+        """Show the marked range in frames and seconds."""
+        selected = self.inspector_file_var.get()
+        if not selected or selected not in self.loaded_files:
+            self.inspector_mark_label.config(text="In -- | Out --")
+            return
+
+        loaded = self.loaded_files[selected]
+        fps = loaded.calibration.frame_rate
+        start, end = self._inspector_export_range(loaded.n_frames)
+        n = end - start + 1
+        marked = (self.inspector_mark_in is not None
+                  or self.inspector_mark_out is not None)
+        prefix = "" if marked else "(whole recording) "
+        self.inspector_mark_label.config(
+            text=f"{prefix}In {start} → Out {end} "
+                 f"({n} frames, {n / fps:.1f} s)"
+        )
 
     def render_settings_from_vars(self) -> OverlaySettings:
         """Snapshot the overlay controls.
@@ -526,6 +598,10 @@ class InspectorTabMixin:
         max_steps = max(0, (n_frames - 1) // step)
         self.inspector_frame_slider.configure(to=max_steps)
         self.inspector_frame_var.set(0)
+
+        # A range marked on one recording means nothing on another, and
+        # silently carrying it over would export the wrong stretch.
+        self._inspector_clear_marks()
 
         # Update fish dropdowns
         fish_opts = [str(i) for i in range(loaded.n_fish)]

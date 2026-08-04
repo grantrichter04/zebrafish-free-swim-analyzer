@@ -432,3 +432,58 @@ def test_render_settings_reflect_the_inspector_controls(app):
     assert settings.show_hull is False
     assert settings.dot_radius == 11
     assert settings.trail_length == 45
+
+
+# ---------------------------------------------------------------------------
+# Export range markers
+# ---------------------------------------------------------------------------
+
+def test_in_out_markers_normalise_when_set_backwards(app):
+    """Marking Out before In must not produce an empty or negative range."""
+    app.inspector_mark_in = 900
+    app.inspector_mark_out = 100
+
+    start, end = app._inspector_export_range(n_frames=1000)
+
+    assert (start, end) == (100, 900)
+
+
+def test_unset_markers_default_to_the_whole_recording(app):
+    app.inspector_mark_in = None
+    app.inspector_mark_out = None
+
+    start, end = app._inspector_export_range(n_frames=1000)
+
+    assert (start, end) == (0, 999)
+
+
+def test_one_marker_set_bounds_only_that_end(app):
+    app.inspector_mark_in = 250
+    app.inspector_mark_out = None
+
+    assert app._inspector_export_range(n_frames=1000) == (250, 999)
+
+
+def test_markers_are_clamped_to_the_recording(app):
+    """A marker left over from a longer file must not run off the end."""
+    app.inspector_mark_in = 0
+    app.inspector_mark_out = 5000
+
+    assert app._inspector_export_range(n_frames=1000) == (0, 999)
+
+
+def test_markers_reset_when_a_different_file_is_selected(app, synthetic_npy):
+    """A range marked on one recording must not survive onto another."""
+    from fish_analyzer.file_loading import TrajectoryFileLoader
+
+    app.loaded_files["s1"] = TrajectoryFileLoader.load_file(synthetic_npy, "s1")
+    app.inspector_file_var.set("s1")
+    app._on_inspector_file_selected()
+
+    app.inspector_mark_in = 100
+    app.inspector_mark_out = 200
+
+    app._on_inspector_file_selected()
+
+    assert app.inspector_mark_in is None
+    assert app.inspector_mark_out is None
