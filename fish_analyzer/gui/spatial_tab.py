@@ -30,6 +30,7 @@ from ..spatial import (
     compute_shared_heatmap_scale
 )
 from ..export import export_thigmotaxis_csv
+from ..overlay_render import fish_colors
 from .utils import (create_sortable_treeview, embed_figure_with_toolbar,
                     install_canvas_error_handler)
 
@@ -976,7 +977,7 @@ class SpatialTabMixin:
         show_individuals = self.show_individual_fish_thig_var.get() if hasattr(self, 'show_individual_fish_thig_var') else True
         
         n_files = len(results_dict)
-        file_colors = plt.cm.tab10(np.linspace(0, 1, min(n_files, 10)))
+        file_colors = fish_colors(min(n_files, 10))
         
         if n_files == 1:
             fig = Figure(figsize=(10, 6), dpi=100)
@@ -1030,7 +1031,7 @@ class SpatialTabMixin:
         ax1 = fig.add_subplot(1, 2, 1)
         ax2 = fig.add_subplot(1, 2, 2)
         
-        file_colors = plt.cm.tab10(np.linspace(0, 1, len(results_dict)))
+        file_colors = fish_colors(len(results_dict))
         
         try:
             smooth_seconds = float(self.spatial_smooth_var.get())

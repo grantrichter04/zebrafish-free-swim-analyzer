@@ -768,3 +768,53 @@ def test_scrubber_is_not_confined_to_the_control_panel(app):
         w = getattr(w, "master", None)
     assert not any("labelframe" in n.lower() for n in names), \
         f"scrubber still inside a control LabelFrame: {names}"
+
+
+# ---------------------------------------------------------------------------
+# The typed path box
+# ---------------------------------------------------------------------------
+
+def test_typing_a_session_path_loads_it(app, synthetic_npy, monkeypatch):
+    """The Session Folder box is editable, so a typed path must do something.
+
+    It previously did nothing: no Load button, no <Return> binding, and
+    _load_selected_file - the only route to loading a bare trajectories.npy -
+    had no callers at all.
+    """
+    from fish_analyzer.gui import data_tab
+
+    monkeypatch.setattr(data_tab.simpledialog, "askstring",
+                        lambda *a, **k: "typed")
+
+    app.file_path_var.set(str(synthetic_npy))
+    app._load_selected_file()
+
+    assert "typed" in app.loaded_files
+    assert app.loaded_files["typed"].n_fish == 3
+
+
+def test_typing_a_nonsense_path_reports_rather_than_loading(app, monkeypatch):
+    from fish_analyzer.gui import data_tab
+
+    shown = []
+    monkeypatch.setattr(data_tab.messagebox, "showerror",
+                        lambda title, msg: shown.append(title))
+
+    app.file_path_var.set(r"C:\definitely\not\a\session")
+    app._load_selected_file()
+
+    assert shown == ["Invalid Path"]
+    assert not app.loaded_files
+
+
+def test_empty_path_box_is_reported_not_ignored(app, monkeypatch):
+    from fish_analyzer.gui import data_tab
+
+    shown = []
+    monkeypatch.setattr(data_tab.messagebox, "showerror",
+                        lambda title, msg: shown.append(title))
+
+    app.file_path_var.set("")
+    app._load_selected_file()
+
+    assert shown == ["Error"]

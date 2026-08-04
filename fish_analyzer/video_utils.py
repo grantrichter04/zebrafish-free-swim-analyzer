@@ -78,11 +78,6 @@ class VideoFrameCache:
             self.cache.clear()
             self.access_order.clear()
     
-    def has_frame(self, frame_num: int) -> bool:
-        """Check if frame is cached without updating LRU."""
-        with self.lock:
-            return frame_num in self.cache
-
 
 class VideoFrameReader:
     """
