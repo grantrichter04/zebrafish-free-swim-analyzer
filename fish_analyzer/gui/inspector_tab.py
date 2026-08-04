@@ -21,6 +21,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import matplotlib.pyplot as plt
 
 from ..shoaling import ShoalingParameters, ShoalingCalculator
+from ..overlay_render import OverlaySettings, compose_frame, fish_colors
 
 try:
     import cv2 as _cv2
@@ -469,6 +470,35 @@ class InspectorTabMixin:
         self._insp_zoom_canvas = None
         self._insp_zoom_photo = None
         self._insp_zoom_canvas_item = None
+        # Per-fish colours, recomputed only when the fish count changes.
+        self._insp_fish_colors = None
+
+    def render_settings_from_vars(self) -> OverlaySettings:
+        """Snapshot the overlay controls.
+
+        The single place tk state becomes an OverlaySettings - the live view
+        and the exporter both go through here, so they cannot disagree about
+        what is being drawn.
+        """
+        def _int(var, default=0):
+            try:
+                return int(var.get())
+            except (ValueError, TypeError):
+                return default
+
+        return OverlaySettings(
+            show_positions=self.inspector_show_positions_var.get(),
+            show_nnd=self.inspector_show_nnd_var.get(),
+            show_hull=self.inspector_show_hull_var.get(),
+            show_iid=self.inspector_show_iid_var.get(),
+            iid_focus=_int(self.inspector_iid_focus_var),
+            show_bout_ring=self.inspector_show_bouts_var.get(),
+            bout_fish=_int(self.inspector_bout_fish_var),
+            trail_length=_int(self.inspector_trail_var),
+            trail_opacity=float(self.inspector_trail_opacity_var.get()),
+            trail_width=float(self.inspector_trail_width_var.get()),
+            dot_radius=_int(self.inspector_dot_size_var, 6),
+        )
 
     # =========================================================================
     # FILE SELECTION
@@ -1358,25 +1388,15 @@ class InspectorTabMixin:
         self._insp_zoom_raw_frame = display.copy()
 
         # --- Get fish positions in pixel coordinates ---
-        raw_pos = loaded.trajectories[frame_idx].copy()  # (n_fish, 2) pixels
-        tab10 = plt.cm.tab10(np.linspace(0, 1, n_fish))
+        raw_pos = loaded.trajectories[frame_idx]  # (n_fish, 2) pixels
 
-        # Reading settings
-        dot_radius = self.inspector_dot_size_var.get()
-        trail_len = self.inspector_trail_var.get()
-        trail_opacity = self.inspector_trail_opacity_var.get()
-        trail_width_setting = self.inspector_trail_width_var.get()
+        if (self._insp_fish_colors is None
+                or len(self._insp_fish_colors) != n_fish):
+            self._insp_fish_colors = fish_colors(n_fish)
 
-        if _CV2_AVAILABLE:
-            self._inspector_draw_cv2(
-                display, loaded, raw_pos, frame_idx, n_fish, tab10,
-                dot_radius, trail_len, trail_opacity, trail_width_setting,
-                vid_h, vid_w, scale
-            )
-        else:
-            self._inspector_draw_numpy(
-                display, raw_pos, n_fish, tab10, dot_radius
-            )
+        display = compose_frame(display, loaded.trajectories, frame_idx,
+                                self.render_settings_from_vars(), scale,
+                                self._insp_fish_colors)
 
         # --- Render video frame via PIL/ImageTk (fast direct pixel display) ---
         canvas_w = self._insp_video_canvas.winfo_width()
@@ -1474,180 +1494,6 @@ class InspectorTabMixin:
             if self._insp_bout_cursor_speed:
                 self._insp_bout_cursor_speed.set_xdata([center_s, center_s])
             self._insp_canvas.draw_idle()
-
-    # =========================================================================
-    # CV2 DRAWING (fast path — draws overlays directly on the frame)
-    # =========================================================================
-
-    @staticmethod
-    def _rgba_to_bgr(rgba):
-        """Convert matplotlib RGBA (0-1) to OpenCV BGR (0-255)."""
-        return (int(rgba[2] * 255), int(rgba[1] * 255), int(rgba[0] * 255))
-
-    @staticmethod
-    def _rgba_to_rgb_uint8(rgba):
-        """Convert matplotlib RGBA (0-1) to RGB (0-255) tuple."""
-        return (int(rgba[0] * 255), int(rgba[1] * 255), int(rgba[2] * 255))
-
-    def _inspector_draw_cv2(self, display, loaded, raw_pos, frame_idx,
-                             n_fish, tab10, dot_radius, trail_len,
-                             trail_opacity, trail_width_setting,
-                             vid_h, vid_w, scale):
-        """Draw all overlays directly onto the frame using OpenCV.
-
-        This is 10-50x faster than creating matplotlib scatter/line/text
-        artists because cv2 drawing operates directly on the numpy array.
-        """
-        # --- Trails ---
-        if trail_len > 0:
-            start = max(0, frame_idx - trail_len)
-            end = frame_idx + 1
-            for i in range(n_fish):
-                traj = loaded.trajectories[start:end, i, :]
-                valid = ~np.isnan(traj[:, 0])
-                if np.sum(valid) < 2:
-                    continue
-                color_bgr = self._rgba_to_bgr(tab10[i])
-                pts = traj[valid].astype(np.int32)
-                thickness = max(1, int(trail_width_setting * 2))
-                # Create overlay for alpha blending
-                overlay = display.copy()
-                _cv2.polylines(overlay, [pts], False, color_bgr, thickness,
-                              lineType=_cv2.LINE_AA)
-                alpha = min(1.0, trail_opacity)
-                _cv2.addWeighted(overlay, alpha, display, 1 - alpha, 0,
-                                display)
-
-        # --- NND lines (white lines with black-outlined text) ---
-        if self.inspector_show_nnd_var.get():
-            for i in range(n_fish):
-                if np.isnan(raw_pos[i, 0]):
-                    continue
-                min_dist_px = np.inf
-                nn_idx = -1
-                for j in range(n_fish):
-                    if i == j or np.isnan(raw_pos[j, 0]):
-                        continue
-                    d = np.sqrt((raw_pos[i, 0] - raw_pos[j, 0]) ** 2
-                                + (raw_pos[i, 1] - raw_pos[j, 1]) ** 2)
-                    if d < min_dist_px:
-                        min_dist_px = d
-                        nn_idx = j
-                if nn_idx >= 0:
-                    p1 = (int(raw_pos[i, 0]), int(raw_pos[i, 1]))
-                    p2 = (int(raw_pos[nn_idx, 0]), int(raw_pos[nn_idx, 1]))
-                    _cv2.line(display, p1, p2, (255, 255, 255), 2,
-                             lineType=_cv2.LINE_AA)
-                    dist_bl = min_dist_px * scale
-                    mid = ((p1[0] + p2[0]) // 2, (p1[1] + p2[1]) // 2)
-                    # Black outline then white text for readability
-                    _cv2.putText(display, f'{dist_bl:.1f}', mid,
-                                _cv2.FONT_HERSHEY_SIMPLEX, 0.5,
-                                (0, 0, 0), 3, _cv2.LINE_AA)
-                    _cv2.putText(display, f'{dist_bl:.1f}', mid,
-                                _cv2.FONT_HERSHEY_SIMPLEX, 0.5,
-                                (255, 255, 255), 1, _cv2.LINE_AA)
-
-        # --- Convex hull ---
-        if self.inspector_show_hull_var.get():
-            valid_pts = []
-            for i in range(n_fish):
-                if not np.isnan(raw_pos[i, 0]):
-                    valid_pts.append(raw_pos[i])
-            if len(valid_pts) >= 3:
-                pts_arr = np.array(valid_pts, dtype=np.float32)
-                hull = _cv2.convexHull(pts_arr.astype(np.int32))
-                overlay = display.copy()
-                _cv2.fillPoly(overlay, [hull], (100, 200, 100))
-                _cv2.addWeighted(overlay, 0.2, display, 0.8, 0, display)
-                _cv2.polylines(display, [hull], True, (0, 180, 0), 2,
-                              lineType=_cv2.LINE_AA)
-
-        # --- IID lines (magenta lines with outlined text) ---
-        if self.inspector_show_iid_var.get():
-            try:
-                focus = int(self.inspector_iid_focus_var.get())
-            except (ValueError, TypeError):
-                focus = 0
-            if focus < n_fish and not np.isnan(raw_pos[focus, 0]):
-                pf = (int(raw_pos[focus, 0]), int(raw_pos[focus, 1]))
-                for j in range(n_fish):
-                    if j == focus or np.isnan(raw_pos[j, 0]):
-                        continue
-                    pj = (int(raw_pos[j, 0]), int(raw_pos[j, 1]))
-                    _cv2.line(display, pf, pj, (255, 100, 255), 2,
-                             lineType=_cv2.LINE_AA)
-                    d_bl = np.sqrt((raw_pos[focus, 0] - raw_pos[j, 0]) ** 2
-                                   + (raw_pos[focus, 1] - raw_pos[j, 1]) ** 2
-                                   ) * scale
-                    mid = ((pf[0] + pj[0]) // 2, (pf[1] + pj[1]) // 2)
-                    _cv2.putText(display, f'{d_bl:.1f}', mid,
-                                _cv2.FONT_HERSHEY_SIMPLEX, 0.5,
-                                (0, 0, 0), 3, _cv2.LINE_AA)
-                    _cv2.putText(display, f'{d_bl:.1f}', mid,
-                                _cv2.FONT_HERSHEY_SIMPLEX, 0.5,
-                                (255, 100, 255), 1, _cv2.LINE_AA)
-
-        # --- Fish positions ---
-        if self.inspector_show_positions_var.get():
-            for i in range(n_fish):
-                if np.isnan(raw_pos[i, 0]):
-                    continue
-                px, py = int(raw_pos[i, 0]), int(raw_pos[i, 1])
-                color_bgr = self._rgba_to_bgr(tab10[i])
-                # Filled circle
-                _cv2.circle(display, (px, py), dot_radius, color_bgr, -1,
-                           lineType=_cv2.LINE_AA)
-                # Black border
-                _cv2.circle(display, (px, py), dot_radius, (0, 0, 0), 2,
-                           lineType=_cv2.LINE_AA)
-                # Fish number (white text)
-                font_scale = max(0.3, dot_radius / 20.0)
-                text = str(i)
-                (tw, th), _ = _cv2.getTextSize(
-                    text, _cv2.FONT_HERSHEY_SIMPLEX, font_scale, 1
-                )
-                _cv2.putText(display, text,
-                            (px - tw // 2, py + th // 2),
-                            _cv2.FONT_HERSHEY_SIMPLEX, font_scale,
-                            (255, 255, 255), 1, _cv2.LINE_AA)
-
-        # --- Bout fish highlight ring ---
-        if self.inspector_show_bouts_var.get():
-            try:
-                bout_fish = int(self.inspector_bout_fish_var.get())
-                if (bout_fish < n_fish
-                        and not np.isnan(raw_pos[bout_fish, 0])):
-                    px = int(raw_pos[bout_fish, 0])
-                    py = int(raw_pos[bout_fish, 1])
-                    ring_r = int(dot_radius * 1.8)
-                    _cv2.circle(display, (px, py), ring_r, (0, 255, 255),
-                               3, lineType=_cv2.LINE_AA)
-            except (ValueError, TypeError):
-                pass
-
-    def _inspector_draw_numpy(self, display, raw_pos, n_fish, tab10,
-                               dot_radius):
-        """Minimal fallback drawing using numpy (no cv2 needed)."""
-        if not self.inspector_show_positions_var.get():
-            return
-        for i in range(n_fish):
-            if np.isnan(raw_pos[i, 0]):
-                continue
-            px, py = int(raw_pos[i, 0]), int(raw_pos[i, 1])
-            r = dot_radius
-            color = self._rgba_to_rgb_uint8(tab10[i])
-            # Draw filled circle via numpy
-            y_grid, x_grid = np.ogrid[-r:r + 1, -r:r + 1]
-            mask = x_grid ** 2 + y_grid ** 2 <= r ** 2
-            y_start = max(0, py - r)
-            y_end = min(display.shape[0], py + r + 1)
-            x_start = max(0, px - r)
-            x_end = min(display.shape[1], px + r + 1)
-            mask_y = slice(max(0, r - py), r + 1 + min(0, display.shape[0] - py - r - 1))
-            mask_x = slice(max(0, r - px), r + 1 + min(0, display.shape[1] - px - r - 1))
-            sub_mask = mask[mask_y, mask_x]
-            display[y_start:y_end, x_start:x_end][sub_mask] = color
 
     def _inspector_update_zoom(self, display, raw_pos, fish_id, vid_h, vid_w):
         """Update the crop-zoom panel centered on the bout fish."""

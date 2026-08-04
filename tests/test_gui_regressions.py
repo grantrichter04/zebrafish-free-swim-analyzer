@@ -409,3 +409,26 @@ def test_mixed_calibrations_are_labelled_as_such_rather_than_guessed():
 
     assert _unit({"a": R("cm"), "b": R("cm")}) == "cm"
     assert _unit({"a": R("cm"), "b": R("BL")}) == "mixed units"
+
+
+# ---------------------------------------------------------------------------
+# The overlay settings snapshot handed to the shared compositor
+# ---------------------------------------------------------------------------
+
+def test_render_settings_reflect_the_inspector_controls(app):
+    """The snapshot handed to the compositor must be what the user ticked.
+
+    Same failure mode as C5: a settings object that ignores the GUI renders
+    something other than what the controls say.
+    """
+    app.inspector_show_nnd_var.set(True)
+    app.inspector_show_hull_var.set(False)
+    app.inspector_dot_size_var.set(11)
+    app.inspector_trail_var.set(45)
+
+    settings = app.render_settings_from_vars()
+
+    assert settings.show_nnd is True
+    assert settings.show_hull is False
+    assert settings.dot_radius == 11
+    assert settings.trail_length == 45
