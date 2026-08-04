@@ -437,6 +437,18 @@ class InspectorTabMixin:
                 command=self._inspector_rebuild_needed
             ).pack(anchor="w", padx=5)
 
+        # --- Export (collapsible) ---
+        _, export_frame = self._make_collapsible(scroll_frame, "Export")
+
+        tk.Button(export_frame, text="Save Frame (PNG)...",
+                  command=self._inspector_save_frame,
+                  bg="lightgreen").pack(fill="x", padx=5, pady=2)
+        tk.Label(export_frame,
+                 text="Exports what this tab is showing,\n"
+                      "at full video resolution.",
+                 font=("Arial", 8), fg="gray",
+                 justify="left").pack(anchor="w", padx=5, pady=(0, 4))
+
     # =========================================================================
     # DISPLAY AREA
     # =========================================================================
@@ -543,6 +555,75 @@ class InspectorTabMixin:
         self.inspector_mark_label.config(
             text=f"{prefix}In {start} → Out {end} "
                  f"({n} frames, {n / fps:.1f} s)"
+        )
+
+    # =========================================================================
+    # EXPORT
+    # =========================================================================
+
+    def _inspector_current_composite(self):
+        """The current frame with overlays, at full video resolution.
+
+        Not the canvas image: that is downscaled to fit the widget, which is
+        no use for a figure.
+
+        Returns (rgb_array, loaded, frame_idx), or (None, None, None) when no
+        file is selected.
+        """
+        selected = self.inspector_file_var.get()
+        if not selected or selected not in self.loaded_files:
+            return None, None, None
+
+        loaded = self.loaded_files[selected]
+        frame_idx = min(self._get_inspector_frame_idx(), loaded.n_frames - 1)
+
+        base = None
+        if self.inspector_video_var.get() and selected in self.video_readers:
+            base = self.video_readers[selected].read_frame(frame_idx)
+        if base is None and self._insp_cached_background is not None:
+            base = self._insp_cached_background
+        if base is None:
+            base = np.ones((loaded.metadata.video_height,
+                            loaded.metadata.video_width, 3),
+                           dtype=np.uint8) * 200
+
+        composed = compose_frame(base, loaded.trajectories, frame_idx,
+                                 self.render_settings_from_vars(),
+                                 loaded.calibration.scale_factor)
+        return composed, loaded, frame_idx
+
+    def _inspector_save_frame(self):
+        """Write the current composite to a PNG at full resolution."""
+        composed, loaded, frame_idx = self._inspector_current_composite()
+        if composed is None:
+            messagebox.showwarning(
+                "No File Selected",
+                "Select a file in the Video Inspector first."
+            )
+            return
+
+        path = filedialog.asksaveasfilename(
+            title="Save Frame",
+            defaultextension=".png",
+            initialfile=f"{loaded.nickname}_frame{frame_idx:06d}.png",
+            filetypes=[("PNG image", "*.png")]
+        )
+        if not path:
+            return
+
+        try:
+            from ..media_export import save_frame_png
+            save_frame_png(composed, path)
+        except Exception as e:
+            messagebox.showerror("Save Failed",
+                                 f"Could not write {path}:\n{e}")
+            return
+
+        self.set_status(f"Saved frame to {Path(path).name}")
+        messagebox.showinfo(
+            "Frame Saved",
+            f"Saved to:\n{path}\n\n"
+            f"{composed.shape[1]} x {composed.shape[0]} px"
         )
 
     def render_settings_from_vars(self) -> OverlaySettings:

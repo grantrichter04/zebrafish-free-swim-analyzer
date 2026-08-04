@@ -487,3 +487,26 @@ def test_markers_reset_when_a_different_file_is_selected(app, synthetic_npy):
 
     assert app.inspector_mark_in is None
     assert app.inspector_mark_out is None
+
+
+def test_saved_frame_is_full_video_resolution_not_canvas_size(app,
+                                                              synthetic_npy):
+    """The canvas downscales to fit the widget; a figure needs the real thing."""
+    from fish_analyzer.file_loading import TrajectoryFileLoader
+
+    loaded = TrajectoryFileLoader.load_file(synthetic_npy, "s1")
+    app.loaded_files["s1"] = loaded
+    app.inspector_file_var.set("s1")
+    app.inspector_show_positions_var.set(True)
+
+    composed, returned, frame_idx = app._inspector_current_composite()
+
+    assert composed.shape[0] == loaded.metadata.video_height
+    assert composed.shape[1] == loaded.metadata.video_width
+    assert returned is loaded
+
+
+def test_current_composite_reports_no_file_rather_than_raising(app):
+    composed, loaded, frame_idx = app._inspector_current_composite()
+
+    assert composed is None and loaded is None and frame_idx is None
