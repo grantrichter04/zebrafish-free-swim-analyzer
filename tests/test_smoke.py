@@ -85,20 +85,38 @@ def test_shoaling_runs(synthetic_npy):
     assert results.mean_nnd <= results.mean_iid
 
 
-def test_gui_constructs():
-    """Exercises the whole mixin stack and every tab's widget construction."""
-    tk = pytest.importorskip("tkinter")
-    try:
-        probe = tk.Tk()
-    except tk.TclError:
-        pytest.skip("no display available")
-    probe.destroy()
+def test_gui_constructs(app):
+    """Every tab's widget construction ran, across the whole mixin stack.
 
-    from fish_analyzer import EnhancedFishAnalyzer
-    app = EnhancedFishAnalyzer()
-    app.root.withdraw()
-    app.root.update_idletasks()
-    app.root.destroy()
+    Uses the shared session app rather than building a second one. It used to
+    construct its own EnhancedFishAnalyzer on top of the fixture's, and
+    conftest.py documents why that is a trap: "Tcl starts refusing new
+    interpreters after a handful of them - which surfaced as tk.Tk() raising
+    intermittently, in a different test on every run." This test was the one
+    left doing it, and it skipped or failed roughly one run in five.
+
+    Reaching the fixture at all means construction succeeded, so the assertions
+    are about the result being complete rather than about it not raising.
+    """
+    tabs = [app.notebook.tab(i, "text")
+            for i in range(app.notebook.index("end"))]
+
+    assert tabs == [
+        "Data Setup & Calibration",
+        "Individual Analysis",
+        "Bout Analysis",
+        "Shoaling Analysis",
+        "Spatial Analysis",
+        "Video Inspector",
+    ]
+
+    # One control from each tab's mixin, so a tab that silently built nothing
+    # would be caught rather than merely counted.
+    for attr in ("file_path_var",            # DataTabMixin
+                 "speed_dist_collapse_var",  # AnalysisTabMixin
+                 "inspector_frame_slider",   # InspectorTabMixin
+                 "inspector_mark_label"):    # InspectorExportMixin
+        assert hasattr(app, attr), f"{attr} missing - a tab did not build"
 
 
 def test_requirements_txt_matches_pyproject():

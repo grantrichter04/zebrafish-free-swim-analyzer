@@ -3,20 +3,21 @@ fish_analyzer/video_utils.py
 ============================
 Utilities for reading video frames for visualization.
 
-PERFORMANCE OPTIMIZATIONS (v2.0):
-- Larger cache (100 frames default)
-- Predictive pre-loading during playback
-- Sequential reading mode for forward playback
-- Optional frame downsampling for speed
-- Background thread for frame loading
+Reads are cached and, when the caller walks forward, avoid seeking - on a
+1288x964 MJPG recording that is 9.9 ms/frame against 64.7 ms when seeking every
+frame.
+
+A background preload thread used to live here. It drove cap.set() and cap.read()
+on the same VideoCapture as the foreground with only the cache locked, and
+playing 250 frames through it aborted the process with ffmpeg decode errors. It
+was also unreachable: its only entry point, read_frame_fast, had no callers.
+Removed rather than locked - see tests/test_video_utils.py.
 """
 
 from pathlib import Path
 from typing import Optional, Dict
 import numpy as np
-from threading import Thread, Lock
-from queue import Queue
-import time
+from threading import Lock
 
 try:
     import cv2
@@ -85,14 +86,11 @@ class VideoFrameCache:
 
 class VideoFrameReader:
     """
-    Optimized video frame reader with predictive caching.
-    
-    PERFORMANCE IMPROVEMENTS:
-    - Larger cache (100 frames default)
-    - Sequential read mode for forward playback
-    - Predictive pre-loading
-    - Optional downsampling
-    - Background loading thread
+    Frame reader with an LRU cache and a seek-free path for forward walks.
+
+    Single-threaded by design: the VideoCapture is not synchronised, so it must
+    only ever be touched by its owner. An export that wants its own read
+    position should open its own capture - see media_export.ExportFrameSource.
     """
     
     def __init__(self, video_path: Path, cache_size: int = 100, downsample_factor: float = 1.0):
@@ -139,26 +137,23 @@ class VideoFrameReader:
         self.width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         self.height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         
-        # Performance tracking
+        # Lets read_frame skip the seek when the caller walks forward.
         self.last_frame_read = -1
         self.sequential_reads = 0
-        self.preload_active = False
-        
+
         print(f"Video loaded: {self.width}x{self.height}, {self.total_frames} frames @ {self.fps:.1f} fps")
         if downsample_factor != 1.0:
             print(f"Downsampling: {downsample_factor}x (display: {int(self.width*downsample_factor)}x{int(self.height*downsample_factor)})")
     
-    def read_frame(self, frame_number: int, preload_next: int = 0) -> Optional[np.ndarray]:
+    def read_frame(self, frame_number: int) -> Optional[np.ndarray]:
         """
-        Read a specific frame from the video with optional predictive loading.
-        
+        Read a specific frame from the video.
+
         Parameters
         ----------
         frame_number : int
             Frame number to read (0-indexed)
-        preload_next : int
-            Number of next frames to pre-load in background (0 = disabled)
-            
+
         Returns
         -------
         np.ndarray or None
@@ -167,11 +162,8 @@ class VideoFrameReader:
         # Check cache first
         cached = self.cache.get(frame_number)
         if cached is not None:
-            # Start preloading if playing forward
-            if preload_next > 0:
-                self._start_preload(frame_number + 1, preload_next)
             return cached
-        
+
         # Validate frame number
         if frame_number < 0 or frame_number >= self.total_frames:
             return None
@@ -204,80 +196,11 @@ class VideoFrameReader:
         # Cache it
         self.cache.put(frame_number, frame_rgb)
         self.last_frame_read = frame_number
-        
-        # Start preloading next frames if playing
-        if preload_next > 0 and is_sequential:
-            self._start_preload(frame_number + 1, preload_next)
-        
+
         return frame_rgb
-    
-    def _start_preload(self, start_frame: int, count: int):
-        """Start background preloading of upcoming frames."""
-        # Only preload if not already preloading
-        if self.preload_active:
-            return
-        
-        # Don't preload if frames are already cached
-        all_cached = all(self.cache.has_frame(start_frame + i) for i in range(count))
-        if all_cached:
-            return
-        
-        # Start preload thread
-        self.preload_active = True
-        thread = Thread(target=self._preload_worker, args=(start_frame, count), daemon=True)
-        thread.start()
-    
-    def _preload_worker(self, start_frame: int, count: int):
-        """Background worker to preload frames."""
-        try:
-            for i in range(count):
-                frame_num = start_frame + i
-                
-                # Stop if out of bounds
-                if frame_num >= self.total_frames:
-                    break
-                
-                # Skip if already cached
-                if self.cache.has_frame(frame_num):
-                    continue
-                
-                # Read frame
-                self.cap.set(cv2.CAP_PROP_POS_FRAMES, frame_num)
-                ret, frame = self.cap.read()
-                
-                if ret:
-                    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                    
-                    if self.downsample_factor != 1.0:
-                        new_width = int(self.width * self.downsample_factor)
-                        new_height = int(self.height * self.downsample_factor)
-                        frame_rgb = cv2.resize(frame_rgb, (new_width, new_height), interpolation=cv2.INTER_LINEAR)
-                    
-                    self.cache.put(frame_num, frame_rgb)
-                
-                # Small delay to not hog CPU
-                time.sleep(0.001)
-        finally:
-            self.preload_active = False
-    
-    def read_frame_fast(self, frame_number: int) -> Optional[np.ndarray]:
-        """
-        Fast frame reading optimized for playback.
-        
-        Automatically enables preloading during forward playback.
-        Use this during animation/playback for best performance.
-        """
-        # Detect playback direction
-        if frame_number > self.last_frame_read:
-            # Playing forward - preload aggressively
-            return self.read_frame(frame_number, preload_next=10)
-        else:
-            # Scrubbing/backwards - no preload
-            return self.read_frame(frame_number, preload_next=0)
-    
+
     def close(self):
         """Release video file handle and clear cache."""
-        self.preload_active = False  # Stop preloading
         if self.cap is not None:
             self.cap.release()
         self.cache.clear()
