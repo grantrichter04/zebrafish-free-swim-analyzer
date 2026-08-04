@@ -19,8 +19,10 @@ from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 import matplotlib.pyplot as plt
 
-from .utils import smooth_time_series, create_sortable_treeview, embed_figure_with_toolbar
+from .utils import (smooth_time_series, create_sortable_treeview,
+                    embed_figure_with_toolbar, ask_csv_save_path)
 from ..export import export_individual_metrics_csv, export_combined_summary_csv
+from ..overlay_render import fish_colors
 
 
 class AnalysisTabMixin:
@@ -355,7 +357,7 @@ class AnalysisTabMixin:
         show_individual = self.show_individual_fish_var.get()
         show_average = self.show_file_average_var.get()
 
-        file_colors = plt.cm.tab10(np.linspace(0, 1, len(selected_files)))
+        file_colors = fish_colors(len(selected_files))
 
         for file_idx, filename in enumerate(selected_files):
             loaded_file = self.loaded_files[filename]
@@ -482,7 +484,7 @@ class AnalysisTabMixin:
         from collections import OrderedDict
 
         if collapse_level == "video":
-            file_colors = plt.cm.tab10(np.linspace(0, 1, max(len(selected_files), 1)))
+            file_colors = fish_colors(len(selected_files))
             color_map = {fn: file_colors[i] for i, fn in enumerate(selected_files)}
 
             video_data: OrderedDict = OrderedDict()
@@ -503,7 +505,7 @@ class AnalysisTabMixin:
                 for fn in selected_files
             }
             unique_groups = list(dict.fromkeys(file_to_group.values()))
-            group_colors = plt.cm.tab10(np.linspace(0, 1, max(len(unique_groups), 1)))
+            group_colors = fish_colors(len(unique_groups))
             group_color_map = {g: group_colors[i] for i, g in enumerate(unique_groups)}
 
             group_data: OrderedDict = OrderedDict()
@@ -534,7 +536,7 @@ class AnalysisTabMixin:
             self.histogram_bins_var.set("30")
 
         fish_info = []
-        file_colors = plt.cm.tab10(np.linspace(0, 1, len(selected_files)))
+        file_colors = fish_colors(len(selected_files))
 
         for file_idx, filename in enumerate(selected_files):
             loaded_file = self.loaded_files[filename]
@@ -843,7 +845,7 @@ class AnalysisTabMixin:
             units.append(unit)
 
         x = np.arange(len(file_names))
-        colors = plt.cm.tab10(np.linspace(0, 1, len(file_names)))
+        colors = fish_colors(len(file_names))
 
         def _label(ax):
             ax.set_xticks(x)
@@ -921,7 +923,7 @@ class AnalysisTabMixin:
                 width = loaded_file.metadata.video_width * pixels_to_bl
                 height = loaded_file.metadata.video_height * pixels_to_bl
 
-                colors = plt.cm.tab10(np.linspace(0, 1, len(fish_list)))
+                colors = fish_colors(len(fish_list))
 
                 for fish, color in zip(fish_list, colors):
                     x = fish.trajectory['x'].values
@@ -968,7 +970,7 @@ class AnalysisTabMixin:
                 y = fish.trajectory['y'].values
 
                 file_idx = selected_files.index(filename)
-                file_color = plt.cm.tab10(file_idx / max(1, len(selected_files) - 1))
+                file_color = fish_colors(len(selected_files))[file_idx]
 
                 ax.plot(x, y, color=file_color, linewidth=0.6, alpha=0.6)
 
@@ -1094,20 +1096,15 @@ class AnalysisTabMixin:
                                    "Run 'Run Individual Trajectory Analysis' first.")
             return
 
-        output_path = filedialog.asksaveasfilename(
-            title="Export Individual Metrics CSV",
-            defaultextension=".csv",
-            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
-            initialfile="individual_metrics.csv"
-        )
+        output_path = ask_csv_save_path("Export Individual Metrics CSV", "individual_metrics.csv")
         if not output_path:
             return
 
         try:
             n_rows = export_individual_metrics_csv(
-                analyzed, Path(output_path), file_groups=self.file_groups
+                analyzed, output_path, file_groups=self.file_groups
             )
-            self.set_status(f"Exported {n_rows} fish to {Path(output_path).name}")
+            self.set_status(f"Exported {n_rows} fish to {output_path.name}")
             messagebox.showinfo("Export Complete",
                                 f"Exported {n_rows} fish rows to:\n{output_path}")
         except Exception as e:
@@ -1132,18 +1129,13 @@ class AnalysisTabMixin:
             ):
                 return
 
-        output_path = filedialog.asksaveasfilename(
-            title="Export Combined Summary CSV",
-            defaultextension=".csv",
-            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
-            initialfile="combined_summary.csv"
-        )
+        output_path = ask_csv_save_path("Export Combined Summary CSV", "combined_summary.csv")
         if not output_path:
             return
 
         try:
             n_rows = export_combined_summary_csv(
-                analyzed, bout_results, self.file_groups, Path(output_path)
+                analyzed, bout_results, self.file_groups, output_path
             )
             has_bouts = bool(bout_results)
             msg = (

@@ -24,7 +24,9 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import matplotlib.pyplot as plt
 
 from ..bout_analysis import BoutParameters, BoutResults, analyze_bouts_for_file
-from .utils import create_sortable_treeview, embed_figure_with_toolbar
+from ..overlay_render import fish_colors
+from .utils import (create_sortable_treeview, embed_figure_with_toolbar,
+                    ask_csv_save_path)
 
 
 class BoutTabMixin:
@@ -598,7 +600,7 @@ class BoutTabMixin:
                     pass
 
         # ---- collect per-fish data, grouped by file ----
-        file_colors_arr = plt.cm.tab10(np.linspace(0, 1, max(len(selected_files), 1)))
+        file_colors_arr = fish_colors(len(selected_files))
         file_groups: OrderedDict = OrderedDict()
 
         for file_idx, filename in enumerate(selected_files):
@@ -915,12 +917,7 @@ class BoutTabMixin:
             messagebox.showinfo("No Data", "Run bout analysis first.")
             return
 
-        path = filedialog.asksaveasfilename(
-            defaultextension=".csv",
-            filetypes=[("CSV files", "*.csv")],
-            title="Export Bout Data",
-            initialfile="bout_analysis.csv"
-        )
+        path = ask_csv_save_path("Export Bout Data", "bout_analysis.csv")
         if not path:
             return
 

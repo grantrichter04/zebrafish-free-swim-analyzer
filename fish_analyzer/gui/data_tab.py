@@ -105,9 +105,19 @@ class DataTabMixin:
 
         tk.Label(controls, text="Session Folder:").pack(side="left", padx=5)
         self.file_path_var = tk.StringVar()
-        tk.Entry(controls, textvariable=self.file_path_var, width=50).pack(side="left", padx=5)
+        path_entry = tk.Entry(controls, textvariable=self.file_path_var,
+                              width=50)
+        path_entry.pack(side="left", padx=5)
+        # The box is editable, so a typed path has to do something. Without
+        # this, typing one was a silent dead end, and _load_selected_file - the
+        # only route to loading a bare trajectories.npy - was unreachable.
+        path_entry.bind("<Return>", lambda e: self._load_selected_file())
+
         tk.Button(controls, text="Browse...", command=self._browse_for_session_folder,
                  bg="lightblue", font=("Arial", 10, "bold")).pack(side="left", padx=5)
+        tk.Button(controls, text="Load", command=self._load_selected_file,
+                  bg="lightgreen", font=("Arial", 10, "bold")).pack(side="left",
+                                                                    padx=2)
         
         # Help text
         tk.Label(file_frame, 
