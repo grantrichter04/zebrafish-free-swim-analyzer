@@ -7,9 +7,12 @@ No tkinter: the GUI supplies settings and a progress callback, this module
 does the work. Frames are RGB uint8 throughout; only the sinks convert to BGR,
 because that is what cv2.VideoWriter and cv2.imwrite expect.
 """
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
+
+from .overlay_render import compose_frame, fish_colors
 
 try:
     import cv2
@@ -237,3 +240,70 @@ class ScrollingStrip:
         x = max(0, min(strip.shape[1] - 1, x))
         cv2.line(strip, (x, 0), (x, strip.shape[0]), self.color, self.width)
         return strip
+
+
+@dataclass
+class ExportResult:
+    frames_written: int
+    cancelled: bool
+    path: object = None
+
+
+def export_clip(source, sink, strip, trajectories, settings, scale,
+                start_frame, end_frame, step=1, fps=30.0,
+                on_progress=None, should_cancel=None):
+    """Composite `start_frame`..`end_frame` inclusive and write them to `sink`.
+
+    The output canvas is allocated once and written into, so there is no
+    per-frame vstack allocation. Overlay settings are taken as given and never
+    re-read, so a clip cannot change appearance halfway through because a
+    checkbox moved.
+
+    `strip` is any object with `.height` and `.at(t) -> ndarray`, or None for
+    no time panel. `should_cancel` is polled once per frame; on cancellation
+    the sink is asked to discard whatever it has written.
+    """
+    n_fish = trajectories.shape[1]
+    colors = fish_colors(n_fish)
+    total = len(range(start_frame, end_frame + 1, step))
+
+    out = None
+    written = 0
+    try:
+        for i, frame_idx in enumerate(range(start_frame, end_frame + 1, step)):
+            if should_cancel is not None and should_cancel():
+                sink.discard_partial()
+                return ExportResult(written, True, getattr(sink, "path", None))
+
+            base = source.read()
+            if base is None:
+                break
+
+            composed = compose_frame(base, trajectories, frame_idx, settings,
+                                     scale, colors)
+
+            if strip is None:
+                out = composed
+            else:
+                if out is None:
+                    h, w = composed.shape[:2]
+                    out = np.zeros((h + strip.height, w, 3), dtype=np.uint8)
+                h = composed.shape[0]
+                out[:h] = composed
+                out[h:] = strip.at(frame_idx / fps)
+
+            sink.write(out)
+            written += 1
+
+            if on_progress is not None:
+                on_progress(i + 1, total)
+
+            # step > 1 means skipping frames; read past them sequentially
+            # rather than seeking, which is 6.5x cheaper on MJPG sources.
+            for _ in range(step - 1):
+                if source.read() is None:
+                    break
+    finally:
+        sink.close()
+
+    return ExportResult(written, False, getattr(sink, "path", None))

@@ -188,3 +188,131 @@ def test_scrolling_strip_moves_its_window_with_time():
 
     assert not np.array_equal(early, late), "window did not scroll"
     assert early.shape == late.shape
+
+
+class RecordingSink:
+    """Captures what the loop writes, so tests need no encoder."""
+
+    def __init__(self):
+        self.frames = []
+        self.closed = False
+        self.discarded = False
+
+    def write(self, f):
+        self.frames.append(f.copy())
+
+    def close(self):
+        self.closed = True
+
+    def discard_partial(self):
+        self.discarded = True
+
+
+def test_export_clip_writes_one_frame_per_source_frame(tmp_path):
+    from fish_analyzer.media_export import ExportFrameSource, export_clip
+    from fish_analyzer.overlay_render import OverlaySettings
+
+    video = make_video(tmp_path / "in.avi", n_frames=20)
+    traj = np.full((20, 1, 2), 10.0)
+    sink = RecordingSink()
+
+    with ExportFrameSource(video, start_frame=2) as src:
+        export_clip(src, sink, None, traj,
+                    OverlaySettings(show_positions=True),
+                    scale=1.0, start_frame=2, end_frame=7, step=1)
+
+    assert len(sink.frames) == 6, "inclusive range 2..7 is six frames"
+    assert sink.closed is True
+
+
+def test_export_clip_stacks_the_strip_under_the_frame(tmp_path):
+    from fish_analyzer.media_export import ExportFrameSource, export_clip
+    from fish_analyzer.overlay_render import OverlaySettings
+
+    video = make_video(tmp_path / "in.avi", n_frames=10)
+    traj = np.full((10, 1, 2), 10.0)
+    sink = RecordingSink()
+
+    class FakeStrip:
+        height = 40
+
+        def at(self, t):
+            return np.zeros((40, 48, 3), dtype=np.uint8)
+
+    with ExportFrameSource(video, start_frame=0) as src:
+        export_clip(src, sink, FakeStrip(), traj, OverlaySettings(),
+                    scale=1.0, start_frame=0, end_frame=2, step=1, fps=30.0)
+
+    assert sink.frames[0].shape == (32 + 40, 48, 3), \
+        "strip not stacked below the frame"
+
+
+def test_export_clip_stops_when_cancelled(tmp_path):
+    from fish_analyzer.media_export import ExportFrameSource, export_clip
+    from fish_analyzer.overlay_render import OverlaySettings
+
+    video = make_video(tmp_path / "in.avi", n_frames=20)
+    traj = np.full((20, 1, 2), 10.0)
+    sink = RecordingSink()
+
+    with ExportFrameSource(video, start_frame=0) as src:
+        result = export_clip(src, sink, None, traj, OverlaySettings(),
+                             scale=1.0, start_frame=0, end_frame=19, step=1,
+                             should_cancel=lambda: len(sink.frames) >= 3)
+
+    assert result.cancelled is True
+    assert sink.discarded is True, "partial output not discarded on cancel"
+    assert len(sink.frames) == 3
+
+
+def test_export_clip_reports_progress(tmp_path):
+    from fish_analyzer.media_export import ExportFrameSource, export_clip
+    from fish_analyzer.overlay_render import OverlaySettings
+
+    video = make_video(tmp_path / "in.avi", n_frames=10)
+    traj = np.full((10, 1, 2), 10.0)
+    seen = []
+
+    with ExportFrameSource(video, start_frame=0) as src:
+        export_clip(src, RecordingSink(), None, traj, OverlaySettings(),
+                    scale=1.0, start_frame=0, end_frame=4, step=1,
+                    on_progress=lambda done, total: seen.append((done, total)))
+
+    assert seen[0] == (1, 5)
+    assert seen[-1] == (5, 5)
+
+
+def test_export_clip_stops_cleanly_when_the_video_ends_early(tmp_path):
+    """The trajectory file can be longer than the video it came from."""
+    from fish_analyzer.media_export import ExportFrameSource, export_clip
+    from fish_analyzer.overlay_render import OverlaySettings
+
+    video = make_video(tmp_path / "in.avi", n_frames=5)
+    traj = np.full((50, 1, 2), 10.0)
+    sink = RecordingSink()
+
+    with ExportFrameSource(video, start_frame=0) as src:
+        result = export_clip(src, sink, None, traj, OverlaySettings(),
+                             scale=1.0, start_frame=0, end_frame=49, step=1)
+
+    assert result.frames_written == 5
+    assert result.cancelled is False
+    assert sink.closed is True
+
+
+def test_export_clip_honours_a_frame_step(tmp_path):
+    from fish_analyzer.media_export import ExportFrameSource, export_clip
+    from fish_analyzer.overlay_render import OverlaySettings
+
+    video = make_video(tmp_path / "in.avi", n_frames=20)
+    traj = np.full((20, 1, 2), 10.0)
+    sink = RecordingSink()
+
+    with ExportFrameSource(video, start_frame=0) as src:
+        export_clip(src, sink, None, traj, OverlaySettings(), scale=1.0,
+                    start_frame=0, end_frame=9, step=2)
+
+    # 0, 2, 4, 6, 8
+    assert len(sink.frames) == 5
+    reds = [int(f[0, 0, 0]) for f in sink.frames]
+    assert reds == pytest.approx([0, 20, 40, 60, 80], abs=6)
