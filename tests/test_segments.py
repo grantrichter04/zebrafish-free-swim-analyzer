@@ -5,15 +5,9 @@ tracking gap as "moving", bout_analysis.py treated it as "still", and neither
 excluded it from a denominator. This module is the single answer both now
 call, so these tests are the specification for all three.
 """
-import sys
-from pathlib import Path
 
 import numpy as np
 import pytest
-
-REPO = Path(__file__).resolve().parent.parent
-if str(REPO) not in sys.path:
-    sys.path.insert(0, str(REPO))
 
 from fish_analyzer.segments import (  # noqa: E402
     backward_speed_slices, contiguous_tracked_segments, forward_speed_slices,

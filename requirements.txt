@@ -2,6 +2,11 @@
 #
 #   pip install -r requirements.txt
 #
+# PREFER `pip install -e ".[dev]"`. pyproject.toml is the source of truth and
+# also installs the package itself, which is what lets `import fish_analyzer`
+# work outside the repository root. This file carries the same constraints for
+# anyone who wants dependencies only, and must be kept in step by hand.
+#
 # Requires Python >= 3.9. Verified working on 3.9, 3.12 and 3.13.
 # See README.md for the conda alternative.
 
@@ -25,8 +30,9 @@ shapely>=2.0
 opencv-python>=4.8
 
 # --- Development only --------------------------------------------------------
-# Needed to run the test suite (pytest -q); not needed to use the application.
-#   pip install pytest
+# Not listed here, because it is not needed to run the application. Install the
+# test suite's requirements with the dev extra instead:
+#   pip install -e ".[dev]"
 
 # --- Not installed here ------------------------------------------------------
 # fish_posture_analyzer.py and head_detection/ are standalone scripts with

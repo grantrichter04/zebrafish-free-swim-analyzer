@@ -1,0 +1,58 @@
+name: tests
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  test:
+    # windows-latest, not ubuntu: the GUI tests are gated behind a usable
+    # display (tests/conftest.py) and would silently skip on a headless Linux
+    # runner. That is where the real defects have turned up, and a green tick
+    # covering only the headless half would be worse than misleading. Windows
+    # is also the platform this is actually used on.
+    runs-on: windows-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # The floor and the recommended default. README claims both work; this
+        # is what makes that claim mean something.
+        python-version: ["3.9", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Show the resolved environment
+        run: pip list
+
+      - name: Run the test suite
+        run: pytest -q
+
+      - name: Confirm the GUI tests actually ran
+        # A silent skip would mean the runner had no display and the tkinter
+        # half of the suite never executed - a green tick covering half the
+        # code. This fails the job rather than merely reporting it.
+        shell: pwsh
+        run: |
+          $out = pytest tests/test_gui_regressions.py -q -rs 2>&1 | Out-String
+          Write-Host $out
+          if ($out -match "no display available") {
+            Write-Error "GUI tests skipped: the runner had no usable display."
+            exit 1
+          }
+          if ($out -notmatch "\d+ passed") {
+            Write-Error "GUI tests did not report any passes."
+            exit 1
+          }
