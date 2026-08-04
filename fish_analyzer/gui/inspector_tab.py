@@ -443,6 +443,9 @@ class InspectorTabMixin:
         tk.Button(export_frame, text="Save Frame (PNG)...",
                   command=self._inspector_save_frame,
                   bg="lightgreen").pack(fill="x", padx=5, pady=2)
+        tk.Button(export_frame, text="Export Clip...",
+                  command=self._inspector_export_clip_dialog,
+                  bg="lightgreen").pack(fill="x", padx=5, pady=2)
         tk.Label(export_frame,
                  text="Exports what this tab is showing,\n"
                       "at full video resolution.",
@@ -504,6 +507,7 @@ class InspectorTabMixin:
         # Export range. None means "not marked", not "frame 0".
         self.inspector_mark_in = None
         self.inspector_mark_out = None
+        self._insp_export_after_id = None
 
     # =========================================================================
     # EXPORT RANGE
@@ -625,6 +629,250 @@ class InspectorTabMixin:
             f"Saved to:\n{path}\n\n"
             f"{composed.shape[1]} x {composed.shape[0]} px"
         )
+
+    def _inspector_can_export(self):
+        """(ok, reason) - whether an export can produce a meaningful clip.
+
+        The point is to refuse before writing anything, rather than encode a
+        panel reading "Run Shoaling Analysis first" into a video.
+        """
+        selected = self.inspector_file_var.get()
+        if not selected or selected not in self.loaded_files:
+            return False, "Select a file in the Video Inspector first."
+
+        loaded = self.loaded_files[selected]
+        time_mode = self.inspector_time_mode_var.get()
+
+        if time_mode in ('nnd', 'iid', 'hull') and not loaded.shoaling_results:
+            return False, (
+                f"The Time Panel is set to {time_mode.upper()}, but no "
+                f"shoaling results exist for '{selected}'.\n\n"
+                "Run Shoaling Analysis first, or set the Time Panel to 'None'."
+            )
+
+        if time_mode == 'bout' and not self.bout_results.get(selected):
+            return False, (
+                "The Time Panel is set to Bout Speed + Heading, but no bout "
+                f"results exist for '{selected}'.\n\n"
+                "Run Bout Analysis first, or set the Time Panel to 'None'."
+            )
+
+        return True, ""
+
+    def _inspector_export_clip_dialog(self):
+        """Collect export options, then run the export."""
+        ok, reason = self._inspector_can_export()
+        if not ok:
+            messagebox.showwarning("Cannot Export", reason)
+            return
+
+        selected = self.inspector_file_var.get()
+        loaded = self.loaded_files[selected]
+        start, end = self._inspector_export_range(loaded.n_frames)
+        fps = loaded.calibration.frame_rate
+        n_frames = end - start + 1
+
+        time_mode = self.inspector_time_mode_var.get()
+        # Measured at 28 ms/frame exporting 1288x964 + strip with positions,
+        # NND, hull and trails on. Bout redraws matplotlib every frame instead
+        # of stamping a cursor onto a strip rasterised once, so it is roughly
+        # three times slower.
+        per_frame_ms = 90 if time_mode == 'bout' else 28
+        estimate_s = n_frames * per_frame_ms / 1000.0
+
+        marked = (self.inspector_mark_in is not None
+                  or self.inspector_mark_out is not None)
+        message = (
+            f"Export frames {start}-{end}"
+            f"{'' if marked else ' (whole recording - no In/Out marked)'}\n"
+            f"{n_frames} frames, {n_frames / fps:.1f} s of video\n"
+            f"Estimated time: {estimate_s:.0f} s\n\n"
+        )
+        if time_mode == 'bout':
+            message += ("The Bout panel has to be redrawn for every frame, "
+                        "which is around four times slower than the other "
+                        "panels.\n\n")
+        message += "Continue?"
+
+        if not messagebox.askyesno("Export Clip", message):
+            return
+
+        as_png = messagebox.askyesno(
+            "Output Format",
+            "Yes  =  PNG sequence (lossless, one file per frame)\n"
+            "No   =  MP4 video"
+        )
+
+        if as_png:
+            target = filedialog.askdirectory(
+                title="Choose a folder for the PNG sequence"
+            )
+        else:
+            target = filedialog.asksaveasfilename(
+                title="Save Clip",
+                defaultextension=".mp4",
+                initialfile=f"{selected}_{start}-{end}.mp4",
+                filetypes=[("MP4 video", "*.mp4")]
+            )
+        if not target:
+            return
+
+        self._inspector_run_export(loaded, selected, start, end, target,
+                                   as_png)
+
+    def _inspector_run_export(self, loaded, selected, start, end, target,
+                              as_png):
+        """Run the export in chunks so Tk keeps painting and Cancel works.
+
+        Not a worker thread: neither Tk nor matplotlib is safe to drive off
+        the main thread.
+        """
+        from ..media_export import (CodecUnavailable, ExportFrameSource,
+                                    Mp4Sink, PngSequenceSink, ScrollingStrip,
+                                    TimeStrip)
+
+        self._inspector_stop_playback()
+
+        fps = loaded.calibration.frame_rate
+        settings = self.render_settings_from_vars()
+        time_mode = self.inspector_time_mode_var.get()
+
+        video_path = None
+        if self.inspector_video_var.get() and selected in self.video_readers:
+            video_path = self.video_readers[selected].video_path
+        if video_path is None:
+            messagebox.showwarning(
+                "No Video",
+                "Clip export needs a video.\n\n"
+                "Tick 'Use video frames' and load one with Browse Video..."
+            )
+            return
+
+        frame_h = loaded.metadata.video_height
+        frame_w = loaded.metadata.video_width
+
+        strip = None
+        if time_mode != 'none' and self._insp_fig is not None:
+            if time_mode == 'bout':
+                # Scrolling axes: cannot be rasterised once.
+                strip = ScrollingStrip(
+                    self._insp_fig, self._insp_ax_time,
+                    window_s=float(self.inspector_bout_window_var.get()),
+                    total_s=loaded.n_frames / fps,
+                    target_width=frame_w,
+                )
+            else:
+                strip = TimeStrip(self._insp_fig, self._insp_ax_time,
+                                  target_width=frame_w)
+
+        out_h = frame_h + (strip.height if strip is not None else 0)
+
+        try:
+            source = ExportFrameSource(video_path, start_frame=start)
+            if as_png:
+                sink = PngSequenceSink(target, fps, (frame_w, out_h))
+            else:
+                sink = Mp4Sink(target, fps, (frame_w, out_h))
+        except CodecUnavailable as e:
+            messagebox.showerror("Export Failed", str(e))
+            return
+        except Exception as e:
+            messagebox.showerror("Export Failed",
+                                 f"Could not start the export:\n{e}")
+            return
+
+        progress = tk.Toplevel(self.root)
+        progress.title("Exporting")
+        progress.transient(self.root)
+        progress.grab_set()
+        label = tk.Label(progress, text="Starting...", width=32)
+        label.pack(padx=20, pady=10)
+        state = {"cancel": False}
+        tk.Button(progress, text="Cancel",
+                  command=lambda: state.__setitem__("cancel", True)
+                  ).pack(pady=(0, 10))
+
+        total = end - start + 1
+        colors = fish_colors(loaded.n_fish)
+        cursor = {"frame": start, "written": 0}
+        out_buffer = {"array": None}
+
+        def finish(message, warn):
+            try:
+                progress.destroy()
+            except Exception:
+                pass
+            source.close()
+            # ScrollingStrip leaves the live axes on the last exported window,
+            # and both strips force a draw on the shared canvas. Rebuild so
+            # the tab is not left showing export state.
+            self._insp_needs_rebuild = True
+            try:
+                self._inspector_update_fast()
+            except Exception:
+                pass
+            self.set_status(message)
+            if warn:
+                messagebox.showwarning("Export Stopped", message)
+            else:
+                messagebox.showinfo("Export Complete", message)
+
+        def do_chunk():
+            if state["cancel"]:
+                sink.discard_partial()
+                finish(f"Export cancelled after {cursor['written']} frames.",
+                       True)
+                return
+
+            for _ in range(10):
+                if cursor["frame"] > end:
+                    sink.close()
+                    finish(f"Wrote {cursor['written']} frames to "
+                           f"{getattr(sink, 'path', target)}", False)
+                    return
+
+                base = source.read()
+                if base is None:
+                    sink.close()
+                    finish(f"The video ended early; wrote "
+                           f"{cursor['written']} of {total} frames.", True)
+                    return
+
+                composed = compose_frame(base, loaded.trajectories,
+                                         cursor["frame"], settings,
+                                         loaded.calibration.scale_factor,
+                                         colors)
+
+                if strip is None:
+                    frame_out = composed
+                else:
+                    if out_buffer["array"] is None:
+                        out_buffer["array"] = np.zeros(
+                            (out_h, frame_w, 3), dtype=np.uint8
+                        )
+                    out_buffer["array"][:frame_h] = composed
+                    out_buffer["array"][frame_h:] = strip.at(
+                        cursor["frame"] / fps
+                    )
+                    frame_out = out_buffer["array"]
+
+                try:
+                    sink.write(frame_out)
+                except Exception as e:
+                    sink.close()
+                    finish(f"Write failed at frame {cursor['frame']}: {e}",
+                           True)
+                    return
+
+                cursor["written"] += 1
+                cursor["frame"] += 1
+
+            label.config(text=f"Frame {cursor['written']} / {total}")
+            # Not animation_after_id: that belongs to playback, and reusing it
+            # would let a stop_playback cancel the export or vice versa.
+            self._insp_export_after_id = self.root.after(1, do_chunk)
+
+        self.root.after(1, do_chunk)
 
     def render_settings_from_vars(self) -> OverlaySettings:
         """Snapshot the overlay controls.

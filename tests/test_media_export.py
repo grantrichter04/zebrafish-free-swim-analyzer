@@ -316,3 +316,53 @@ def test_export_clip_honours_a_frame_step(tmp_path):
     assert len(sink.frames) == 5
     reds = [int(f[0, 0, 0]) for f in sink.frames]
     assert reds == pytest.approx([0, 20, 40, 60, 80], abs=6)
+
+
+def _one_inch_figure():
+    from matplotlib.figure import Figure
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+
+    fig = Figure(figsize=(4, 1), dpi=50)
+    FigureCanvasAgg(fig)
+    ax = fig.add_subplot(111)
+    ax.plot([0, 10], [0, 1])
+    ax.set_xlim(0, 10)
+    return fig, ax
+
+
+def test_time_strip_scales_to_the_video_width():
+    """The figure is sized in inches; the video is not. They must be made to
+    match or the strip cannot be written into the output canvas."""
+    from fish_analyzer.media_export import TimeStrip
+
+    fig, ax = _one_inch_figure()
+    natural = TimeStrip(fig, ax)
+    scaled = TimeStrip(fig, ax, target_width=1288)
+
+    assert natural.width_px != 1288, "test needs a figure that is not 1288 wide"
+    assert scaled.at(5.0).shape[1] == 1288
+    assert scaled.height == scaled.at(5.0).shape[0]
+
+
+def test_scrolling_strip_scales_to_the_video_width():
+    from fish_analyzer.media_export import ScrollingStrip
+
+    fig, ax = _one_inch_figure()
+    strip = ScrollingStrip(fig, ax, window_s=2.0, total_s=10.0,
+                           target_width=1288)
+
+    out = strip.at(5.0)
+    assert out.shape[1] == 1288
+    assert out.shape[0] == strip.height
+
+
+def test_scaled_strip_keeps_the_cursor_inside_the_image():
+    from fish_analyzer.media_export import TimeStrip
+
+    fig, ax = _one_inch_figure()
+    strip = TimeStrip(fig, ax, target_width=1288)
+
+    # The cursor must actually appear, i.e. differ from the pristine strip.
+    at_start = strip.at(0.0).copy()
+    at_end = strip.at(10.0).copy()
+    assert not np.array_equal(at_start, at_end)

@@ -510,3 +510,58 @@ def test_current_composite_reports_no_file_rather_than_raising(app):
     composed, loaded, frame_idx = app._inspector_current_composite()
 
     assert composed is None and loaded is None and frame_idx is None
+
+
+# ---------------------------------------------------------------------------
+# Export guards
+# ---------------------------------------------------------------------------
+
+def test_export_refuses_when_the_time_panel_needs_missing_shoaling(
+        app, synthetic_npy):
+    """The on-screen panel says 'Run Shoaling Analysis first'; an export must
+    refuse rather than bake that placeholder into a video."""
+    from fish_analyzer.file_loading import TrajectoryFileLoader
+
+    loaded = TrajectoryFileLoader.load_file(synthetic_npy, "s1")
+    app.loaded_files["s1"] = loaded
+    app.inspector_file_var.set("s1")
+    app.inspector_time_mode_var.set("nnd")
+
+    assert not loaded.shoaling_results
+
+    ok, reason = app._inspector_can_export()
+
+    assert ok is False
+    assert "Shoaling" in reason
+
+
+def test_export_refuses_when_the_bout_panel_has_no_results(app, synthetic_npy):
+    from fish_analyzer.file_loading import TrajectoryFileLoader
+
+    app.loaded_files["s1"] = TrajectoryFileLoader.load_file(synthetic_npy, "s1")
+    app.inspector_file_var.set("s1")
+    app.inspector_time_mode_var.set("bout")
+
+    ok, reason = app._inspector_can_export()
+
+    assert ok is False
+    assert "Bout" in reason
+
+
+def test_export_is_allowed_when_the_time_panel_is_off(app, synthetic_npy):
+    from fish_analyzer.file_loading import TrajectoryFileLoader
+
+    app.loaded_files["s1"] = TrajectoryFileLoader.load_file(synthetic_npy, "s1")
+    app.inspector_file_var.set("s1")
+    app.inspector_time_mode_var.set("none")
+
+    ok, _ = app._inspector_can_export()
+
+    assert ok is True
+
+
+def test_export_refuses_with_no_file_selected(app):
+    ok, reason = app._inspector_can_export()
+
+    assert ok is False
+    assert "Select a file" in reason

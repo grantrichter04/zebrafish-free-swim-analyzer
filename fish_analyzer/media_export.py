@@ -165,11 +165,11 @@ class TimeStrip:
     line, which is the same trick the live view uses when it blits.
     """
 
-    def __init__(self, figure, axes, color=(255, 60, 60), width=2):
+    def __init__(self, figure, axes, target_width=None, color=(255, 60, 60),
+                 width=2):
         figure.canvas.draw()
         rgba = np.asarray(figure.canvas.buffer_rgba())
         self._pristine = rgba[:, :, :3].copy()
-        self._buffer = self._pristine.copy()
         self.color = color
         self.width = width
 
@@ -177,6 +177,18 @@ class TimeStrip:
         x_at_1 = axes.transData.transform((1.0, 0.0))[0]
         self._x0 = x_at_0
         self._px_per_unit = x_at_1 - x_at_0
+
+        # The figure is sized in inches, so its raster width has nothing to do
+        # with the video width. Scale it to match, and scale the cursor
+        # mapping with it, or the strip will not fit the output canvas.
+        self._scale = 1.0
+        if target_width is not None and target_width != self._pristine.shape[1]:
+            self._scale = target_width / self._pristine.shape[1]
+            new_h = max(1, int(round(self._pristine.shape[0] * self._scale)))
+            self._pristine = cv2.resize(self._pristine,
+                                        (target_width, new_h),
+                                        interpolation=cv2.INTER_AREA)
+        self._buffer = self._pristine.copy()
 
     @property
     def height(self):
@@ -189,7 +201,8 @@ class TimeStrip:
     def at(self, t):
         """The strip with the cursor at time `t`. Reuses one buffer."""
         np.copyto(self._buffer, self._pristine)
-        x = cursor_x(t, self._x0, self._px_per_unit)
+        x = cursor_x(t, self._x0 * self._scale,
+                     self._px_per_unit * self._scale)
         x = max(0, min(self._buffer.shape[1] - 1, x))
         cv2.line(self._buffer, (x, 0), (x, self._buffer.shape[0]),
                  self.color, self.width)
@@ -205,17 +218,22 @@ class ScrollingStrip:
     matplotlib draw per frame, which is why the export dialog warns first.
     """
 
-    def __init__(self, figure, axes, window_s, total_s, color=(255, 60, 60),
-                 width=2):
+    def __init__(self, figure, axes, window_s, total_s, target_width=None,
+                 color=(255, 60, 60), width=2):
         self._figure = figure
         self._axes = axes
         self._window_s = window_s
         self._total_s = total_s
+        self._target_width = target_width
         self.color = color
         self.width = width
 
         figure.canvas.draw()
-        self._height = np.asarray(figure.canvas.buffer_rgba()).shape[0]
+        raster = np.asarray(figure.canvas.buffer_rgba())
+        self._scale = 1.0
+        if target_width is not None and target_width != raster.shape[1]:
+            self._scale = target_width / raster.shape[1]
+        self._height = max(1, int(round(raster.shape[0] * self._scale)))
 
     @property
     def height(self):
@@ -236,6 +254,13 @@ class ScrollingStrip:
         x_at_start = self._axes.transData.transform((start, 0.0))[0]
         x_at_end = self._axes.transData.transform((end, 0.0))[0]
         px_per_s = (x_at_end - x_at_start) / max(1e-9, end - start)
+
+        if self._scale != 1.0:
+            strip = cv2.resize(strip, (self._target_width, self._height),
+                               interpolation=cv2.INTER_AREA)
+            x_at_start *= self._scale
+            px_per_s *= self._scale
+
         x = cursor_x(t - start, x_at_start, px_per_s)
         x = max(0, min(strip.shape[1] - 1, x))
         cv2.line(strip, (x, 0), (x, strip.shape[0]), self.color, self.width)
