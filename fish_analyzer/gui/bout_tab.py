@@ -25,7 +25,8 @@ import matplotlib.pyplot as plt
 
 from ..bout_analysis import BoutParameters, BoutResults, analyze_bouts_for_file
 from ..overlay_render import fish_colors
-from .utils import create_sortable_treeview, embed_figure_with_toolbar
+from .utils import (create_sortable_treeview, embed_figure_with_toolbar,
+                    ask_csv_save_path)
 
 
 class BoutTabMixin:
@@ -916,12 +917,7 @@ class BoutTabMixin:
             messagebox.showinfo("No Data", "Run bout analysis first.")
             return
 
-        path = filedialog.asksaveasfilename(
-            defaultextension=".csv",
-            filetypes=[("CSV files", "*.csv")],
-            title="Export Bout Data",
-            initialfile="bout_analysis.csv"
-        )
+        path = ask_csv_save_path("Export Bout Data", "bout_analysis.csv")
         if not path:
             return
 

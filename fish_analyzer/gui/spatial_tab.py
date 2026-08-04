@@ -32,7 +32,7 @@ from ..spatial import (
 from ..export import export_thigmotaxis_csv
 from ..overlay_render import fish_colors
 from .utils import (create_sortable_treeview, embed_figure_with_toolbar,
-                    install_canvas_error_handler)
+                    install_canvas_error_handler, ask_csv_save_path)
 
 
 class SpatialTabMixin:
@@ -1362,18 +1362,13 @@ class SpatialTabMixin:
                                    "Run 'Run Analysis on Selected Files' first.")
             return
 
-        output_path = filedialog.asksaveasfilename(
-            title="Export Thigmotaxis Results CSV",
-            defaultextension=".csv",
-            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
-            initialfile="thigmotaxis_results.csv"
-        )
+        output_path = ask_csv_save_path("Export Thigmotaxis Results CSV", "thigmotaxis_results.csv")
         if not output_path:
             return
 
         try:
-            n_rows = export_thigmotaxis_csv(analyzed, Path(output_path))
-            self.set_status(f"Exported thigmotaxis data to {Path(output_path).name}")
+            n_rows = export_thigmotaxis_csv(analyzed, output_path)
+            self.set_status(f"Exported thigmotaxis data to {output_path.name}")
             messagebox.showinfo("Export Complete",
                                 f"Exported {n_rows} file(s) to:\n{output_path}")
         except Exception as e:

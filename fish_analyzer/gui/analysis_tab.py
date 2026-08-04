@@ -19,7 +19,8 @@ from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 import matplotlib.pyplot as plt
 
-from .utils import smooth_time_series, create_sortable_treeview, embed_figure_with_toolbar
+from .utils import (smooth_time_series, create_sortable_treeview,
+                    embed_figure_with_toolbar, ask_csv_save_path)
 from ..export import export_individual_metrics_csv, export_combined_summary_csv
 from ..overlay_render import fish_colors
 
@@ -1095,20 +1096,15 @@ class AnalysisTabMixin:
                                    "Run 'Run Individual Trajectory Analysis' first.")
             return
 
-        output_path = filedialog.asksaveasfilename(
-            title="Export Individual Metrics CSV",
-            defaultextension=".csv",
-            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
-            initialfile="individual_metrics.csv"
-        )
+        output_path = ask_csv_save_path("Export Individual Metrics CSV", "individual_metrics.csv")
         if not output_path:
             return
 
         try:
             n_rows = export_individual_metrics_csv(
-                analyzed, Path(output_path), file_groups=self.file_groups
+                analyzed, output_path, file_groups=self.file_groups
             )
-            self.set_status(f"Exported {n_rows} fish to {Path(output_path).name}")
+            self.set_status(f"Exported {n_rows} fish to {output_path.name}")
             messagebox.showinfo("Export Complete",
                                 f"Exported {n_rows} fish rows to:\n{output_path}")
         except Exception as e:
@@ -1133,18 +1129,13 @@ class AnalysisTabMixin:
             ):
                 return
 
-        output_path = filedialog.asksaveasfilename(
-            title="Export Combined Summary CSV",
-            defaultextension=".csv",
-            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
-            initialfile="combined_summary.csv"
-        )
+        output_path = ask_csv_save_path("Export Combined Summary CSV", "combined_summary.csv")
         if not output_path:
             return
 
         try:
             n_rows = export_combined_summary_csv(
-                analyzed, bout_results, self.file_groups, Path(output_path)
+                analyzed, bout_results, self.file_groups, output_path
             )
             has_bouts = bool(bout_results)
             msg = (

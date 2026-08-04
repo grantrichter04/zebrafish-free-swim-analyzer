@@ -4,8 +4,10 @@ fish_analyzer/gui/utils.py
 Shared utility functions for the GUI components.
 """
 
+from pathlib import Path
+
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk, filedialog
 import numpy as np
 from scipy.ndimage import uniform_filter1d
 from matplotlib.figure import Figure
@@ -188,3 +190,23 @@ def smooth_time_series(data: np.ndarray, window_seconds: float, frame_rate: floa
         smoothed = uniform_filter1d(data, size=window_samples, mode='nearest')
     
     return smoothed
+
+
+def ask_csv_save_path(title: str, initial_file: str):
+    """The Save-as dialog every CSV export uses.
+
+    Five export handlers repeated these six lines verbatim, differing only in
+    the title and the suggested filename.
+
+    Returns
+    -------
+    Path or None
+        None when the user cancels, which callers treat as "do nothing".
+    """
+    path = filedialog.asksaveasfilename(
+        title=title,
+        defaultextension=".csv",
+        filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
+        initialfile=initial_file,
+    )
+    return Path(path) if path else None

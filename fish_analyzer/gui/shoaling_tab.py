@@ -26,7 +26,8 @@ import matplotlib.pyplot as plt
 from ..shoaling import ShoalingParameters, ShoalingResults, ShoalingCalculator
 from ..overlay_render import fish_colors
 from ..export import export_shoaling_metrics_csv, export_shoaling_summary_csv
-from .utils import smooth_time_series, create_sortable_treeview, embed_figure_with_toolbar
+from .utils import (smooth_time_series, create_sortable_treeview,
+                    embed_figure_with_toolbar, ask_csv_save_path)
 
 
 
@@ -529,17 +530,12 @@ class ShoalingTabMixin:
             )
             return
 
-        output_path = filedialog.asksaveasfilename(
-            title="Export Shoaling Results CSV",
-            defaultextension=".csv",
-            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
-            initialfile="shoaling_timeseries.csv"
-        )
+        output_path = ask_csv_save_path("Export Shoaling Results CSV", "shoaling_timeseries.csv")
         if not output_path:
             return
 
         try:
-            out = Path(output_path)
+            out = output_path
             n_ts = export_shoaling_metrics_csv(analyzed, out)
             summary_path = out.with_name(out.stem + "_summary.csv")
             n_sum = export_shoaling_summary_csv(analyzed, summary_path)

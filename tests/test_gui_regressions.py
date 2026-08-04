@@ -818,3 +818,38 @@ def test_empty_path_box_is_reported_not_ignored(app, monkeypatch):
     app._load_selected_file()
 
     assert shown == ["Error"]
+
+
+def test_csv_save_dialog_returns_a_path_or_none(monkeypatch):
+    """Every CSV export shares one Save-as dialog.
+
+    It returns a Path rather than the raw string tkinter gives back, because
+    every caller immediately wanted one, and None on cancel so callers can bail
+    with a falsy check.
+    """
+    from fish_analyzer.gui import utils
+
+    monkeypatch.setattr(utils.filedialog, "asksaveasfilename",
+                        lambda **kw: r"C:\tmp\out.csv")
+    got = utils.ask_csv_save_path("Title", "out.csv")
+    assert isinstance(got, Path)
+    assert got.name == "out.csv"
+
+    monkeypatch.setattr(utils.filedialog, "asksaveasfilename",
+                        lambda **kw: "")
+    assert utils.ask_csv_save_path("Title", "out.csv") is None
+
+
+def test_csv_save_dialog_offers_csv_first(monkeypatch):
+    """A .csv default extension is what stops silently-extensionless exports."""
+    from fish_analyzer.gui import utils
+
+    seen = {}
+    monkeypatch.setattr(utils.filedialog, "asksaveasfilename",
+                        lambda **kw: seen.update(kw) or "x.csv")
+    utils.ask_csv_save_path("Export Thing", "thing.csv")
+
+    assert seen["defaultextension"] == ".csv"
+    assert seen["filetypes"][0] == ("CSV files", "*.csv")
+    assert seen["title"] == "Export Thing"
+    assert seen["initialfile"] == "thing.csv"
