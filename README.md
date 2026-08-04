@@ -166,6 +166,12 @@ panel needs shoaling or bout results refuses until those have been run, rather
 than writing a clip with "Run Shoaling Analysis first" printed across the
 bottom.
 
+In an exported clip the time panel is narrowed to the exported range, so the
+cursor sweeps the full width rather than creeping across a plot of the whole
+session. That means a very short clip shows only the few samples falling
+inside it — at the default shoaling interval of 30 frames that is one sample
+per second, so drop the interval if you want a denser trace under a short clip.
+
 Expect roughly 28 ms per frame at 1288×964 with a time panel — about 8 seconds
 for a 10-second clip. The Bout panel scrolls, so it has to be redrawn every
 frame and runs around three times slower; the dialog warns you first.

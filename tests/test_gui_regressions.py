@@ -615,3 +615,68 @@ def test_export_converts_seconds_to_the_panel_time_units(app):
 
 def test_bout_panel_is_already_in_seconds(app):
     assert app._inspector_time_scale_for("bout") == pytest.approx(1.0)
+
+
+def test_export_strip_covers_only_the_exported_segment(app, synthetic_npy):
+    """The panel is drawn over the whole recording, so a short clip moved the
+    cursor ~1% of the panel width. The axis is narrowed to the clip instead."""
+    import numpy as np
+    from fish_analyzer.file_loading import TrajectoryFileLoader
+
+    loaded = TrajectoryFileLoader.load_file(synthetic_npy, "s1")
+    app.loaded_files["s1"] = loaded
+    app.inspector_file_var.set("s1")
+    fps = loaded.calibration.frame_rate
+
+    # Stand in for a rebuilt time panel spanning the whole recording.
+    from matplotlib.figure import Figure
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+    fig = Figure(figsize=(10, 2), dpi=100)
+    FigureCanvasAgg(fig)
+    ax = fig.add_axes([0.08, 0.22, 0.88, 0.68])
+    ax.plot(np.linspace(0, loaded.n_frames / fps / 60.0, 50), np.zeros(50))
+    ax.set_xlim(0, loaded.n_frames / fps / 60.0)
+    app._insp_fig, app._insp_ax_time = fig, ax
+
+    strip = app._inspector_build_time_strip(loaded, "nnd", 640,
+                                            start=120, end=239)
+
+    lo, hi = ax.get_xlim()
+    assert lo == pytest.approx(120 / fps / 60.0)
+    assert hi == pytest.approx(239 / fps / 60.0)
+    assert strip is not None
+
+
+def test_export_strip_cursor_sweeps_the_whole_clip(app, synthetic_npy):
+    """With the axis narrowed, the cursor should traverse most of the width."""
+    import numpy as np
+    from fish_analyzer.file_loading import TrajectoryFileLoader
+
+    loaded = TrajectoryFileLoader.load_file(synthetic_npy, "s1")
+    app.loaded_files["s1"] = loaded
+    app.inspector_file_var.set("s1")
+    fps = loaded.calibration.frame_rate
+
+    from matplotlib.figure import Figure
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+    fig = Figure(figsize=(10, 2), dpi=100)
+    FigureCanvasAgg(fig)
+    ax = fig.add_axes([0.08, 0.22, 0.88, 0.68])
+    ax.plot(np.linspace(0, loaded.n_frames / fps / 60.0, 50), np.zeros(50))
+    app._insp_fig, app._insp_ax_time = fig, ax
+
+    start, end = 120, 239
+    strip = app._inspector_build_time_strip(loaded, "nnd", 640, start, end)
+
+    pristine = strip.at(start / fps).copy()
+
+    def col(img):
+        d = np.abs(img.astype(int) - pristine.astype(int)).sum(axis=(0, 2))
+        return int(np.argmax(d))
+
+    first = col(strip.at((start + 1) / fps).copy())
+    last = col(strip.at(end / fps).copy())
+
+    # Across the clip the cursor should cross a large fraction of the panel,
+    # not the ~1% it managed when the axis spanned the whole recording.
+    assert (last - first) > strip.width_px * 0.5

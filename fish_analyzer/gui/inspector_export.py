@@ -257,6 +257,44 @@ class InspectorExportMixin:
         """
         return 1.0 if time_mode == 'bout' else 1.0 / 60.0
 
+    def _inspector_build_time_strip(self, loaded, time_mode, frame_w,
+                                    start, end):
+        """The time panel prepared for this clip, or None for no panel.
+
+        The panel is drawn over the whole recording, so a ten second clip out
+        of ten minutes moved the cursor about 1% of the panel width - correct,
+        but impossible to read. The axis is narrowed to the exported range
+        instead, so the cursor sweeps the full width.
+
+        This keeps the cheap path: the axis is fixed for the duration of the
+        clip, so the strip is still rasterised once and only the cursor is
+        stamped per frame. Bout mode is the exception, as its window scrolls by
+        design.
+
+        The axis is left narrowed on return; the caller rebuilds the figure
+        when the export finishes.
+        """
+        from ..media_export import ScrollingStrip, TimeStrip
+
+        if time_mode == 'none' or self._insp_fig is None:
+            return None
+
+        fps = loaded.calibration.frame_rate
+
+        if time_mode == 'bout':
+            return ScrollingStrip(
+                self._insp_fig, self._insp_ax_time,
+                window_s=float(self.inspector_bout_window_var.get()),
+                total_s=loaded.n_frames / fps,
+                target_width=frame_w,
+            )
+
+        time_scale = self._inspector_time_scale_for(time_mode)
+        self._insp_ax_time.set_xlim(start / fps * time_scale,
+                                    end / fps * time_scale)
+        return TimeStrip(self._insp_fig, self._insp_ax_time,
+                         target_width=frame_w, time_scale=time_scale)
+
     def _inspector_run_export(self, loaded, selected, start, end, target,
                               as_png):
         """Run the export in chunks so Tk keeps painting and Cancel works.
@@ -265,8 +303,7 @@ class InspectorExportMixin:
         the main thread.
         """
         from ..media_export import (CodecUnavailable, ExportFrameSource,
-                                    Mp4Sink, PngSequenceSink, ScrollingStrip,
-                                    TimeStrip)
+                                    Mp4Sink, PngSequenceSink)
 
         self._inspector_stop_playback()
 
@@ -288,22 +325,8 @@ class InspectorExportMixin:
         frame_h = loaded.metadata.video_height
         frame_w = loaded.metadata.video_width
 
-        strip = None
-        if time_mode != 'none' and self._insp_fig is not None:
-            if time_mode == 'bout':
-                # Scrolling axes: cannot be rasterised once.
-                strip = ScrollingStrip(
-                    self._insp_fig, self._insp_ax_time,
-                    window_s=float(self.inspector_bout_window_var.get()),
-                    total_s=loaded.n_frames / fps,
-                    target_width=frame_w,
-                )
-            else:
-                strip = TimeStrip(
-                    self._insp_fig, self._insp_ax_time,
-                    target_width=frame_w,
-                    time_scale=self._inspector_time_scale_for(time_mode),
-                )
+        strip = self._inspector_build_time_strip(loaded, time_mode, frame_w,
+                                                 start, end)
 
         out_h = frame_h + (strip.height if strip is not None else 0)
 
