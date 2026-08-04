@@ -724,3 +724,47 @@ def test_iid_focus_index_clamps_to_an_existing_fish(app, synthetic_npy):
 
     app.inspector_iid_focus_var.set("not a number")
     assert app._inspector_iid_focus_index(loaded.n_fish) == 0
+
+
+# ---------------------------------------------------------------------------
+# Transport bar layout
+# ---------------------------------------------------------------------------
+
+def test_transport_survives_a_figure_rebuild(app, synthetic_npy):
+    """The scrubber sits between the video and the time panel, both of which
+    _inspector_rebuild_figure destroys and recreates. It needs its own
+    container or it would vanish whenever the time mode changed."""
+    from fish_analyzer.file_loading import TrajectoryFileLoader
+
+    loaded = TrajectoryFileLoader.load_file(synthetic_npy, "s1")
+    app.loaded_files["s1"] = loaded
+    app.inspector_file_var.set("s1")
+
+    slider_before = app.inspector_frame_slider
+    play_before = app.inspector_play_button
+
+    app._inspector_rebuild_figure("s1", loaded, 0, "none")
+
+    assert app.inspector_frame_slider is slider_before
+    assert app.inspector_frame_slider.winfo_exists()
+    assert app.inspector_play_button is play_before
+    assert app.inspector_play_button.winfo_exists()
+    assert app.inspector_mark_label.winfo_exists()
+
+
+def test_scrubber_is_not_confined_to_the_control_panel(app):
+    """It was a 180px slider in the left column; it now stretches under the
+    video, so it must not be packed with a fixed short length."""
+    # length= is only a default request; what makes it stretch is the packing.
+    info = app.inspector_frame_slider.pack_info()
+    assert info["fill"] in ("x", "both")
+    assert str(info["expand"]) in ("1", "True", "true")
+
+    # Its ancestry must not run through the scrollable controls canvas.
+    names = []
+    w = app.inspector_frame_slider
+    while w is not None:
+        names.append(str(w))
+        w = getattr(w, "master", None)
+    assert not any("labelframe" in n.lower() for n in names), \
+        f"scrubber still inside a control LabelFrame: {names}"

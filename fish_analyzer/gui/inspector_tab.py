@@ -136,19 +136,9 @@ class InspectorTabMixin:
                                    font=("Arial", 10, "bold"))
         nav_frame.pack(fill="x", padx=5, pady=5)
 
-        # Frame slider
-        slider_row = tk.Frame(nav_frame)
-        slider_row.pack(fill="x", padx=5, pady=3)
-        tk.Label(slider_row, text="Frame:").pack(side="left")
-        self.inspector_frame_var = tk.IntVar(value=0)
-        self.inspector_frame_slider = tk.Scale(
-            slider_row, from_=0, to=100, orient=tk.HORIZONTAL,
-            variable=self.inspector_frame_var,
-            command=self._on_inspector_slider_change,
-            length=180, showvalue=False
-        )
-        self.inspector_frame_slider.pack(side="left", padx=3, fill="x",
-                                          expand=True)
+        # The frame slider and the transport controls live under the video
+        # instead, where there is room to scrub precisely - see
+        # _create_inspector_transport.
 
         # Step size
         step_row = tk.Frame(nav_frame)
@@ -185,59 +175,6 @@ class InspectorTabMixin:
 
         tk.Button(jump_row, text="Go", command=self._inspector_jump_to_input,
                   width=3).pack(side="left", padx=3)
-
-        # Export range markers
-        mark_row = tk.Frame(nav_frame)
-        mark_row.pack(fill="x", padx=5, pady=2)
-        tk.Button(mark_row, text="Set In", command=self._inspector_set_mark_in,
-                  bg="lightblue").pack(side="left", padx=2)
-        tk.Button(mark_row, text="Set Out",
-                  command=self._inspector_set_mark_out,
-                  bg="lightblue").pack(side="left", padx=2)
-        tk.Button(mark_row, text="Clear",
-                  command=self._inspector_clear_marks).pack(side="left",
-                                                            padx=2)
-
-        self.inspector_mark_label = tk.Label(
-            nav_frame, text="In -- | Out --", font=("Arial", 9)
-        )
-        self.inspector_mark_label.pack(anchor="w", padx=5)
-
-        # Frame info
-        self.inspector_info_label = tk.Label(
-            nav_frame, text="Frame: -- | Time: --", font=("Arial", 9)
-        )
-        self.inspector_info_label.pack(anchor="w", padx=5, pady=2)
-
-        # Playback
-        play_row = tk.Frame(nav_frame)
-        play_row.pack(fill="x", padx=5, pady=3)
-        self.inspector_play_button = tk.Button(
-            play_row, text="> Play",
-            command=self._inspector_toggle_playback,
-            bg="lightblue", width=8
-        )
-        self.inspector_play_button.pack(side="left", padx=2)
-
-        tk.Label(play_row, text="Speed:").pack(side="left", padx=(10, 2))
-        self.inspector_speed_var = tk.StringVar(value="1x")
-        ttk.Combobox(
-            play_row, textvariable=self.inspector_speed_var,
-            values=["0.25x", "0.5x", "1x", "2x", "4x", "8x"],
-            width=5, state="readonly"
-        ).pack(side="left")
-
-        # Single-frame step buttons
-        step_btn_row = tk.Frame(nav_frame)
-        step_btn_row.pack(fill="x", padx=5, pady=2)
-        tk.Button(
-            step_btn_row, text="\u25C0 -1 frame",
-            command=self._inspector_step_back, width=10
-        ).pack(side="left", padx=2)
-        tk.Button(
-            step_btn_row, text="+1 frame \u25B6",
-            command=self._inspector_step_forward, width=10
-        ).pack(side="left", padx=2)
 
         # --- Trails (collapsible) ---
         _, trail_frame = self._make_collapsible(scroll_frame, "Trails")
@@ -462,8 +399,88 @@ class InspectorTabMixin:
     # DISPLAY AREA
     # =========================================================================
 
+    def _create_inspector_transport(self, parent):
+        """Player-style transport bar: playback, scrubber, range markers.
+
+        Lives under the video rather than in the left column, where the slider
+        was only 180px wide and scrubbing an 18,000 frame recording meant about
+        100 frames per pixel.
+        """
+        row = tk.Frame(parent, bg="#ececec")
+        row.pack(fill="x", padx=8, pady=(4, 2))
+
+        self.inspector_play_button = tk.Button(
+            row, text="> Play", command=self._inspector_toggle_playback,
+            bg="lightblue", width=8
+        )
+        self.inspector_play_button.pack(side="left", padx=2)
+
+        tk.Button(row, text="◀", width=3,
+                  command=self._inspector_step_back).pack(side="left", padx=1)
+        tk.Button(row, text="▶", width=3,
+                  command=self._inspector_step_forward).pack(side="left",
+                                                             padx=1)
+
+        tk.Label(row, text="Speed:", bg="#ececec").pack(side="left",
+                                                        padx=(8, 2))
+        self.inspector_speed_var = tk.StringVar(value="1x")
+        ttk.Combobox(
+            row, textvariable=self.inspector_speed_var,
+            values=["0.25x", "0.5x", "1x", "2x", "4x", "8x"],
+            width=5, state="readonly"
+        ).pack(side="left")
+
+        self.inspector_frame_var = tk.IntVar(value=0)
+        self.inspector_frame_slider = tk.Scale(
+            row, from_=0, to=100, orient=tk.HORIZONTAL,
+            variable=self.inspector_frame_var,
+            command=self._on_inspector_slider_change,
+            showvalue=False, bg="#ececec", highlightthickness=0,
+            sliderlength=18, width=14
+        )
+        self.inspector_frame_slider.pack(side="left", fill="x", expand=True,
+                                         padx=8)
+
+        mark_row = tk.Frame(parent, bg="#ececec")
+        mark_row.pack(fill="x", padx=8, pady=(0, 4))
+        tk.Button(mark_row, text="Set In", command=self._inspector_set_mark_in,
+                  bg="lightblue").pack(side="left", padx=2)
+        tk.Button(mark_row, text="Set Out",
+                  command=self._inspector_set_mark_out,
+                  bg="lightblue").pack(side="left", padx=2)
+        tk.Button(mark_row, text="Clear",
+                  command=self._inspector_clear_marks).pack(side="left",
+                                                            padx=2)
+        self.inspector_mark_label = tk.Label(
+            mark_row, text="In -- | Out --", font=("Arial", 9), bg="#ececec"
+        )
+        self.inspector_mark_label.pack(side="left", padx=10)
+
+        # On the second row, so row one is buttons plus a scrubber that gets
+        # everything else. The readout is long - frame, time, NND, IID, hull.
+        self.inspector_info_label = tk.Label(
+            mark_row, text="Frame: -- | Time: --", font=("Arial", 9),
+            bg="#ececec", anchor="e"
+        )
+        self.inspector_info_label.pack(side="right", padx=(8, 2))
+
     def _create_inspector_display(self, parent):
-        """Create the inspector display area."""
+        """Create the inspector display area.
+
+        Three stacked regions, top to bottom: the video, the transport bar and
+        the time panel. The transport and the time panel each get their own
+        persistent container because _inspector_rebuild_figure destroys and
+        recreates everything in the video region.
+        """
+        # Packed bottom-first, so the visual order ends up video, transport,
+        # time panel.
+        self.inspector_time_frame = tk.Frame(parent, bg="white")
+        self.inspector_time_frame.pack(side="bottom", fill="x")
+
+        transport = tk.Frame(parent, bg="#ececec")
+        transport.pack(side="bottom", fill="x")
+        self._create_inspector_transport(transport)
+
         self.inspector_plot_frame = tk.Frame(parent, bg="white")
         self.inspector_plot_frame.pack(fill="both", expand=True)
 
@@ -1107,6 +1124,10 @@ class InspectorTabMixin:
         """
         for widget in self.inspector_plot_frame.winfo_children():
             widget.destroy()
+        # The time panel has its own container so the transport bar between
+        # them survives a rebuild.
+        for widget in self.inspector_time_frame.winfo_children():
+            widget.destroy()
 
         # Reset all canvas/artist state
         self._insp_video_canvas = None
@@ -1158,10 +1179,11 @@ class InspectorTabMixin:
             main_col.pack(side="left", fill="both", expand=True)
 
             video_parent = main_col
-            time_parent = main_col
         else:
             video_parent = self.inspector_plot_frame
-            time_parent = self.inspector_plot_frame
+
+        # Always its own container, below the transport bar.
+        time_parent = self.inspector_time_frame
 
         # --- Video canvas (PIL/ImageTk — replaces matplotlib imshow) ---
         self._insp_video_canvas = tk.Canvas(video_parent, bg="black",
