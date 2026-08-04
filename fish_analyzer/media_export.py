@@ -102,3 +102,138 @@ class Mp4Sink:
         self.close()
         if self.path is not None and self.path.exists():
             self.path.unlink()
+
+
+class ExportFrameSource:
+    """Sequential frame reader owned by one export.
+
+    Deliberately not VideoFrameReader: that class runs a background preload
+    thread which calls cap.set() and cap.read() on the same capture the
+    foreground uses, with only the frame cache locked. It also copies every
+    frame twice through an LRU that a single forward pass cannot benefit from.
+
+    Measured on a 1288x964 MJPG session: 9.9 ms/frame reading sequentially
+    against 64.7 ms/frame when seeking per frame.
+    """
+
+    def __init__(self, video_path, start_frame=0):
+        self.cap = cv2.VideoCapture(str(video_path))
+        if not self.cap.isOpened():
+            raise ValueError(f"Could not open video file: {video_path}")
+        if start_frame:
+            self.cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+
+    def read(self):
+        """Next frame as RGB uint8, or None at end of stream."""
+        ok, frame = self.cap.read()
+        if not ok:
+            return None
+        return cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+    def close(self):
+        if self.cap is not None:
+            self.cap.release()
+            self.cap = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+
+
+def cursor_x(t, x0, px_per_unit):
+    """Pixel column for time `t` on a linear axis.
+
+    Kept as a function of the transform rather than of a matplotlib axes so it
+    can be tested without rendering anything.
+    """
+    return int(round(x0 + t * px_per_unit))
+
+
+class TimeStrip:
+    """The time panel rasterised once, with the cursor stamped per frame.
+
+    Valid only while the axes are fixed for the whole session, which is true of
+    the NND, IID and Hull panels (xlim is set once at rebuild) and false of the
+    Bout panel, which scrolls its xlim every frame - use ScrollingStrip there.
+
+    Rendering the figure per frame costs 50-100 ms; this costs a memcpy and a
+    line, which is the same trick the live view uses when it blits.
+    """
+
+    def __init__(self, figure, axes, color=(255, 60, 60), width=2):
+        figure.canvas.draw()
+        rgba = np.asarray(figure.canvas.buffer_rgba())
+        self._pristine = rgba[:, :, :3].copy()
+        self._buffer = self._pristine.copy()
+        self.color = color
+        self.width = width
+
+        x_at_0 = axes.transData.transform((0.0, 0.0))[0]
+        x_at_1 = axes.transData.transform((1.0, 0.0))[0]
+        self._x0 = x_at_0
+        self._px_per_unit = x_at_1 - x_at_0
+
+    @property
+    def height(self):
+        return self._pristine.shape[0]
+
+    @property
+    def width_px(self):
+        return self._pristine.shape[1]
+
+    def at(self, t):
+        """The strip with the cursor at time `t`. Reuses one buffer."""
+        np.copyto(self._buffer, self._pristine)
+        x = cursor_x(t, self._x0, self._px_per_unit)
+        x = max(0, min(self._buffer.shape[1] - 1, x))
+        cv2.line(self._buffer, (x, 0), (x, self._buffer.shape[0]),
+                 self.color, self.width)
+        return self._buffer
+
+
+class ScrollingStrip:
+    """Time panel re-rendered per frame, for panels whose axes move.
+
+    The Bout panel resets xlim to a window around the current frame on every
+    update, so a strip rasterised once cannot represent it - cropping a
+    pre-rendered image would drag the y-axis out of frame. This costs a full
+    matplotlib draw per frame, which is why the export dialog warns first.
+    """
+
+    def __init__(self, figure, axes, window_s, total_s, color=(255, 60, 60),
+                 width=2):
+        self._figure = figure
+        self._axes = axes
+        self._window_s = window_s
+        self._total_s = total_s
+        self.color = color
+        self.width = width
+
+        figure.canvas.draw()
+        self._height = np.asarray(figure.canvas.buffer_rgba()).shape[0]
+
+    @property
+    def height(self):
+        return self._height
+
+    def at(self, t):
+        """Redraw the panel with its window centred on `t`."""
+        start = max(0.0, t - self._window_s / 2)
+        end = start + self._window_s
+        if end > self._total_s:
+            end = self._total_s
+            start = max(0.0, end - self._window_s)
+
+        self._axes.set_xlim(start, end)
+        self._figure.canvas.draw()
+        strip = np.asarray(self._figure.canvas.buffer_rgba())[:, :, :3].copy()
+
+        x_at_start = self._axes.transData.transform((start, 0.0))[0]
+        x_at_end = self._axes.transData.transform((end, 0.0))[0]
+        px_per_s = (x_at_end - x_at_start) / max(1e-9, end - start)
+        x = cursor_x(t - start, x_at_start, px_per_s)
+        x = max(0, min(strip.shape[1] - 1, x))
+        cv2.line(strip, (x, 0), (x, strip.shape[0]), self.color, self.width)
+        return strip

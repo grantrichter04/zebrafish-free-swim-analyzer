@@ -95,3 +95,96 @@ def test_mp4_sink_raises_when_no_codec_opens(tmp_path, monkeypatch):
 
     leftover = tmp_path / "clip.mp4"
     assert not leftover.exists() or leftover.stat().st_size == 0
+
+
+def make_video(path, n_frames=20, size=(48, 32)):
+    """A tiny MJPG clip whose frame i has red channel == i * 10."""
+    w, h = size
+    vw = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"MJPG"), 30.0,
+                         (w, h))
+    assert vw.isOpened()
+    for i in range(n_frames):
+        f = np.zeros((h, w, 3), dtype=np.uint8)
+        f[:, :, 2] = i * 10          # BGR: channel 2 is red
+        vw.write(f)
+    vw.release()
+    return path
+
+
+def test_frame_source_reads_the_requested_range_in_order(tmp_path):
+    from fish_analyzer.media_export import ExportFrameSource
+
+    video = make_video(tmp_path / "in.avi")
+    with ExportFrameSource(video, start_frame=5) as src:
+        frames = [src.read() for _ in range(3)]
+
+    reds = [int(f[0, 0, 0]) for f in frames]      # RGB out: channel 0 is red
+    assert reds == pytest.approx([50, 60, 70], abs=6)
+
+
+def test_frame_source_returns_rgb(tmp_path):
+    from fish_analyzer.media_export import ExportFrameSource
+
+    video = make_video(tmp_path / "in.avi")
+    with ExportFrameSource(video, start_frame=10) as src:
+        f = src.read()
+
+    assert f[0, 0, 0] > f[0, 0, 2], "channels look like BGR, not RGB"
+
+
+def test_frame_source_returns_none_past_the_end(tmp_path):
+    from fish_analyzer.media_export import ExportFrameSource
+
+    video = make_video(tmp_path / "in.avi", n_frames=5)
+    with ExportFrameSource(video, start_frame=0) as src:
+        for _ in range(5):
+            assert src.read() is not None
+        assert src.read() is None
+
+
+def test_cursor_x_maps_time_to_a_pixel_column():
+    from fish_analyzer.media_export import cursor_x
+
+    # An axes whose data origin sits at pixel column 80, 1.5 px per second.
+    assert cursor_x(0.0, x0=80.0, px_per_unit=1.5) == 80
+    assert cursor_x(100.0, x0=80.0, px_per_unit=1.5) == 230
+
+
+def test_time_strip_moves_the_cursor_without_redrawing():
+    """The static panels are rasterised once; only the cursor changes."""
+    from matplotlib.figure import Figure
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+    from fish_analyzer.media_export import TimeStrip
+
+    fig = Figure(figsize=(4, 1), dpi=50)
+    FigureCanvasAgg(fig)
+    ax = fig.add_subplot(111)
+    ax.plot([0, 10], [0, 1])
+    ax.set_xlim(0, 10)
+
+    strip = TimeStrip(fig, ax)
+    early = strip.at(1.0).copy()
+    late = strip.at(9.0).copy()
+
+    assert early.shape == late.shape
+    assert not np.array_equal(early, late), "cursor did not move"
+    assert strip.height == early.shape[0]
+
+
+def test_scrolling_strip_moves_its_window_with_time():
+    """The Bout panel scrolls, so its strip must differ between timepoints."""
+    from matplotlib.figure import Figure
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+    from fish_analyzer.media_export import ScrollingStrip
+
+    fig = Figure(figsize=(4, 1), dpi=50)
+    FigureCanvasAgg(fig)
+    ax = fig.add_subplot(111)
+    ax.plot(np.linspace(0, 100, 500), np.sin(np.linspace(0, 100, 500)))
+
+    strip = ScrollingStrip(fig, ax, window_s=10.0, total_s=100.0)
+    early = strip.at(5.0).copy()
+    late = strip.at(80.0).copy()
+
+    assert not np.array_equal(early, late), "window did not scroll"
+    assert early.shape == late.shape
