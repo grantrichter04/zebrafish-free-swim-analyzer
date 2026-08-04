@@ -209,7 +209,7 @@ Quantifies anxiety-like wall-hugging behavior. The arena boundary is defined by 
 
 ### Shoaling Metrics
 - **NND** (Nearest Neighbor Distance): distance from each fish to its closest neighbor — sensitive to tight schooling
-- **IID** (Inter-Individual Distance): mean pairwise distance across all fish pairs — less sensitive to outliers
+- **IID** (Inter-Individual Distance): mean pairwise distance across all fish pairs — less sensitive to outliers. The Shoaling tab and the CSV report this group value; the Video Inspector's IID panel instead plots the *focus fish's* mean distance to the others, so that it describes the same thing the IID lines drawn on the frame do
 - **Convex Hull**: area of the polygon enclosing all fish — proxy for group spread
 
 ---

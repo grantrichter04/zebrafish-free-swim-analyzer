@@ -112,6 +112,11 @@ class ShoalingResults:
     mean_nnd_per_sample: np.ndarray     # Mean NND across all fish at each sample
     individual_nnd_per_sample: np.ndarray  # Shape: (n_samples, n_fish)
     mean_iid_per_sample: np.ndarray     # Mean distance between ALL pairs at each sample
+    individual_iid_per_sample: np.ndarray  # Shape: (n_samples, n_fish) - each
+                                        # fish's mean distance to all others.
+                                        # Not the same quantity as the all-pairs
+                                        # mean above: the Video Inspector draws
+                                        # one fish's distances, so it needs this.
     convex_hull_area_per_sample: np.ndarray  # Area of convex hull at each sample (BL²)
 
     # NND Summary statistics
@@ -292,6 +297,7 @@ class ShoalingCalculator:
         mean_nnd_per_sample = np.zeros(n_samples)
         individual_nnd_per_sample = np.zeros((n_samples, n_fish))
         mean_iid_per_sample = np.zeros(n_samples)
+        individual_iid_per_sample = np.zeros((n_samples, n_fish))
         convex_hull_area_per_sample = np.zeros(n_samples)
         timestamps = np.zeros(n_samples)
 
@@ -308,6 +314,15 @@ class ShoalingCalculator:
             # IID: mean of all pairwise distances
             iid_value = self._calculate_iid_at_frame(positions)
             mean_iid_per_sample[i] = iid_value * self.pixels_to_unit
+
+            # Per-fish: each fish's mean distance to every other fish. The
+            # Video Inspector draws one focus fish's distances, so pairing its
+            # overlay with the all-pairs mean above would caption the picture
+            # with a number that is not what is drawn.
+            individual_iid_per_sample[i, :] = (
+                self._calculate_individual_iid_at_frame(positions)
+                * self.pixels_to_unit
+            )
 
             # Convex hull area
             hull_area_pixels = self._calculate_convex_hull_area(positions)
@@ -347,6 +362,7 @@ class ShoalingCalculator:
             mean_nnd_per_sample=mean_nnd_per_sample,
             individual_nnd_per_sample=individual_nnd_per_sample,
             mean_iid_per_sample=mean_iid_per_sample,
+            individual_iid_per_sample=individual_iid_per_sample,
             convex_hull_area_per_sample=convex_hull_area_per_sample,
             mean_nnd=mean_nnd, std_nnd=std_nnd, median_nnd=median_nnd,
             min_nnd=min_nnd, max_nnd=max_nnd,
@@ -419,6 +435,36 @@ class ShoalingCalculator:
             return 0.0
         pairwise_distances = pdist(positions, metric='euclidean')
         return np.mean(pairwise_distances)
+
+    def _calculate_individual_iid_at_frame(self, positions: np.ndarray) -> np.ndarray:
+        """
+        Each fish's mean distance to every other fish, in PIXELS.
+
+        Distinct from _calculate_iid_at_frame, which averages over all unique
+        pairs and returns one number for the group. Averaging this array gives
+        that same group value, but the per-fish figures can sit well either
+        side of it: an outlying individual raises its own mean far above the
+        group's.
+
+        Returns
+        -------
+        np.ndarray
+            Shape (n_fish,). NaN where the fish is untracked.
+        """
+        n = len(positions)
+        out = np.full(n, np.nan)
+        if n < 2:
+            return out
+
+        tracked = ~np.isnan(positions[:, 0])
+        if tracked.sum() < 2:
+            return out
+
+        idx = np.flatnonzero(tracked)
+        dist = cdist(positions[idx], positions[idx], metric='euclidean')
+        # Exclude the zero self-distance from each fish's mean.
+        out[idx] = dist.sum(axis=1) / (len(idx) - 1)
+        return out
 
     def _calculate_convex_hull_area(self, positions: np.ndarray) -> float:
         """

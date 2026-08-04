@@ -368,6 +368,12 @@ class InspectorTabMixin:
             state="readonly", width=4
         )
         self.inspector_iid_focus_combo.pack(side="left")
+        # Without this the selection changed nothing until some other event
+        # happened to trigger a redraw.
+        self.inspector_iid_focus_combo.bind(
+            "<<ComboboxSelected>>",
+            lambda e: self._inspector_on_overlay_change()
+        )
 
         # --- Bout Overlay (collapsible) ---
         _, bout_frame = self._make_collapsible(scroll_frame, "Bout Overlay")
@@ -486,6 +492,7 @@ class InspectorTabMixin:
         self._insp_cached_overlays = None
         self._insp_cached_time_mode = None
         self._insp_cached_bout_fish = None
+        self._insp_cached_iid_focus = None
         self._insp_video_bg_artist = None
         self._insp_cached_background = None
         self._insp_cached_width_bl = None
@@ -510,6 +517,14 @@ class InspectorTabMixin:
         self._insp_export_after_id = None
         self._insp_recapture_after_id = None
 
+
+    def _inspector_iid_focus_index(self, n_fish):
+        """The IID focus fish, clamped to a fish that exists."""
+        try:
+            focus = int(self.inspector_iid_focus_var.get())
+        except (ValueError, TypeError):
+            return 0
+        return focus if 0 <= focus < n_fish else 0
 
     def render_settings_from_vars(self) -> OverlaySettings:
         """Snapshot the overlay controls.
@@ -1045,6 +1060,10 @@ class InspectorTabMixin:
         # Video toggle needs rebuild (changes background compositing source)
         video_on = self.inspector_video_var.get()
 
+        # The IID panel plots one fish, so switching focus has to redraw it -
+        # otherwise the trace keeps describing the previously selected fish.
+        iid_focus = self._inspector_iid_focus_index(loaded.n_fish)
+
         rebuild = (
             self._insp_needs_rebuild
             or self._insp_cached_file != selected
@@ -1052,6 +1071,8 @@ class InspectorTabMixin:
             or self._insp_cached_overlays != video_on
             or (time_mode == 'bout'
                 and self._insp_cached_bout_fish != bout_fish)
+            or (time_mode == 'iid'
+                and self._insp_cached_iid_focus != iid_focus)
         )
 
         if rebuild:
@@ -1066,6 +1087,7 @@ class InspectorTabMixin:
             self._insp_cached_time_mode = time_mode
             self._insp_cached_overlays = video_on
             self._insp_cached_bout_fish = bout_fish
+            self._insp_cached_iid_focus = iid_focus
 
         self._inspector_update_dynamic(
             selected, loaded, frame_idx, time_mode
@@ -1187,9 +1209,18 @@ class InspectorTabMixin:
                               'b-', lw=1, alpha=0.7)
                     ax_t.set_ylabel('NND (BL)', fontsize=8)
                 elif time_mode == 'iid':
-                    ax_t.plot(time_min, results.mean_iid_per_sample,
+                    # The IID overlay draws one focus fish's distances, so the
+                    # panel plots that same fish. Plotting the all-pairs mean
+                    # here captioned the picture with a different quantity:
+                    # on a real six-fish session the two differed by a median
+                    # of 1.9 BL against a typical IID of 5.5.
+                    focus = self._inspector_iid_focus_index(loaded.n_fish)
+                    ax_t.plot(time_min,
+                              results.individual_iid_per_sample[:, focus],
                               'g-', lw=1, alpha=0.7)
-                    ax_t.set_ylabel('IID (BL)', fontsize=8)
+                    ax_t.set_ylabel(f'Fish {focus} mean dist. '
+                                    f'({loaded.calibration.unit_name})',
+                                    fontsize=8)
                 else:
                     ax_t.plot(time_min, results.convex_hull_area_per_sample,
                               'r-', lw=1, alpha=0.7)

@@ -723,3 +723,63 @@ def test_nearest_neighbour_distances_single_fish_has_no_neighbour():
 
     assert np.isnan(nnd[0])
     assert nn_idx[0] == -1
+
+
+# ---------------------------------------------------------------------------
+# Per-fish IID, which the Video Inspector's IID panel plots
+# ---------------------------------------------------------------------------
+
+def test_individual_iid_is_each_fish_mean_distance_to_the_others():
+    """Distinct from the all-pairs mean, which is one number for the group."""
+    from fish_analyzer.shoaling import ShoalingCalculator
+
+    # Fish 0 and 1 are 10 apart; fish 2 sits 100 away from both.
+    positions = np.array([[0.0, 0.0], [10.0, 0.0], [0.0, 100.0]])
+    per_fish = ShoalingCalculator._calculate_individual_iid_at_frame(
+        None, positions)
+
+    assert per_fish[0] == pytest.approx((10.0 + 100.0) / 2)
+    assert per_fish[1] == pytest.approx((10.0 + np.hypot(10.0, 100.0)) / 2)
+    assert per_fish[2] == pytest.approx((100.0 + np.hypot(10.0, 100.0)) / 2)
+
+
+def test_individual_iid_averages_to_the_all_pairs_mean():
+    """The group value is recoverable, so nothing is lost by storing per-fish."""
+    from fish_analyzer.shoaling import ShoalingCalculator
+    from scipy.spatial.distance import pdist
+
+    rng = np.random.default_rng(3)
+    positions = rng.normal(0, 50, size=(6, 2))
+
+    per_fish = ShoalingCalculator._calculate_individual_iid_at_frame(
+        None, positions)
+
+    assert per_fish.mean() == pytest.approx(pdist(positions).mean())
+
+
+def test_individual_iid_is_nan_for_an_untracked_fish():
+    from fish_analyzer.shoaling import ShoalingCalculator
+
+    positions = np.array([[0.0, 0.0], [np.nan, np.nan], [3.0, 4.0]])
+    per_fish = ShoalingCalculator._calculate_individual_iid_at_frame(
+        None, positions)
+
+    assert np.isnan(per_fish[1])
+    assert per_fish[0] == pytest.approx(5.0)
+
+
+def test_individual_iid_can_differ_sharply_from_the_group_mean():
+    """The reason the inspector must not caption one fish with the other.
+
+    One outlier drags its own mean far above the all-pairs mean.
+    """
+    from fish_analyzer.shoaling import ShoalingCalculator
+    from scipy.spatial.distance import pdist
+
+    positions = np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [500.0, 500.0]])
+    per_fish = ShoalingCalculator._calculate_individual_iid_at_frame(
+        None, positions)
+
+    group = pdist(positions).mean()
+    assert per_fish[3] > group * 1.5
+    assert per_fish[0] < group

@@ -680,3 +680,47 @@ def test_export_strip_cursor_sweeps_the_whole_clip(app, synthetic_npy):
     # Across the clip the cursor should cross a large fraction of the panel,
     # not the ~1% it managed when the axis spanned the whole recording.
     assert (last - first) > strip.width_px * 0.5
+
+
+# ---------------------------------------------------------------------------
+# The IID panel must describe the fish the overlay draws
+# ---------------------------------------------------------------------------
+
+def test_iid_focus_change_forces_a_panel_rebuild(app, synthetic_npy):
+    """The IID panel plots one fish, so switching focus has to redraw it.
+
+    Only bout_fish was in the rebuild condition, so the trace kept describing
+    whichever fish was selected when the panel was first built.
+    """
+    from fish_analyzer.file_loading import TrajectoryFileLoader
+
+    loaded = TrajectoryFileLoader.load_file(synthetic_npy, "s1")
+    app.loaded_files["s1"] = loaded
+    app.inspector_file_var.set("s1")
+    app.inspector_time_mode_var.set("iid")
+
+    app._insp_needs_rebuild = False
+    app._insp_cached_file = "s1"
+    app._insp_cached_time_mode = "iid"
+    app._insp_cached_overlays = app.inspector_video_var.get()
+    app._insp_cached_iid_focus = 0
+
+    app.inspector_iid_focus_var.set("2")
+
+    assert app._inspector_iid_focus_index(loaded.n_fish) == 2
+    assert app._insp_cached_iid_focus != \
+        app._inspector_iid_focus_index(loaded.n_fish), \
+        "cached focus should differ, which is what triggers the rebuild"
+
+
+def test_iid_focus_index_clamps_to_an_existing_fish(app, synthetic_npy):
+    """A focus left over from a six-fish session must not index a three-fish one."""
+    from fish_analyzer.file_loading import TrajectoryFileLoader
+
+    loaded = TrajectoryFileLoader.load_file(synthetic_npy, "s1")
+    app.inspector_iid_focus_var.set("5")
+
+    assert app._inspector_iid_focus_index(loaded.n_fish) == 0
+
+    app.inspector_iid_focus_var.set("not a number")
+    assert app._inspector_iid_focus_index(loaded.n_fish) == 0
