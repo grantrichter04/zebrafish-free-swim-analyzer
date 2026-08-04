@@ -17,6 +17,7 @@ Designed for the Morsch lab at Macquarie University to support zebrafish neurobe
 - **Spatial analysis** — thigmotaxis (wall-hugging behavior), position heatmaps
 - **Calibration** — converts raw pixel coordinates to real-world units (body lengths, cm, etc.)
 - **GUI** — interactive tkinter + matplotlib interface with tabs for each analysis type
+- **Figure and clip export** — save any inspector frame as a full-resolution PNG, or export a marked range as an MP4 or PNG sequence with the overlays and the time-series panel
 - **Programmable API** — use individual components directly in your own scripts
 
 ---
@@ -146,6 +147,32 @@ on real data — the freeze denominators reconciling, net displacement surviving
 tracking gaps, top speed staying physiologically plausible, no inter-bout
 interval spanning a gap, and group metrics following the calibration. It exits
 non-zero if any check fails, and contains no data or paths of its own.
+
+### Exporting figures and clips
+
+The Video Inspector composites overlays — fish positions, NND lines, convex
+hull, IID lines, trails — onto video frames. To get them out:
+
+- **Save Frame (PNG)** writes the current composite at full video resolution,
+  not the downscaled image the canvas displays.
+- **Export Clip** writes a marked range as an MP4, or as a numbered PNG
+  sequence if you want lossless frames. Mark the range with **Set In** /
+  **Set Out** beside the frame slider; leaving them unset exports the whole
+  recording, and the dialog says so before it starts.
+
+Both export exactly what the tab is showing, including the time-series panel
+when the Time Panel is set to NND, IID, Hull or Bout. An export whose time
+panel needs shoaling or bout results refuses until those have been run, rather
+than writing a clip with "Run Shoaling Analysis first" printed across the
+bottom.
+
+Expect roughly 28 ms per frame at 1288×964 with a time panel — about 8 seconds
+for a 10-second clip. The Bout panel scrolls, so it has to be redrawn every
+frame and runs around three times slower; the dialog warns you first.
+
+The source video is auto-detected only when it sits beside the session folder.
+If your raw recordings and processed sessions live in separate trees, attach it
+with **Browse Video…**.
 
 ---
 

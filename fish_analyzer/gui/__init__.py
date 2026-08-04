@@ -23,12 +23,13 @@ from .bout_tab import BoutTabMixin
 from .shoaling_tab import ShoalingTabMixin
 from .spatial_tab import SpatialTabMixin
 from .inspector_tab import InspectorTabMixin
+from .inspector_export import InspectorExportMixin
 from .utils import smooth_time_series
 
 
 class EnhancedFishAnalyzer(GUIBase, DataTabMixin, AnalysisTabMixin,
                            BoutTabMixin, ShoalingTabMixin, SpatialTabMixin,
-                           InspectorTabMixin):
+                           InspectorTabMixin, InspectorExportMixin):
     """
     Main application class - orchestrates the entire GUI.
 
@@ -40,6 +41,7 @@ class EnhancedFishAnalyzer(GUIBase, DataTabMixin, AnalysisTabMixin,
     - ShoalingTabMixin: Group behavior analysis
     - SpatialTabMixin: Thigmotaxis, heatmaps
     - InspectorTabMixin: Unified video inspector with overlays
+    - InspectorExportMixin: The inspector's frame and clip export controls
 
     Usage:
         app = EnhancedFishAnalyzer()
