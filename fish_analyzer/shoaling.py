@@ -34,6 +34,45 @@ from scipy.spatial import ConvexHull
 from .data_structures import LoadedTrajectoryFile
 
 
+def nearest_neighbour_distances(positions: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Nearest-neighbour distance and neighbour index for each row.
+
+    Shared by ShoalingCalculator and the Video Inspector overlay so the
+    distances drawn on a frame are the same ones that reach the CSV.
+
+    Parameters
+    ----------
+    positions : np.ndarray
+        Shape (n, 2). Rows may be NaN for untracked individuals.
+
+    Returns
+    -------
+    (np.ndarray, np.ndarray)
+        Distances shape (n,) in the units of `positions`, NaN where the row is
+        untracked or has no neighbour; neighbour indices shape (n,), -1 where
+        there is none.
+    """
+    n = len(positions)
+    nnd = np.full(n, np.nan)
+    nn_idx = np.full(n, -1, dtype=int)
+    if n < 2:
+        return nnd, nn_idx
+
+    tracked = ~np.isnan(positions[:, 0])
+    if tracked.sum() < 2:
+        return nnd, nn_idx
+
+    idx = np.flatnonzero(tracked)
+    dist = cdist(positions[idx], positions[idx], metric='euclidean')
+    np.fill_diagonal(dist, np.inf)
+
+    nearest = np.argmin(dist, axis=1)
+    nnd[idx] = dist[np.arange(len(idx)), nearest]
+    nn_idx[idx] = idx[nearest]
+    return nnd, nn_idx
+
+
 @dataclass
 class ShoalingParameters:
     """
@@ -356,10 +395,7 @@ class ShoalingCalculator:
         np.ndarray
             Shape (n_fish,) with NND for each fish in PIXELS
         """
-        dist_matrix = cdist(positions, positions, metric='euclidean')
-        # Set self-distances to inf so they're not selected as minimum
-        np.fill_diagonal(dist_matrix, np.inf)
-        return np.min(dist_matrix, axis=1)
+        return nearest_neighbour_distances(positions)[0]
 
     def _calculate_iid_at_frame(self, positions: np.ndarray) -> float:
         """

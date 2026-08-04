@@ -684,3 +684,42 @@ def test_status_names_which_calculation_failed(tmp_path):
     out = tmp_path / "combined.csv"
     export_combined_summary_csv({"f": loaded}, {}, {}, out)
     assert "partial: turning" in out.read_text(encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# The nearest-neighbour helper shared with the Video Inspector overlay
+# ---------------------------------------------------------------------------
+
+def test_nearest_neighbour_distances_matches_calculator_method():
+    """The shared helper and ShoalingCalculator must not drift apart."""
+    from fish_analyzer.shoaling import nearest_neighbour_distances
+
+    positions = np.array([[0.0, 0.0], [3.0, 4.0], [100.0, 100.0]])
+    nnd, nn_idx = nearest_neighbour_distances(positions)
+
+    assert nnd[0] == pytest.approx(5.0)
+    assert nnd[1] == pytest.approx(5.0)
+    assert nn_idx[0] == 1
+    assert nn_idx[1] == 0
+
+
+def test_nearest_neighbour_distances_ignores_untracked_fish():
+    """A NaN fish is neither a source nor a candidate neighbour."""
+    from fish_analyzer.shoaling import nearest_neighbour_distances
+
+    positions = np.array([[0.0, 0.0], [np.nan, np.nan], [3.0, 4.0]])
+    nnd, nn_idx = nearest_neighbour_distances(positions)
+
+    assert np.isnan(nnd[1])
+    assert nn_idx[1] == -1
+    assert nnd[0] == pytest.approx(5.0)
+    assert nn_idx[0] == 2
+
+
+def test_nearest_neighbour_distances_single_fish_has_no_neighbour():
+    from fish_analyzer.shoaling import nearest_neighbour_distances
+
+    nnd, nn_idx = nearest_neighbour_distances(np.array([[10.0, 10.0]]))
+
+    assert np.isnan(nnd[0])
+    assert nn_idx[0] == -1

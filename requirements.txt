@@ -24,6 +24,10 @@ shapely>=2.0
 # Without opencv, the frame inspector is disabled, not fatal.
 opencv-python>=4.8
 
+# --- Development only --------------------------------------------------------
+# Needed to run the test suite (pytest -q); not needed to use the application.
+#   pip install pytest
+
 # --- Not installed here ------------------------------------------------------
 # fish_posture_analyzer.py and head_detection/ are standalone scripts with
 # heavier requirements the main package does not need:
