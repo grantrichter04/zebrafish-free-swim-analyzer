@@ -1,0 +1,50 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fish-analyzer"
+description = "Behavioural analysis of zebrafish free-swimming assays tracked with idtracker.ai"
+readme = "README.md"
+requires-python = ">=3.9"
+dynamic = ["version"]
+
+# Kept in step with requirements.txt, which stays for anyone who prefers
+# `pip install -r`. These are the same constraints.
+dependencies = [
+    "numpy>=1.24",
+    "pandas>=1.5",
+    "matplotlib>=3.7",
+    "scipy>=1.10",
+    "traja==25.0.1",
+    # traja imports sklearn unconditionally but does not declare it, so
+    # `import traja` fails without this. Not optional.
+    "scikit-learn>=1.0",
+    # Functionally optional - without them thigmotaxis and the video inspector
+    # are disabled rather than crashing - but installed by default because
+    # nearly every workflow uses them.
+    "shapely>=2.0",
+    "opencv-python>=4.8",
+]
+
+[project.optional-dependencies]
+# pip install -e ".[dev]"
+dev = [
+    "pytest>=7.0",
+]
+# The standalone scripts under head_detection/ and fish_posture_analyzer.py.
+# idtrackerai itself is not listed: install it per idtracker.ai's own docs.
+standalone = [
+    "scikit-image>=0.19",
+]
+
+[project.scripts]
+fish-analyzer = "fish_analyzer.__main__:main"
+
+[tool.setuptools]
+# Explicit, so the standalone head_detection/ scripts are not swept in as
+# though they were part of the package.
+packages = ["fish_analyzer", "fish_analyzer.gui"]
+
+[tool.setuptools.dynamic]
+version = { attr = "fish_analyzer.__version__" }

@@ -63,25 +63,45 @@ head_detection/          # Standalone: head-vs-tail and turn analysis
 ```bash
 python -m venv venv
 venv\Scripts\activate          # macOS/Linux: source venv/bin/activate
-pip install -r requirements.txt
+pip install -e ".[dev]"
 ```
 
 ### Alternative: conda
 
 ```bash
-conda create -n fishanalyzer python=3.12 numpy pandas matplotlib scipy shapely scikit-learn opencv -c conda-forge
+conda env create -f environment.yml
 conda activate fishanalyzer
-pip install traja==25.0.1
+pip install -e ".[dev]"
 ```
+
+Both install the package itself in editable mode. That is what lets
+`import fish_analyzer` work from any directory rather than only from the
+repository root, and it is why `pytest` and `python -m fish_analyzer` need no
+path juggling. The `[dev]` extra adds pytest; drop it if you only want to run
+the application.
+
+Verify the install before pointing it at data — the suite is synthetic and
+takes a few seconds:
+
+```bash
+pytest -q
+```
+
+> **Which Python?** If you have several installed, make sure the one you
+> activate is the one you run. `import traja` failing is the usual sign you are
+> on the wrong interpreter.
 
 ### Requirements
 
-- **Python 3.9 or newer.** Verified end to end on 3.9, 3.12 and 3.13; 3.12 is the
-  recommended default. Note that `trajectorytools` and idtracker.ai 6.x both
-  require 3.10+, so pick 3.12 if you expect to use them alongside this tool.
-- Everything the package needs is in [`requirements.txt`](requirements.txt).
-  `scikit-learn` is listed there and is **not** optional — `traja` imports it
-  without declaring it, so `import traja` fails if it is missing.
+- **Python 3.9 or newer.** CI runs the full suite on 3.9 and 3.12 on Windows;
+  3.12 is the recommended default. Note that `trajectorytools` and
+  idtracker.ai 6.x both require 3.10+, so pick 3.12 if you expect to use them
+  alongside this tool.
+- Dependencies are declared in [`pyproject.toml`](pyproject.toml).
+  [`requirements.txt`](requirements.txt) carries the same constraints for
+  anyone who prefers `pip install -r`, and [`environment.yml`](environment.yml)
+  is the conda equivalent. `scikit-learn` is **not** optional — `traja` imports
+  it without declaring it, so `import traja` fails if it is missing.
 - `shapely` (thigmotaxis) and `opencv-python` (video frame reading) are
   functionally optional: without them those features are disabled rather than
   crashing. They are installed by default because most workflows use them.
@@ -89,7 +109,7 @@ pip install traja==25.0.1
 The standalone scripts need more:
 
 ```bash
-pip install scikit-image      # fish_posture_analyzer.py and head_detection/
+pip install -e ".[standalone]"
 # head_detection/ additionally needs idtrackerai — install per idtracker.ai's docs
 ```
 
@@ -103,10 +123,13 @@ pip install scikit-image      # fish_posture_analyzer.py and head_detection/
 python run_analyzer.py
 ```
 
-### Programmatic API
+Once installed, these are equivalent and work from any directory:
 
-Run this from the repository root — `fish_analyzer` is not installed as a
-package, so it is only importable from there.
+```bash
+python -m fish_analyzer
+```
+
+### Programmatic API
 
 ```python
 from pathlib import Path

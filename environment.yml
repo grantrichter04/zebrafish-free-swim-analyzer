@@ -1,0 +1,37 @@
+# Conda environment for the Zebrafish Free Swim Analyzer.
+#
+#   conda env create -f environment.yml
+#   conda activate fishanalyzer
+#   pip install -e ".[dev]"
+#
+# The last step installs the package itself in editable mode, which is what
+# lets `import fish_analyzer` work from any directory rather than only from
+# the repository root.
+#
+# Constraints here mirror pyproject.toml. traja and the package itself come
+# from pip because traja is not on conda-forge.
+name: fishanalyzer
+
+channels:
+  - conda-forge
+
+dependencies:
+  # 3.12 is the recommended default. trajectorytools and idtracker.ai 6.x both
+  # require 3.10+, so pick this if you expect to use them alongside the tool.
+  - python=3.12
+
+  - numpy>=1.24
+  - pandas>=1.5
+  - matplotlib>=3.7
+  - scipy>=1.10
+  # traja imports sklearn unconditionally without declaring it, so `import
+  # traja` fails without this. Not optional.
+  - scikit-learn>=1.0
+  # Functionally optional: without shapely, thigmotaxis is disabled; without
+  # opencv, the video inspector and clip export are. Neither crashes.
+  - shapely>=2.0
+  - py-opencv>=4.8
+
+  - pip
+  - pip:
+      - traja==25.0.1

@@ -3,15 +3,9 @@
 These need no display and no video file, so unlike the GUI tests they run
 everywhere. cv2 is required for the drawing path and skipped if absent.
 """
-import sys
-from pathlib import Path
 
 import numpy as np
 import pytest
-
-REPO = Path(__file__).resolve().parent.parent
-if str(REPO) not in sys.path:
-    sys.path.insert(0, str(REPO))
 
 cv2 = pytest.importorskip("cv2")
 
