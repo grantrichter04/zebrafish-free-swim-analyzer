@@ -6,11 +6,10 @@ build-backend = "setuptools.build_meta"
 name = "fish-analyzer"
 description = "Behavioural analysis of zebrafish free-swimming assays tracked with idtracker.ai"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 dynamic = ["version"]
 
-# Kept in step with requirements.txt, which stays for anyone who prefers
-# `pip install -r`. These are the same constraints.
+# The only dependency list. environment.yml installs from here.
 dependencies = [
     "numpy>=1.24",
     "pandas>=1.5",
@@ -24,13 +23,20 @@ dependencies = [
     # are disabled rather than crashing - but installed by default because
     # nearly every workflow uses them.
     "shapely>=2.0",
-    "opencv-python>=4.8",
+    # Headless, not opencv-python: idtracker.ai installs the headless build
+    # and the two cannot share an environment. Nothing here opens a cv2 window.
+    "opencv-python-headless>=4.10",
 ]
 
 [project.optional-dependencies]
 # pip install -e ".[dev]"
 dev = [
     "pytest>=7.0",
+]
+# pip install -e ".[tracking]" - adds idtracker.ai for the Tracking tab.
+# Install GPU PyTorch first; see install.bat.
+tracking = [
+    "idtrackerai>=6.0.14,<6.1",
 ]
 # The standalone scripts under head_detection/ and fish_posture_analyzer.py.
 # idtrackerai itself is not listed: install it per idtracker.ai's own docs.

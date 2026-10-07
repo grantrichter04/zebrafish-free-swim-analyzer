@@ -119,30 +119,22 @@ def test_gui_constructs(app):
         assert hasattr(app, attr), f"{attr} missing - a tab did not build"
 
 
-def test_requirements_txt_matches_pyproject():
-    """Two files list the same dependencies, so they can drift apart.
+def test_declared_dependencies_fit_alongside_idtrackerai():
+    """idtracker.ai installs opencv-python-headless. Declaring opencv-python
+    here would put two packages in the same cv2 directory in a shared env."""
+    from importlib.metadata import metadata, requires
 
-    The conda path in the README was already a hand-typed package list that had
-    no mechanism keeping it in step; this at least pins the two pip ones.
-    Compares against the installed metadata, which is what pyproject produced.
-    """
-    from importlib.metadata import requires
+    reqs = [r.replace(" ", "") for r in requires("fish-analyzer") or []]
+    runtime = [r for r in reqs if "extra==" not in r]
 
-    declared = set()
-    for req in requires("fish-analyzer") or []:
-        if "extra ==" in req:          # dev / standalone extras, not runtime
-            continue
-        declared.add(req.replace(" ", ""))
+    assert any(r.startswith("opencv-python-headless") for r in runtime)
+    assert not any(r.startswith("opencv-python>") or r == "opencv-python"
+                   for r in runtime)
+    assert any(r.startswith("idtrackerai") and 'extra=="tracking"' in r
+               for r in reqs), "the tracking extra should pull in idtrackerai"
+    assert metadata("fish-analyzer")["Requires-Python"] == ">=3.10"
 
-    listed = set()
-    for line in (REPO / "requirements.txt").read_text(
-            encoding="utf-8-sig").splitlines():
-        line = line.split("#")[0].strip()
-        if line:
-            listed.add(line.replace(" ", ""))
 
-    assert listed == declared, (
-        "requirements.txt and pyproject.toml disagree.\n"
-        f"  only in requirements.txt: {sorted(listed - declared)}\n"
-        f"  only in pyproject.toml:   {sorted(declared - listed)}"
-    )
+def test_requirements_txt_is_gone():
+    """pyproject.toml is the only dependency list."""
+    assert not (REPO / "requirements.txt").exists()

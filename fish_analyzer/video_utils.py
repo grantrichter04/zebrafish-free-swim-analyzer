@@ -24,7 +24,7 @@ try:
     CV2_AVAILABLE = True
 except ImportError:
     CV2_AVAILABLE = False
-    print("Note: OpenCV not installed. Install with 'pip install opencv-python' for video frame support.")
+    print("Note: OpenCV not installed. Install with 'pip install opencv-python-headless' for video frame support.")
 
 
 class VideoFrameCache:
@@ -111,7 +111,7 @@ class VideoFrameReader:
         if not CV2_AVAILABLE:
             raise RuntimeError(
                 "OpenCV is required for video frame reading.\n"
-                "Install with: pip install opencv-python"
+                "Install with: pip install opencv-python-headless"
             )
         
         if not video_path.exists():

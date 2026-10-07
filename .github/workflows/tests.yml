@@ -17,9 +17,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # The floor and the recommended default. README claims both work; this
-        # is what makes that claim mean something.
-        python-version: ["3.9", "3.12"]
+        # The version install.bat builds. idtracker.ai needs 3.10 or newer.
+        python-version: ["3.12"]
 
     steps:
       - uses: actions/checkout@v4

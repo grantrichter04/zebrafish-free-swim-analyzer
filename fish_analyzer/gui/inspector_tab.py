@@ -964,7 +964,7 @@ class InspectorTabMixin:
             from ..video_utils import VideoFrameReader, CV2_AVAILABLE
             if not CV2_AVAILABLE:
                 self.inspector_video_status.config(
-                    text="Install opencv-python for video support",
+                    text="Install opencv-python-headless for video support",
                     fg="orange"
                 )
                 return False
@@ -1011,7 +1011,7 @@ class InspectorTabMixin:
                 messagebox.showerror(
                     "OpenCV Required",
                     "OpenCV is required for video frame reading.\n\n"
-                    "Install with: pip install opencv-python"
+                    "Install with: pip install opencv-python-headless"
                 )
                 return
 
