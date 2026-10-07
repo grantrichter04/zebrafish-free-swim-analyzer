@@ -247,3 +247,60 @@ def test_measure_dialog_wants_two_points_and_a_length(app, monkeypatch):
         assert dialog.measured_pixels() is None
     finally:
         dialog.window.destroy()
+
+
+# --- names and groups -------------------------------------------------------------
+
+def test_renaming_a_session_carries_everything_with_it(
+        app, quiet, tmp_path, synthetic_npy, synthetic_npy_larger_fish, monkeypatch):
+    _make_session(tmp_path, synthetic_npy, "control1_long_camera_name")
+    _make_session(tmp_path, synthetic_npy_larger_fish, "treated1")
+    app._add_path(tmp_path)
+    old = "control1_long_camera_name"
+    loaded = app.loaded_files[old]
+    loaded.processed_data = ["results"]
+    app.bout_results[old] = ["bouts"]
+    app.file_arena_definitions[old] = "arena"
+    monkeypatch.setattr(data_tab.simpledialog, "askstring", lambda *a, **k: " ctrl 1 ")
+    app.sessions_tree.selection_set(old)
+
+    app._rename_session()
+
+    assert list(app.loaded_files) == ["ctrl 1", "treated1"], "order is kept"
+    assert app.loaded_files["ctrl 1"] is loaded and loaded.nickname == "ctrl 1"
+    assert loaded.processed_data == ["results"], "nothing is recomputed or lost"
+    assert app.bout_results == {"ctrl 1": ["bouts"]}
+    assert app.file_arena_definitions == {"ctrl 1": "arena"}
+    assert _rows(app)["ctrl 1"]["group"] == "control1_long_camera_name", \
+        "it stays in the group it was shown in"
+    assert list(app.analysis_files_listbox.get(0, "end")) == ["ctrl 1", "treated1"]
+    assert list(app.shoaling_files_listbox.get(0, "end")) == ["ctrl 1", "treated1"]
+
+
+def test_a_session_cannot_take_another_sessions_name(
+        app, quiet, tmp_path, synthetic_npy, synthetic_npy_larger_fish, monkeypatch):
+    _make_session(tmp_path, synthetic_npy, "control")
+    _make_session(tmp_path, synthetic_npy_larger_fish, "treated")
+    app._add_path(tmp_path)
+    monkeypatch.setattr(data_tab.simpledialog, "askstring", lambda *a, **k: "treated")
+    app.sessions_tree.selection_set("control")
+
+    app._rename_session()
+
+    assert list(app.loaded_files) == ["control", "treated"]
+    assert quiet["error"][0][0] == "Rename"
+
+
+def test_several_sessions_can_be_put_in_one_group(
+        app, quiet, tmp_path, synthetic_npy, synthetic_npy_larger_fish, monkeypatch):
+    _make_session(tmp_path, synthetic_npy, "tank3")
+    _make_session(tmp_path, synthetic_npy_larger_fish, "tank7")
+    app._add_path(tmp_path)
+    assert _rows(app)["tank3"]["group"] == "tank", "the default strips a trailing number"
+    monkeypatch.setattr(data_tab.simpledialog, "askstring", lambda *a, **k: "treated")
+    app.sessions_tree.selection_set(["tank3", "tank7"])
+
+    app._set_group()
+
+    assert app.file_groups == {"tank3": "treated", "tank7": "treated"}
+    assert {r["group"] for r in _rows(app).values()} == {"treated"}

@@ -15,7 +15,7 @@ from typing import List, Optional, Tuple
 from pathlib import Path
 import traceback
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+from tkinter import ttk, filedialog, messagebox, simpledialog
 
 import numpy as np
 
@@ -38,7 +38,8 @@ class DataTabMixin:
 
     SESSION_COLUMNS = (
         # id, heading, width
-        ("name", "Session", 300),
+        ("name", "Session", 260),
+        ("group", "Group", 120),
         ("fish", "Fish", 50),
         ("minutes", "Minutes", 70),
         ("tracked", "Tracked (lowest fish)", 160),
@@ -87,7 +88,7 @@ class DataTabMixin:
         scroll.pack(side="right", fill="y")
         self.sessions_tree = ttk.Treeview(
             table, columns=[c[0] for c in self.SESSION_COLUMNS],
-            show="headings", height=6, selectmode="browse",
+            show="headings", height=6, selectmode="extended",
             yscrollcommand=scroll.set)
         for column, heading, width in self.SESSION_COLUMNS:
             self.sessions_tree.heading(column, text=heading)
@@ -95,16 +96,26 @@ class DataTabMixin:
                 column, width=width, anchor="w" if column == "name" else "center")
         self.sessions_tree.pack(side="left", fill="both", expand=True)
         scroll.config(command=self.sessions_tree.yview)
+        self.sessions_tree.bind("<Double-1>", self._on_session_double_click)
 
         buttons = tk.Frame(frame)
         buttons.pack(fill="x", padx=10, pady=(0, 8))
         tk.Button(buttons, text="Add sessions...",
                   command=self._browse_for_session_folder,
                   bg="lightblue", font=("Arial", 10, "bold")).pack(side="left", padx=5)
+        tk.Button(buttons, text="Rename...",
+                  command=self._rename_session).pack(side="left", padx=5)
+        tk.Button(buttons, text="Set group...",
+                  command=self._set_group).pack(side="left", padx=5)
         tk.Button(buttons, text="Details",
                   command=self._show_file_details).pack(side="left", padx=5)
         tk.Button(buttons, text="Remove",
                   command=self._remove_file).pack(side="left", padx=5)
+        tk.Label(buttons, font=("Arial", 9), fg="gray",
+                 text="Give sessions short names and put them in groups "
+                      "(for example control, treated): these label every "
+                      "plot and export. Select several to group them together."
+                 ).pack(side="left", padx=15)
 
     def _create_units_section(self, parent):
         frame = tk.LabelFrame(parent, text="2. Units", font=("Arial", 12, "bold"))
@@ -409,15 +420,21 @@ class DataTabMixin:
         self._update_sessions_table()
         self._update_units_status()
 
+    def _selected_sessions(self) -> List[str]:
+        return [n for n in self.sessions_tree.selection() if n in self.loaded_files]
+
     def _selected_session(self) -> Optional[str]:
-        selection = self.sessions_tree.selection()
-        if selection and selection[0] in self.loaded_files:
-            return selection[0]
-        return None
+        selected = self._selected_sessions()
+        return selected[0] if selected else None
+
+    def _group_of(self, nickname: str) -> str:
+        """The group a session is exported under: the one set here, or
+        failing that its name without a trailing number."""
+        return self.file_groups.get(nickname) or self._auto_detect_group(nickname)
 
     def _update_sessions_table(self):
         tree = self.sessions_tree
-        selected = self._selected_session()
+        selected = self._selected_sessions()
         tree.delete(*tree.get_children())
         for nickname, loaded_file in self.loaded_files.items():
             metadata = loaded_file.metadata
@@ -426,6 +443,7 @@ class DataTabMixin:
             calibration = loaded_file.calibration
             tree.insert("", "end", iid=nickname, values=(
                 nickname,
+                self._group_of(nickname),
                 loaded_file.n_fish,
                 f"{loaded_file.duration_minutes:.1f}",
                 f"{tracked.mean():.1f}%  ({tracked.min():.1f}%)",
@@ -434,8 +452,100 @@ class DataTabMixin:
                 f"{metadata.frames_per_second:.2f} fps",
                 f"{calibration.pixels_per_unit:.1f} px/{calibration.unit_name}",
             ))
-        if selected in self.loaded_files:
-            tree.selection_set(selected)
+        tree.selection_set([n for n in selected if n in self.loaded_files])
+
+    # --- names and groups ---
+
+    def _on_session_double_click(self, event):
+        """Double-click a name to rename it, a group to change it."""
+        row = self.sessions_tree.identify_row(event.y)
+        if not row:
+            return
+        self.sessions_tree.selection_set(row)
+        if self.sessions_tree.identify_column(event.x) == "#2":
+            self._set_group()
+        else:
+            self._rename_session()
+
+    def _rename_session(self):
+        """Give the selected session a shorter name."""
+        selected = self._selected_sessions()
+        if len(selected) != 1:
+            messagebox.showinfo("Rename", "Select one session in the table first.")
+            return
+        old = selected[0]
+        new = simpledialog.askstring(
+            "Rename session",
+            "A short name for this session. It labels the plots and exports:",
+            initialvalue=old, parent=self.root)
+        if new is None:
+            return
+        new = new.strip()
+        if not new or new == old:
+            return
+        if new in self.loaded_files:
+            messagebox.showerror(
+                "Rename", f"Another session is already called '{new}'.")
+            return
+        self._rename(old, new)
+
+    def _rename(self, old: str, new: str):
+        """Change a session's name everywhere it is used as a key.
+
+        Results, arenas, groups and the open video all follow the session;
+        nothing is recomputed or discarded.
+        """
+        # Rebuilt rather than popped and re-added, to keep the table order.
+        self.loaded_files = {
+            (new if name == old else name): loaded
+            for name, loaded in self.loaded_files.items()}
+        self.loaded_files[new].nickname = new
+
+        for keyed in (self.bout_results, self.file_arena_definitions,
+                      self.file_roi_definitions, self.video_readers):
+            if old in keyed:
+                keyed[new] = keyed.pop(old)
+        # The group was either chosen, or derived from the old name. Either
+        # way the session stays in the group it was shown in.
+        self.file_groups[new] = self.file_groups.pop(old, None) or self._auto_detect_group(old)
+
+        if self.current_arena_file == old:
+            self.current_arena_file = new
+        if self.inspector_file_var.get() == old:
+            self.inspector_file_var.set(new)
+
+        self._update_sessions_table()
+        self.sessions_tree.selection_set(new)
+        self._refresh_session_lists()
+
+    def _set_group(self):
+        """Put the selected session(s) in an experimental group."""
+        selected = self._selected_sessions()
+        if not selected:
+            messagebox.showinfo(
+                "Set group", "Select one or more sessions in the table first.")
+            return
+        label = simpledialog.askstring(
+            "Set group",
+            f"Group for the {len(selected)} selected session(s), for example "
+            "control or treated.\nSessions with the same group are pooled "
+            "in group plots and share a Group value in exports:",
+            initialvalue=self._group_of(selected[0]), parent=self.root)
+        if label is None:
+            return
+        for nickname in selected:
+            if label.strip():
+                self.file_groups[nickname] = label.strip()
+            else:
+                self.file_groups.pop(nickname, None)
+        self._update_sessions_table()
+
+    def _refresh_session_lists(self):
+        """Redraw every other tab's list of sessions."""
+        self._update_shoaling_file_dropdown()
+        self._update_analysis_files_listbox()
+        self._refresh_bout_file_list()
+        self._update_spatial_files_list()
 
     def _show_file_details(self):
         """Show detailed information about the selected session."""
