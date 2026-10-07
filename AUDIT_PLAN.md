@@ -117,7 +117,7 @@ Four real sessions are now available (idtracker.ai 6.0.8, 6 fish × 18,000
 frames at 30 fps, 10 min each):
 
 ```
-C:\Users\grich\Macquarie University\Morsch Group - Documents\04_People\Grant R\
+<lab share>
   02_PROJECTS\TRACKING\Tracking Adult Fish\02_Processed_Data\wtTAB_6mo\Freeswim\
     session_G604_Freeswim_2025-09-19-133933-0000
     session_G604_Freeswim_group2_2025-09-19-141050-0000

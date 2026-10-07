@@ -18,7 +18,7 @@ Every command in this plan uses the project's conda environment, which has all
 dependencies including `cv2`, `shapely` and `PIL`:
 
 ```
-C:/Users/grich/.conda/envs/traja_fish_analysis/python.exe
+~/.conda/envs/traja_fish_analysis/python.exe
 ```
 
 The repo's default `python` is miniconda base and is **missing traja, cv2 and
@@ -102,7 +102,7 @@ def test_nearest_neighbour_distances_single_fish_has_no_neighbour():
 
 Run:
 ```bash
-C:/Users/grich/.conda/envs/traja_fish_analysis/python.exe -m pytest tests/test_metric_correctness.py -k nearest_neighbour -v
+~/.conda/envs/traja_fish_analysis/python.exe -m pytest tests/test_metric_correctness.py -k nearest_neighbour -v
 ```
 Expected: FAIL with `ImportError: cannot import name 'nearest_neighbour_distances'`
 
@@ -161,7 +161,7 @@ the two cannot diverge:
 
 Run:
 ```bash
-C:/Users/grich/.conda/envs/traja_fish_analysis/python.exe -m pytest tests/test_metric_correctness.py -v
+~/.conda/envs/traja_fish_analysis/python.exe -m pytest tests/test_metric_correctness.py -v
 ```
 Expected: PASS, including the pre-existing shoaling tests — `_calculate_nnd_at_frame`
 is only ever called on complete (NaN-free) frames, so its results are unchanged.
@@ -265,7 +265,7 @@ def test_fish_colors_matches_the_app_wide_convention():
 
 Run:
 ```bash
-C:/Users/grich/.conda/envs/traja_fish_analysis/python.exe -m pytest tests/test_overlay_render.py -v
+~/.conda/envs/traja_fish_analysis/python.exe -m pytest tests/test_overlay_render.py -v
 ```
 Expected: FAIL with `ModuleNotFoundError: No module named 'fish_analyzer.overlay_render'`
 
@@ -426,7 +426,7 @@ def _draw_positions(display, positions, n_fish, colors, settings):
 
 Run:
 ```bash
-C:/Users/grich/.conda/envs/traja_fish_analysis/python.exe -m pytest tests/test_overlay_render.py -v
+~/.conda/envs/traja_fish_analysis/python.exe -m pytest tests/test_overlay_render.py -v
 ```
 Expected: PASS, 5 tests.
 
@@ -543,7 +543,7 @@ def test_bout_ring_is_drawn_around_the_selected_fish():
 
 Run:
 ```bash
-C:/Users/grich/.conda/envs/traja_fish_analysis/python.exe -m pytest tests/test_overlay_render.py -v
+~/.conda/envs/traja_fish_analysis/python.exe -m pytest tests/test_overlay_render.py -v
 ```
 Expected: the seven new tests FAIL (nothing but positions is drawn yet).
 
@@ -674,7 +674,7 @@ def _draw_cv2(display, trajectories, positions, frame_idx, n_fish, colors,
 
 Run:
 ```bash
-C:/Users/grich/.conda/envs/traja_fish_analysis/python.exe -m pytest tests/test_overlay_render.py -v
+~/.conda/envs/traja_fish_analysis/python.exe -m pytest tests/test_overlay_render.py -v
 ```
 Expected: PASS, 12 tests.
 
@@ -721,7 +721,7 @@ def test_render_settings_reflect_the_inspector_controls(app):
 
 Run:
 ```bash
-C:/Users/grich/.conda/envs/traja_fish_analysis/python.exe -m pytest tests/test_gui_regressions.py -k render_settings -v
+~/.conda/envs/traja_fish_analysis/python.exe -m pytest tests/test_gui_regressions.py -k render_settings -v
 ```
 Expected: FAIL with `AttributeError: 'EnhancedFishAnalyzer' object has no attribute 'render_settings_from_vars'`
 
@@ -788,7 +788,7 @@ block near line 990.
 
 Run:
 ```bash
-C:/Users/grich/.conda/envs/traja_fish_analysis/python.exe -m pytest -q
+~/.conda/envs/traja_fish_analysis/python.exe -m pytest -q
 ```
 Expected: PASS. Confirm no test errors mention `_inspector_draw_cv2` or
 `_rgba_to_bgr`.
@@ -797,7 +797,7 @@ Expected: PASS. Confirm no test errors mention `_inspector_draw_cv2` or
 
 Run:
 ```bash
-C:/Users/grich/.conda/envs/traja_fish_analysis/python.exe run_analyzer.py
+~/.conda/envs/traja_fish_analysis/python.exe run_analyzer.py
 ```
 Load `session_dNLS_FREESWIM_2025-08-29-135947-0000`, open Video Inspector,
 attach the video with **Browse Video…** (auto-detect will not find it), tick
@@ -916,7 +916,7 @@ def test_mp4_sink_raises_when_no_codec_opens(tmp_path, monkeypatch):
 
 Run:
 ```bash
-C:/Users/grich/.conda/envs/traja_fish_analysis/python.exe -m pytest tests/test_media_export.py -v
+~/.conda/envs/traja_fish_analysis/python.exe -m pytest tests/test_media_export.py -v
 ```
 Expected: FAIL with `ModuleNotFoundError: No module named 'fish_analyzer.media_export'`
 
@@ -1027,7 +1027,7 @@ class Mp4Sink:
 
 Run:
 ```bash
-C:/Users/grich/.conda/envs/traja_fish_analysis/python.exe -m pytest tests/test_media_export.py -v
+~/.conda/envs/traja_fish_analysis/python.exe -m pytest tests/test_media_export.py -v
 ```
 Expected: PASS, 4 tests.
 
@@ -1098,7 +1098,7 @@ def test_cursor_x_maps_time_to_a_pixel_column():
 
 Run:
 ```bash
-C:/Users/grich/.conda/envs/traja_fish_analysis/python.exe -m pytest tests/test_media_export.py -k "frame_source or cursor" -v
+~/.conda/envs/traja_fish_analysis/python.exe -m pytest tests/test_media_export.py -k "frame_source or cursor" -v
 ```
 Expected: FAIL with `ImportError: cannot import name 'ExportFrameSource'`
 
@@ -1245,7 +1245,7 @@ class ScrollingStrip:
 
 Run:
 ```bash
-C:/Users/grich/.conda/envs/traja_fish_analysis/python.exe -m pytest tests/test_media_export.py -v
+~/.conda/envs/traja_fish_analysis/python.exe -m pytest tests/test_media_export.py -v
 ```
 Expected: PASS, 7 tests.
 
@@ -1405,7 +1405,7 @@ def test_scrolling_strip_moves_its_window_with_time():
 
 Run:
 ```bash
-C:/Users/grich/.conda/envs/traja_fish_analysis/python.exe -m pytest tests/test_media_export.py -k export_clip -v
+~/.conda/envs/traja_fish_analysis/python.exe -m pytest tests/test_media_export.py -k export_clip -v
 ```
 Expected: FAIL with `ImportError: cannot import name 'export_clip'`
 
@@ -1488,7 +1488,7 @@ def export_clip(source, sink, strip, trajectories, settings, scale,
 
 Run:
 ```bash
-C:/Users/grich/.conda/envs/traja_fish_analysis/python.exe -m pytest tests/test_media_export.py -v
+~/.conda/envs/traja_fish_analysis/python.exe -m pytest tests/test_media_export.py -v
 ```
 Expected: PASS, 11 tests.
 
@@ -1535,7 +1535,7 @@ def test_unset_markers_default_to_the_whole_recording(app):
 
 Run:
 ```bash
-C:/Users/grich/.conda/envs/traja_fish_analysis/python.exe -m pytest tests/test_gui_regressions.py -k markers -v
+~/.conda/envs/traja_fish_analysis/python.exe -m pytest tests/test_gui_regressions.py -k markers -v
 ```
 Expected: FAIL with `AttributeError: ... has no attribute '_inspector_export_range'`
 
@@ -1620,7 +1620,7 @@ In `_create_inspector_controls`, after the step row (around line 164), add:
 
 Run:
 ```bash
-C:/Users/grich/.conda/envs/traja_fish_analysis/python.exe -m pytest tests/test_gui_regressions.py -v
+~/.conda/envs/traja_fish_analysis/python.exe -m pytest tests/test_gui_regressions.py -v
 ```
 Expected: PASS.
 
@@ -1732,7 +1732,7 @@ imported in `inspector_tab.py` — they are, at the top of the file.
 
 Run:
 ```bash
-C:/Users/grich/.conda/envs/traja_fish_analysis/python.exe run_analyzer.py
+~/.conda/envs/traja_fish_analysis/python.exe run_analyzer.py
 ```
 Load the dNLS session, attach the video via Browse Video…, tick NND lines and
 Convex hull, then Export → Save Frame (PNG). Open the PNG: it must be 1288×964
@@ -1793,7 +1793,7 @@ def test_export_is_allowed_when_the_time_panel_is_off(app, synthetic_npy):
 
 Run:
 ```bash
-C:/Users/grich/.conda/envs/traja_fish_analysis/python.exe -m pytest tests/test_gui_regressions.py -k can_export -v
+~/.conda/envs/traja_fish_analysis/python.exe -m pytest tests/test_gui_regressions.py -k can_export -v
 ```
 Expected: FAIL with `AttributeError: ... has no attribute '_inspector_can_export'`
 
@@ -2043,7 +2043,7 @@ Add to the mixin:
 
 Run:
 ```bash
-C:/Users/grich/.conda/envs/traja_fish_analysis/python.exe -m pytest -q
+~/.conda/envs/traja_fish_analysis/python.exe -m pytest -q
 ```
 Expected: PASS.
 
@@ -2065,16 +2065,16 @@ git commit -m "Add clip export with progress, cancellation and guards"
 
 Run:
 ```bash
-C:/Users/grich/.conda/envs/traja_fish_analysis/python.exe run_analyzer.py
+~/.conda/envs/traja_fish_analysis/python.exe run_analyzer.py
 ```
 
 1. Data Setup & Calibration → Browse… → select
-   `C:\Users\grich\Macquarie University\Morsch Group - Documents\04_People\Grant R\02_PROJECTS\TRACKING\Tracking Adult Fish\02_Processed_Data\Rachel's Project\Freeswim\session_dNLS_FREESWIM_2025-08-29-135947-0000`
+   `<lab share>`
 2. Apply calibration (body length is 79.8 px; the session has 6 fish, 18,000
    frames at 30 fps, 1288×964).
 3. Shoaling Analysis → Run Shoaling Analysis, so the time panel has data.
 4. Video Inspector → Browse Video… →
-   `C:\Users\grich\Macquarie University\Morsch Group - Documents\04_People\Grant R\02_PROJECTS\TRACKING\Tracking Adult Fish\01_Raw_Data\ZF Videos\Adult Swimming\Rachel's Project\250829_wtTDP_and_dNLS\Freeswim\dNLS_FREESWIM_2025-08-29.avi`
+   `<lab share>`
    (auto-detect cannot find it — raw data and session live in different trees)
 5. Tick Fish positions, NND lines, Convex hull. Set Time Panel to NND.
 6. Scrub to a frame where the fish are grouped, Set In, advance ~300 frames,
@@ -2118,7 +2118,7 @@ otherwise attach it with **Browse Video…**.
 
 Run:
 ```bash
-C:/Users/grich/.conda/envs/traja_fish_analysis/python.exe -m pytest -q
+~/.conda/envs/traja_fish_analysis/python.exe -m pytest -q
 ```
 Expected: PASS.
 

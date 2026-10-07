@@ -185,7 +185,7 @@ Minor: the file begins with a UTF-8 BOM. Git 2.53 handles it correctly (`__pycac
 
 This matters for Pass A because it means they can never be covered by any automated test, and it is a hard blocker for Pass E.
 
-- Three of four hardcode a personal absolute path at module level: `C:\Users\grich\Macquarie University\Morsch Group - Documents\Grant R\Fish videos\...` in `generate_mask_video.py:6-10`, `generate_individual_mask_videos.py:6-10`, `head_detection_test.py:17-21`. Confirms `AUDIT_PLAN.md`'s claim.
+- Three of four hardcode a personal absolute path at module level: `<lab share>` in `generate_mask_video.py:6-10`, `generate_individual_mask_videos.py:6-10`, `head_detection_test.py:17-21`. Confirms `AUDIT_PLAN.md`'s claim.
 - **All four execute their work at import time.** No `if __name__ == "__main__":` guard in any of them. `CONFIRMED` — the only two files in the repo with a main guard are `run_analyzer.py:80` and `fish_posture_analyzer.py:390`.
 - `head_detection_test.py:29` calls `os.makedirs()` at module scope — importing it creates a directory as a side effect.
 - `validation_video.py:23-26` **opens a tkinter directory-picker dialog at module scope**. Importing this file blocks on a GUI dialog.

@@ -4,9 +4,7 @@ from idtrackerai import ListOfBlobs
 
 SESSION_DIR = "session_batch1control_freeswim_2026-03-27-141723-good"
 SOURCE_VIDEO = (
-    r"C:\Users\grich\Macquarie University\Morsch Group - Documents\Grant R"
-    r"\Fish videos\Pradeep Fish Free Swim Videos"
-    r"\27032026 Pradeep's Fish Free Swim\batch1control_freeswim_2026-03-27-141723-good.avi"
+    r"path\to\batch1control_freeswim_2026-03-27-141723-good.avi"
 )
 OUTPUT_DIR = "individual_mask_videos"
 N_FRAMES = 500
