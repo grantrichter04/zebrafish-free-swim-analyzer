@@ -693,7 +693,7 @@ class DataTabMixin:
                 self._run_bout_analysis()
             except Exception as e:
                 print(f"Auto bout analysis skipped: {e}")
-        self.notebook.select(1)
+        self.notebook.select(self.analysis_tab_frame)
 
     def _run_analysis(self):
         """Run individual trajectory analysis on all loaded files."""

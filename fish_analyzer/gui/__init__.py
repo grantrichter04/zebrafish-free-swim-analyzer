@@ -5,6 +5,7 @@ GUI Package - Modular graphical user interface for fish trajectory analysis.
 
 This package splits the GUI into logical components:
 - base.py: Core initialization and shared state
+- tracking_tab.py: Running idtracker.ai on a folder of videos
 - data_tab.py: File loading and calibration
 - analysis_tab.py: Individual trajectory analysis
 - bout_tab.py: Bout detection and laterality analysis
@@ -17,6 +18,7 @@ The EnhancedFishAnalyzer class combines all mixins to provide the complete GUI.
 """
 
 from .base import GUIBase
+from .tracking_tab import TrackingTabMixin
 from .data_tab import DataTabMixin
 from .analysis_tab import AnalysisTabMixin
 from .bout_tab import BoutTabMixin
@@ -27,7 +29,7 @@ from .inspector_export import InspectorExportMixin
 from .utils import smooth_time_series
 
 
-class EnhancedFishAnalyzer(GUIBase, DataTabMixin, AnalysisTabMixin,
+class EnhancedFishAnalyzer(GUIBase, TrackingTabMixin, DataTabMixin, AnalysisTabMixin,
                            BoutTabMixin, ShoalingTabMixin, SpatialTabMixin,
                            InspectorTabMixin, InspectorExportMixin):
     """
@@ -35,6 +37,7 @@ class EnhancedFishAnalyzer(GUIBase, DataTabMixin, AnalysisTabMixin,
 
     This class combines:
     - GUIBase: Window creation, shared state management
+    - TrackingTabMixin: Videos, idtracker.ai setups, tracking
     - DataTabMixin: File loading, calibration, processing parameters
     - AnalysisTabMixin: Individual trajectory visualization
     - BoutTabMixin: Swim bout detection and laterality analysis

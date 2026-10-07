@@ -39,6 +39,7 @@ class AnalysisTabMixin:
         """Create the individual analysis results tab."""
         tab = ttk.Frame(self.notebook)
         self.notebook.add(tab, text="Individual Analysis")
+        self.analysis_tab_frame = tab
 
         # Split into left controls and right results
         paned = ttk.PanedWindow(tab, orient=tk.HORIZONTAL)

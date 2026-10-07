@@ -177,6 +177,7 @@ class GUIBase:
         self.status_label.pack(fill="x", padx=5, pady=2)
 
         # Create each tab (methods provided by mixins)
+        self._create_tracking_tab()
         self._create_data_tab()
         self._create_analysis_tab()
         self._create_bout_tab()

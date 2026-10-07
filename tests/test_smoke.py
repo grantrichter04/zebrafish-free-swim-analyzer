@@ -102,6 +102,7 @@ def test_gui_constructs(app):
             for i in range(app.notebook.index("end"))]
 
     assert tabs == [
+        "Tracking",
         "Data Setup & Calibration",
         "Individual Analysis",
         "Bout Analysis",
@@ -112,7 +113,8 @@ def test_gui_constructs(app):
 
     # One control from each tab's mixin, so a tab that silently built nothing
     # would be caught rather than merely counted.
-    for attr in ("file_path_var",            # DataTabMixin
+    for attr in ("tracking_videos_tree",     # TrackingTabMixin
+                 "file_path_var",            # DataTabMixin
                  "speed_dist_collapse_var",  # AnalysisTabMixin
                  "inspector_frame_slider",   # InspectorTabMixin
                  "inspector_mark_label"):    # InspectorExportMixin
@@ -138,3 +140,15 @@ def test_declared_dependencies_fit_alongside_idtrackerai():
 def test_requirements_txt_is_gone():
     """pyproject.toml is the only dependency list."""
     assert not (REPO / "requirements.txt").exists()
+
+
+def test_launcher_shows_its_splash_before_loading_the_package():
+    """launch.pyw exists so something is on screen during the slow imports.
+    A module-level fish_analyzer import would run them first and defeat it."""
+    import ast
+
+    tree = ast.parse((REPO / "launch.pyw").read_text(encoding="utf-8"))
+    top_level = [n for n in tree.body if isinstance(n, (ast.Import, ast.ImportFrom))]
+    names = [a.name for n in top_level if isinstance(n, ast.Import) for a in n.names]
+    names += [n.module for n in top_level if isinstance(n, ast.ImportFrom)]
+    assert names == ["tkinter"]
