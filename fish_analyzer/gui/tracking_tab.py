@@ -1,7 +1,7 @@
 """
 fish_analyzer/gui/tracking_tab.py
 =================================
-Tracking Tab - choose a folder of videos and set up idtracker.ai for it.
+Tracking Tab - choose a folder of videos and make an idtracker.ai setup for it.
 
 The work itself is in fish_analyzer/tracking.py. This file is the widgets, and
 the plumbing that lets a separate idtracker.ai process report back to tkinter:
@@ -12,8 +12,8 @@ import queue
 import threading
 import tkinter as tk
 from pathlib import Path
-from tkinter import filedialog, messagebox, ttk
-from typing import Callable, List, Optional
+from tkinter import filedialog, messagebox, simpledialog, ttk
+from typing import Callable, Dict, List, Optional, Set
 
 from .. import tracking
 
@@ -38,6 +38,8 @@ class TrackingTabMixin:
         self._tracking_videos: List[Path] = []
         self._tracking_setups: List[Path] = []
         self._tracking_busy = False
+        # Setup file name -> the videos it has been opened on this session.
+        self._tracking_checked: Dict[str, Set[Path]] = {}
         self._tracking_queue: "queue.Queue" = queue.Queue()
 
         tk.Label(
@@ -112,7 +114,7 @@ class TrackingTabMixin:
             bg="lightblue", font=("Arial", 10, "bold"))
         self.tracking_configure_button.pack(side="left", padx=5)
         self.tracking_edit_button = tk.Button(
-            controls, text="Edit setup...",
+            controls, text="Check setup on selected video...",
             command=lambda: self._tracking_configure(edit=True))
         self.tracking_edit_button.pack(side="left", padx=2)
 
@@ -185,8 +187,8 @@ class TrackingTabMixin:
                 self.tracking_hint_var.set("No videos found in this folder.")
             elif not names:
                 self.tracking_hint_var.set(
-                    "This folder has no setup yet. Press \"Configure new "
-                    "setup...\" to make one in idtracker.ai.")
+                    "This folder has no setup yet. Select a video and press "
+                    "\"Configure new setup...\" to make one in idtracker.ai.")
             else:
                 self.tracking_hint_var.set("")
         self._tracking_update_buttons()
@@ -210,65 +212,133 @@ class TrackingTabMixin:
             state="normal" if ready and self._tracking_setups else "disabled")
 
     # =========================================================================
-    # CONFIGURING A SETUP IN IDTRACKER.AI
+    # MAKING AND CHECKING A SETUP IN IDTRACKER.AI
     # =========================================================================
 
     def _tracking_configure(self, edit: bool):
-        """Open idtracker.ai's own window so the user can save a setup file."""
+        """Make a new setup, or check an existing one, on the selected video.
+
+        Either way idtracker.ai's own window opens on that video. It cannot
+        start tracking from here (see idtrackerai_setup_window.py): tracking is
+        for the whole folder, afterwards.
+        """
         video = self._tracking_selected_video()
         if video is None:
             messagebox.showinfo(
                 "Choose a folder first",
                 "Choose a folder that contains videos, then try again.")
             return
-        setup = self._tracking_selected_setup() if edit else None
-        if edit and setup is None:
-            messagebox.showinfo("No setup selected",
-                                "Pick a setup from the list to edit.")
+
+        if edit:
+            setup = self._tracking_selected_setup()
+            if setup is None:
+                messagebox.showinfo("No setup selected",
+                                    "Pick a setup from the list first.")
+                return
+            self._tracking_open_setup_window(video, setup, load=setup)
             return
 
-        folder = video.parent
-        opening = (f"idtracker.ai will open with the setup \"{setup.name}\" on:"
-                   if edit else "idtracker.ai will open on:")
+        setup = self._tracking_ask_new_setup_name(video.parent)
+        if setup is None:
+            return
         if not messagebox.askokcancel(
                 "Configure setup in idtracker.ai",
-                f"{opening}\n    {video.name}\n\n"
-                "In the idtracker.ai window:\n"
+                f"idtracker.ai will open on:\n    {video.name}\n\n"
                 "  1. Set the number of animals, the thresholds and the arena.\n"
-                "  2. Press \"Save parameters\" (Ctrl+S) and save the file in "
-                "the folder it suggests:\n"
-                f"         {folder}\n"
-                "  3. Close the idtracker.ai window.\n\n"
-                "It takes a few seconds to appear."):
+                "  2. Press \"Save setup and close\" at the bottom left.\n\n"
+                "Nothing is tracked yet. Tracking is started from this tab "
+                "afterwards, for every video in the folder."):
             return
+        self._tracking_open_setup_window(video, setup, load=None)
 
-        before = {s: s.stat().st_mtime for s in tracking.find_setups(folder)}
+    def _tracking_ask_new_setup_name(self, folder: Path) -> Optional[Path]:
+        """Ask what to call a new setup; None if the user backs out."""
+        while True:
+            name = simpledialog.askstring(
+                "Name this setup",
+                "A short name for these settings, for example the rig or "
+                "the experiment:",
+                initialvalue="setup", parent=self.root)
+            if name is None:
+                return None
+            setup = tracking.setup_path_for(folder, name)
+            if setup is None:
+                messagebox.showwarning(
+                    "That name cannot be used",
+                    "Use letters, numbers, spaces, dashes or underscores.")
+            elif setup.exists():
+                messagebox.showwarning(
+                    "That name is taken",
+                    f"{setup.name} already exists in this folder. Choose "
+                    "another name, or select it and use \"Check setup on "
+                    "selected video...\".")
+            else:
+                return setup
+
+    def _tracking_open_setup_window(self, video: Path, setup: Path,
+                                    load: Optional[Path]):
+        """Run idtracker.ai's window on `video`, then report what happened and
+        offer the next video the setup has not been looked at on."""
+        checking = load is not None
+        before = setup.stat().st_mtime_ns if setup.exists() else None
 
         def finished(exit_code: int):
-            after = {s: s.stat().st_mtime for s in tracking.find_setups(folder)}
-            created = sorted(set(after) - set(before))
-            changed = [s for s in after if s in before and after[s] != before[s]]
-            saved = (created or changed or [None])[0]
-            self._tracking_refresh(select_setup=saved)
-            if saved is not None:
-                self.tracking_hint_var.set(f"Setup saved: {saved.name}")
-            else:
+            after = setup.stat().st_mtime_ns if setup.exists() else None
+            saved = after is not None and after != before
+            if after is not None:
+                self._tracking_checked.setdefault(setup.name, set()).add(video)
+            self._tracking_refresh(select_setup=setup if after else None)
+
+            if not saved and not checking:
                 self.tracking_hint_var.set("")
                 messagebox.showwarning(
                     "No setup was saved",
-                    "idtracker.ai closed without a setup file being saved in\n"
-                    f"{folder}\n\n"
-                    "Open it again and use \"Save parameters\" (Ctrl+S) "
-                    "before closing the window."
+                    "idtracker.ai was closed without pressing \"Save setup "
+                    "and close\", so there is no setup yet."
                     + ("" if exit_code == 0 else
                        "\n\nidtracker.ai reported an error - see the output "
                        "box on the Tracking tab."))
+                return
+            self._tracking_offer_next_check(setup, just_saved=saved)
 
         self.tracking_hint_var.set(
-            "idtracker.ai is open. Set it up, press \"Save parameters\" "
-            "(Ctrl+S), then close its window.")
+            f"idtracker.ai is open on {video.name}. "
+            + ("If it looks right, just close it. If you change anything, "
+               "press \"Save setup and close\"." if checking else
+               "When it looks right, press \"Save setup and close\"."))
         self._tracking_start(
-            tracking.build_configure_command(video, setup), folder, finished)
+            tracking.build_configure_command(video, save_to=setup, load=load),
+            video.parent, finished)
+
+    def _tracking_offer_next_check(self, setup: Path, just_saved: bool):
+        """One setup serves every video, so offer to look at it on the next
+        video it has not been opened on. Thresholds that suit one recording
+        can miss fish in a darker or brighter one."""
+        checked = self._tracking_checked.get(setup.name, set())
+        remaining = [v for v in self._tracking_videos if v not in checked]
+        done = len(self._tracking_videos) - len(remaining)
+        status = (f"Setup saved: {setup.name}." if just_saved
+                  else f"Setup unchanged: {setup.name}.")
+        if not remaining:
+            self.tracking_hint_var.set(
+                f"{status} Checked on all {done} video(s).")
+            return
+
+        self.tracking_hint_var.set(
+            f"{status} Checked on {done} of {len(self._tracking_videos)} "
+            "video(s).")
+        next_video = remaining[0]
+        if messagebox.askyesno(
+                "Check the setup on the next video?",
+                f"{status}\n\nThe same setup is used for every video, so it "
+                "is worth a quick look at each one.\n\n"
+                f"Open it on:\n    {next_video.name}\n\n"
+                "Check the fish are all detected. If it looks right, just "
+                "close the window. If you adjust anything, press \"Save "
+                "setup and close\" - the change then applies to all videos."):
+            index = self._tracking_videos.index(next_video)
+            self.tracking_videos_tree.selection_set(str(index))
+            self._tracking_open_setup_window(next_video, setup, load=setup)
 
     # =========================================================================
     # RUNNING A PROCESS WITHOUT FREEZING THE WINDOW

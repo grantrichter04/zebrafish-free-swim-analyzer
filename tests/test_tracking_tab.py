@@ -25,6 +25,7 @@ def tab(app, monkeypatch):
     monkeypatch.setattr(tracking, "idtrackerai_available", lambda: True)
     yield app
     app._tracking_folder = None
+    app._tracking_checked.clear()
     app._tracking_refresh()
 
 
@@ -70,48 +71,129 @@ def test_buttons_are_disabled_without_idtrackerai(app, experiment, monkeypatch):
         app._tracking_refresh()
 
 
-def test_configuring_selects_the_setup_the_user_saved(tab, experiment, monkeypatch):
-    seen = {}
+@pytest.fixture
+def dialogs(monkeypatch):
+    """Answer the tab's dialogs: name the setup 'rig', accept the
+    instructions, and decline (by default) to check the next video."""
+    answers = {"name": "rig", "check_next": [], "warnings": [], "asked": []}
+    monkeypatch.setattr("tkinter.simpledialog.askstring",
+                        lambda *a, **k: answers["name"])
+    monkeypatch.setattr("tkinter.messagebox.askokcancel", lambda *a, **k: True)
+    monkeypatch.setattr("tkinter.messagebox.showwarning",
+                        lambda title, text: answers["warnings"].append(title))
 
-    def fake_idtrackerai(command, cwd, on_line, should_stop=lambda: False):
-        seen["command"], seen["cwd"] = command, cwd
+    def askyesno(title, text):
+        answers["asked"].append(text)
+        return answers["check_next"].pop(0) if answers["check_next"] else False
+    monkeypatch.setattr("tkinter.messagebox.askyesno", askyesno)
+    return answers
+
+
+def _fake_idtrackerai(monkeypatch, save=True):
+    """Stand in for idtracker.ai's window: record the command, and press
+    'Save setup and close' (or not)."""
+    calls = []
+
+    def run(command, cwd, on_line, should_stop=lambda: False):
+        calls.append(command)
         on_line("Welcome to idtracker.ai")
-        (experiment / "control.toml").write_text("number_of_animals = 8\n")
+        if save:
+            target = command[command.index("--save-to") + 1]
+            with open(target, "a") as file:
+                file.write("number_of_animals = 6\n")
         return 0
 
-    monkeypatch.setattr(tracking, "run_process", fake_idtrackerai)
-    monkeypatch.setattr("tkinter.messagebox.askokcancel", lambda *a, **k: True)
+    monkeypatch.setattr(tracking, "run_process", run)
+    return calls
+
+
+def test_configuring_saves_the_named_setup_and_selects_it(
+        tab, experiment, dialogs, monkeypatch):
+    calls = _fake_idtrackerai(monkeypatch)
     tab._tracking_set_folder(experiment)
 
     tab._tracking_configure(edit=False)
     assert tab.tracking_configure_button["state"] == "disabled"
     _wait_until_idle(tab)
 
-    assert seen["cwd"] == experiment, "idtracker.ai suggests saving in its cwd"
-    assert str(experiment / "control.avi") in seen["command"]
-    assert "--track" not in seen["command"]
-    assert tab.tracking_setup_var.get() == "control.toml"
-    assert "Setup saved: control.toml" in tab.tracking_hint_var.get()
+    command = calls[0]
+    assert command[command.index("--video") + 1] == str(experiment / "control.avi")
+    assert command[command.index("--save-to") + 1] == str(experiment / "rig.toml")
+    assert "--load" not in command and "--track" not in command
+    assert tab.tracking_setup_var.get() == "rig.toml"
+    assert "Setup saved: rig.toml" in tab.tracking_hint_var.get()
     assert "Welcome to idtracker.ai" in tab.tracking_log_text.get("1.0", "end")
     assert tab.tracking_configure_button["state"] == "normal"
 
 
-def test_closing_idtrackerai_without_saving_says_so(tab, experiment, monkeypatch):
-    warnings = []
-    monkeypatch.setattr(tracking, "run_process", lambda *a, **k: 0)
-    monkeypatch.setattr("tkinter.messagebox.askokcancel", lambda *a, **k: True)
-    monkeypatch.setattr("tkinter.messagebox.showwarning",
-                        lambda title, text: warnings.append(title))
+def test_after_saving_the_next_video_is_offered_for_a_check(
+        tab, experiment, dialogs, monkeypatch):
+    calls = _fake_idtrackerai(monkeypatch, save=True)
+    dialogs["check_next"] = [True]
+    tab._tracking_set_folder(experiment)
+
+    tab._tracking_configure(edit=False)
+    _wait_until_idle(tab)
+    _wait_until_idle(tab)
+
+    assert len(calls) == 2, "the setup should have been opened on the 2nd video"
+    assert "exp.avi" in dialogs["asked"][0]
+    second = calls[1]
+    assert second[second.index("--video") + 1] == str(experiment / "exp.avi")
+    assert second[second.index("--load") + 1] == str(experiment / "rig.toml")
+    assert second[second.index("--save-to") + 1] == str(experiment / "rig.toml")
+    assert "Checked on all 2 video(s)" in tab.tracking_hint_var.get()
+    assert len(dialogs["asked"]) == 1, "no video left to offer"
+
+
+def test_checking_without_changes_leaves_the_setup_alone(
+        tab, experiment, dialogs, monkeypatch):
+    setup = experiment / "rig.toml"
+    setup.write_text("number_of_animals = 6\n")
+    calls = _fake_idtrackerai(monkeypatch, save=False)
+    tab._tracking_set_folder(experiment)
+    tab.tracking_videos_tree.selection_set("1")
+
+    tab._tracking_configure(edit=True)
+    _wait_until_idle(tab)
+
+    assert calls[0][calls[0].index("--video") + 1] == str(experiment / "exp.avi")
+    assert setup.read_text() == "number_of_animals = 6\n"
+    assert dialogs["warnings"] == []
+    assert "Setup unchanged: rig.toml" in tab.tracking_hint_var.get()
+
+
+def test_closing_idtrackerai_without_saving_says_so(
+        tab, experiment, dialogs, monkeypatch):
+    _fake_idtrackerai(monkeypatch, save=False)
     tab._tracking_set_folder(experiment)
 
     tab._tracking_configure(edit=False)
     _wait_until_idle(tab)
 
-    assert warnings == ["No setup was saved"]
+    assert dialogs["warnings"] == ["No setup was saved"]
     assert tab.tracking_setup_var.get() == ""
+    assert dialogs["asked"] == []
 
 
-def test_cancelling_the_instructions_starts_nothing(tab, experiment, monkeypatch):
+def test_a_new_setup_cannot_take_an_existing_name(
+        tab, experiment, dialogs, monkeypatch):
+    (experiment / "rig.toml").write_text("number_of_animals = 6\n")
+    names = iter(["rig", "bad/name", None])
+    monkeypatch.setattr("tkinter.simpledialog.askstring",
+                        lambda *a, **k: next(names))
+    monkeypatch.setattr(tracking, "run_process",
+                        lambda *a, **k: pytest.fail("idtracker.ai was started"))
+    tab._tracking_set_folder(experiment)
+
+    tab._tracking_configure(edit=False)
+
+    assert dialogs["warnings"] == ["That name is taken", "That name cannot be used"]
+    assert not tab._tracking_busy
+
+
+def test_cancelling_the_instructions_starts_nothing(
+        tab, experiment, dialogs, monkeypatch):
     monkeypatch.setattr(tracking, "run_process",
                         lambda *a, **k: pytest.fail("idtracker.ai was started"))
     monkeypatch.setattr("tkinter.messagebox.askokcancel", lambda *a, **k: False)

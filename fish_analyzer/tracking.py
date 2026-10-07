@@ -89,12 +89,32 @@ def python_executable() -> str:
     return str(exe)
 
 
-def build_configure_command(video: Path, setup: Optional[Path] = None) -> List[str]:
-    """Open idtracker.ai's own window on `video`, optionally loading a setup."""
-    command = [python_executable(), "-m", "idtrackerai.start"]
-    if setup is not None:
-        command += ["--load", str(setup)]
-    return command + ["--video_paths", str(video)]
+SETUP_WINDOW_SCRIPT = Path(__file__).with_name("idtrackerai_setup_window.py")
+
+
+def build_configure_command(video: Path, save_to: Path,
+                            load: Optional[Path] = None) -> List[str]:
+    """Open idtracker.ai's window on `video` to make or check a setup.
+
+    The window saves to `save_to` and cannot start tracking; see
+    idtrackerai_setup_window.py. `load` pre-fills it from an existing setup.
+    """
+    command = [python_executable(), str(SETUP_WINDOW_SCRIPT),
+               "--video", str(video), "--save-to", str(save_to)]
+    if load is not None:
+        command += ["--load", str(load)]
+    return command
+
+
+def setup_path_for(folder: Path, name: str) -> Optional[Path]:
+    """The .toml path for a setup called `name`, or None if the name cannot
+    be a file name."""
+    name = name.strip()
+    if name.lower().endswith(".toml"):
+        name = name[:-5].strip()
+    if not name or any(c in name for c in '\\/:*?"<>|') or name in (".", ".."):
+        return None
+    return Path(folder) / f"{name}.toml"
 
 
 def build_track_command(video: Path, setup: Path) -> List[str]:

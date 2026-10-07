@@ -58,16 +58,26 @@ def test_track_command_overrides_the_video_and_name_in_the_setup(tmp_path):
     assert command[-1] == "--track"
 
 
-def test_configure_command_opens_the_window_instead_of_tracking(tmp_path):
+def test_configure_command_opens_the_setup_window_not_tracking(tmp_path):
     video, setup = tmp_path / "exp.avi", tmp_path / "rig.toml"
 
-    fresh = tracking.build_configure_command(video)
+    fresh = tracking.build_configure_command(video, save_to=setup)
+    assert fresh[1] == str(tracking.SETUP_WINDOW_SCRIPT)
+    assert tracking.SETUP_WINDOW_SCRIPT.is_file()
+    assert fresh[fresh.index("--video") + 1] == str(video)
+    assert fresh[fresh.index("--save-to") + 1] == str(setup)
     assert "--track" not in fresh and "--load" not in fresh
-    assert fresh[fresh.index("--video_paths") + 1] == str(video)
 
-    editing = tracking.build_configure_command(video, setup)
-    assert editing[editing.index("--load") + 1] == str(setup)
-    assert "--track" not in editing
+    checking = tracking.build_configure_command(video, save_to=setup, load=setup)
+    assert checking[checking.index("--load") + 1] == str(setup)
+
+
+def test_setup_names_become_toml_paths(tmp_path):
+    assert tracking.setup_path_for(tmp_path, " IR rig ") == tmp_path / "IR rig.toml"
+    assert tracking.setup_path_for(tmp_path, "rig.toml") == tmp_path / "rig.toml"
+    assert tracking.setup_path_for(tmp_path, "") is None
+    assert tracking.setup_path_for(tmp_path, "a/b") is None
+    assert tracking.setup_path_for(tmp_path, "what?") is None
 
 
 def test_pythonw_is_swapped_for_python(tmp_path, monkeypatch):
