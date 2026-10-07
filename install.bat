@@ -82,9 +82,10 @@ echo.
 
 if "%FREESWIM_NO_SHORTCUT%"=="1" goto :done
 for %%I in ("%PY%") do set "PYW=%%~dpIpythonw.exe"
+set "LAUNCHER=%~dp0launch.pyw"
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "$s = (New-Object -ComObject WScript.Shell).CreateShortcut((Join-Path ([Environment]::GetFolderPath('Desktop')) 'Free Swim Analyzer.lnk'));" ^
-  "$s.TargetPath = $env:PYW; $s.Arguments = '-m fish_analyzer';" ^
+  "$s.TargetPath = $env:PYW; $s.Arguments = [char]34 + $env:LAUNCHER + [char]34;" ^
   "$s.WorkingDirectory = [Environment]::GetFolderPath('MyDocuments');" ^
   "$s.Description = 'Zebrafish Free Swim Analyzer'; $s.Save()"
 if errorlevel 1 (
