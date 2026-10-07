@@ -1,307 +1,210 @@
 """
 fish_analyzer/gui/data_tab.py
 =============================
-Data Tab Mixin - File loading, calibration, and processing parameters.
+Sessions & Units tab - which sessions are loaded, what unit their results are
+in, and the button that runs the analysis.
 
-This mixin provides all methods related to:
-- Loading trajectory files
-- Calibration settings
-- Processing parameters
-- Running the initial analysis
+One table lists every loaded session. One units choice applies to all of them:
+with a fixed camera a pixel is the same physical size in every video, so one
+scale keeps sessions comparable. idtracker.ai's body length is a per-video
+estimate that moves with lighting and threshold, which is why it is offered as
+a single value for the experiment and not taken separately from each video.
 """
 
-from typing import Optional
+from typing import List, Optional, Tuple
 from pathlib import Path
 import traceback
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox, simpledialog
+from tkinter import ttk, filedialog, messagebox
+
+import numpy as np
 
 from ..data_structures import CalibrationSettings
 from ..file_loading import TrajectoryFileLoader
 from ..processing import ProcessingParameters, process_and_analyze_file
+from .measure_dialog import MeasureScaleDialog, load_frame_image
 
 
 class DataTabMixin:
     """
-    Mixin providing Data Tab functionality.
-    
+    Mixin providing the Sessions & Units tab.
+
     Expects the following attributes from base class:
     - self.root: tk.Tk
     - self.notebook: ttk.Notebook
     - self.loaded_files: Dict[str, LoadedTrajectoryFile]
-    - self.active_file: Optional[str]
     - self.processing_params: ProcessingParameters
     """
 
+    SESSION_COLUMNS = (
+        # id, heading, width
+        ("name", "Session", 300),
+        ("fish", "Fish", 50),
+        ("minutes", "Minutes", 70),
+        ("tracked", "Tracked (lowest fish)", 160),
+        ("accuracy", "idtracker.ai accuracy", 150),
+        ("body", "Body length (px)", 120),
+        ("fps", "Frame rate", 90),
+        ("scale", "Scale in use", 150),
+    )
+
     def _create_data_tab(self):
-        """Create the data loading and setup tab with scrolling support."""
+        """Create the tab: sessions table, units, and the run button."""
         tab = ttk.Frame(self.notebook)
-        self.notebook.add(tab, text="Data Setup & Calibration")
+        self.notebook.add(tab, text="Sessions & Units")
         self.data_tab_frame = tab
 
-        # Create scrollable container
-        canvas = tk.Canvas(tab, highlightthickness=0)
-        scrollbar = ttk.Scrollbar(tab, orient="vertical", command=canvas.yview)
-        self.scrollable_frame = ttk.Frame(canvas)
-        canvas.configure(yscrollcommand=scrollbar.set)
+        #: (unit name, pixels per unit) every loaded session is calibrated in,
+        #: or None before any session has been loaded.
+        self._applied_units: Optional[Tuple[str, float]] = None
+        #: True while the shared body length follows the loaded sessions.
+        self._bl_is_auto = True
 
-        scrollbar.pack(side="right", fill="y")
-        canvas.pack(side="left", fill="both", expand=True)
+        self._create_sessions_section(tab)
+        self._create_units_section(tab)
+        self._create_run_section(tab)
+        self._update_units_status()
 
-        canvas_window = canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
+    # =========================================================================
+    # LAYOUT
+    # =========================================================================
 
-        def _on_frame_configure(event):
-            canvas.configure(scrollregion=canvas.bbox("all"))
-        self.scrollable_frame.bind("<Configure>", _on_frame_configure)
+    def _create_sessions_section(self, parent):
+        frame = tk.LabelFrame(parent, text="1. Sessions", font=("Arial", 12, "bold"))
+        frame.pack(fill="both", expand=True, padx=20, pady=(10, 5))
 
-        def _on_canvas_configure(event):
-            canvas.itemconfig(canvas_window, width=event.width)
-        canvas.bind("<Configure>", _on_canvas_configure)
+        tk.Label(
+            frame, justify=tk.LEFT, font=("Arial", 9), fg="gray", wraplength=1000,
+            text="A session is one tracked video. Sessions tracked on the "
+                 "Tracking tab arrive here with \"Load tracked sessions for "
+                 "analysis\". \"Add sessions...\" takes one session folder, or a "
+                 "folder containing several and loads them all."
+        ).pack(anchor="w", padx=10, pady=(6, 0))
 
-        def _on_mousewheel(event):
-            canvas.yview_scroll(int(-1*(event.delta/120)), "units")
-        # Bind mousewheel only when cursor is over this canvas (not globally)
-        canvas.bind("<Enter>", lambda e: canvas.bind_all("<MouseWheel>", _on_mousewheel))
-        canvas.bind("<Leave>", lambda e: canvas.unbind_all("<MouseWheel>"))
+        table = tk.Frame(frame)
+        table.pack(fill="both", expand=True, padx=10, pady=6)
+        scroll = tk.Scrollbar(table)
+        scroll.pack(side="right", fill="y")
+        self.sessions_tree = ttk.Treeview(
+            table, columns=[c[0] for c in self.SESSION_COLUMNS],
+            show="headings", height=6, selectmode="browse",
+            yscrollcommand=scroll.set)
+        for column, heading, width in self.SESSION_COLUMNS:
+            self.sessions_tree.heading(column, text=heading)
+            self.sessions_tree.column(
+                column, width=width, anchor="w" if column == "name" else "center")
+        self.sessions_tree.pack(side="left", fill="both", expand=True)
+        scroll.config(command=self.sessions_tree.yview)
 
-        # Add sections to the scrollable frame
-        self._create_file_section(self.scrollable_frame)
-        self._create_calibration_section(self.scrollable_frame)
-        self._create_processing_parameters_section(self.scrollable_frame)
+        buttons = tk.Frame(frame)
+        buttons.pack(fill="x", padx=10, pady=(0, 8))
+        tk.Button(buttons, text="Add sessions...",
+                  command=self._browse_for_session_folder,
+                  bg="lightblue", font=("Arial", 10, "bold")).pack(side="left", padx=5)
+        tk.Button(buttons, text="Details",
+                  command=self._show_file_details).pack(side="left", padx=5)
+        tk.Button(buttons, text="Remove",
+                  command=self._remove_file).pack(side="left", padx=5)
 
-        # Main analyze button
-        analyze_frame = tk.Frame(self.scrollable_frame)
-        analyze_frame.pack(fill="x", padx=20, pady=20)
+    def _create_units_section(self, parent):
+        frame = tk.LabelFrame(parent, text="2. Units", font=("Arial", 12, "bold"))
+        frame.pack(fill="x", padx=20, pady=5)
+
+        tk.Label(
+            frame, justify=tk.LEFT, font=("Arial", 9), fg="gray", wraplength=1000,
+            text="One scale is used for every session, so distances and speeds "
+                 "can be compared between them. The scale is written into "
+                 "every export."
+        ).pack(anchor="w", padx=10, pady=(6, 2))
+
+        self.units_choice = tk.StringVar(value="bl")
+
+        # --- centimetres ---
+        cm_row = tk.Frame(frame)
+        cm_row.pack(anchor="w", padx=10, pady=2)
+        tk.Radiobutton(cm_row, text="Centimetres (best, if you can measure a "
+                                    "known length in the video):",
+                       variable=self.units_choice, value="cm",
+                       command=self._update_units_status).pack(side="left")
+        self.cm_pixels_var = tk.StringVar()
+        self.cm_pixels_entry = tk.Entry(cm_row, textvariable=self.cm_pixels_var, width=9)
+        self.cm_pixels_entry.pack(side="left", padx=(8, 3))
+        tk.Label(cm_row, text="pixels =").pack(side="left")
+        self.cm_length_var = tk.StringVar()
+        self.cm_length_entry = tk.Entry(cm_row, textvariable=self.cm_length_var, width=7)
+        self.cm_length_entry.pack(side="left", padx=3)
+        tk.Label(cm_row, text="cm").pack(side="left")
+        self.measure_button = tk.Button(
+            cm_row, text="Measure on a video frame...",
+            command=self._measure_scale)
+        self.measure_button.pack(side="left", padx=12)
+
+        # --- one body length for the experiment ---
+        bl_row = tk.Frame(frame)
+        bl_row.pack(anchor="w", padx=10, pady=2)
+        tk.Radiobutton(bl_row, text="Body lengths, one value for the whole "
+                                    "experiment:  1 BL =",
+                       variable=self.units_choice, value="bl",
+                       command=self._update_units_status).pack(side="left")
+        self.bl_pixels_var = tk.StringVar()
+        self.bl_pixels_entry = tk.Entry(bl_row, textvariable=self.bl_pixels_var, width=9)
+        self.bl_pixels_entry.pack(side="left", padx=(8, 3))
+        self.bl_pixels_entry.bind("<Key>", lambda e: self._bl_edited_by_user())
+        tk.Label(bl_row, text="pixels").pack(side="left")
+        self.bl_hint_label = tk.Label(bl_row, text="", font=("Arial", 9), fg="gray")
+        self.bl_hint_label.pack(side="left", padx=10)
+
+        status_row = tk.Frame(frame)
+        status_row.pack(fill="x", padx=10, pady=(4, 8))
+        self.apply_units_button = tk.Button(
+            status_row, text="Apply units", command=self._apply_units)
+        self.apply_units_button.pack(side="left", padx=5)
+        self.units_status_var = tk.StringVar()
+        self.units_status_label = tk.Label(
+            status_row, textvariable=self.units_status_var,
+            font=("Arial", 10, "bold"), fg="darkgreen", justify=tk.LEFT)
+        self.units_status_label.pack(side="left", padx=10)
+
+        for var in (self.cm_pixels_var, self.cm_length_var, self.bl_pixels_var):
+            var.trace_add("write", lambda *_: self._update_units_status())
+
+    def _create_run_section(self, parent):
+        frame = tk.LabelFrame(parent, text="3. Analyse", font=("Arial", 12, "bold"))
+        frame.pack(fill="x", padx=20, pady=(5, 10))
+
+        row = tk.Frame(frame)
+        row.pack(fill="x", padx=10, pady=8)
 
         # Kept as an attribute so _with_progress can disable it during a run.
         self.run_analysis_button = tk.Button(
-            analyze_frame, text="Run All Analysis",
+            row, text="Run All Analysis",
             command=self._run_analysis_and_switch_tab,
-            bg="lightgreen", font=("Arial", 14, "bold"), height=2
-        )
-        self.run_analysis_button.pack()
+            bg="lightgreen", font=("Arial", 14, "bold"))
+        self.run_analysis_button.pack(side="left", padx=5)
+
+        freeze = tk.Frame(row)
+        freeze.pack(side="left", padx=25)
+        tk.Label(freeze, text="A fish counts as frozen while slower than").pack(side="left")
+        self.rest_threshold_var = tk.StringVar(value="0.5")
+        tk.Entry(freeze, textvariable=self.rest_threshold_var, width=7).pack(side="left", padx=5)
+        self.rest_unit_label = tk.Label(freeze, text="BL/s")
+        self.rest_unit_label.pack(side="left")
 
         # Progress bar (hidden until analysis runs)
         self.analysis_progress = ttk.Progressbar(
-            analyze_frame, orient="horizontal", mode="determinate", length=400
-        )
-        self.analysis_progress.pack(pady=(5, 0))
-        self.analysis_progress.pack_forget()  # Hide initially
+            row, orient="horizontal", mode="determinate", length=300)
+        self.analysis_progress.pack(side="left", padx=10)
+        self.analysis_progress.pack_forget()
 
         tk.Label(
-            analyze_frame, text="Runs individual trajectory analysis (speed, distance, freezing,\n"
-                               "path straightness, laterality) AND bout analysis for all loaded files.\n"
-                               "Shoaling and spatial analyses are run separately from their own tabs.",
-            font=("Arial", 9), fg="gray", justify=tk.CENTER
-        ).pack(pady=5)
-
-    def _create_file_section(self, parent):
-        """Create the file loading section."""
-        file_frame = tk.LabelFrame(parent, text="Load Trajectory Files", font=("Arial", 12, "bold"))
-        file_frame.pack(fill="x", padx=20, pady=10)
-
-        # Session folder input
-        controls = tk.Frame(file_frame)
-        controls.pack(fill="x", pady=10, padx=10)
-
-        tk.Label(controls, text="Session Folder:").pack(side="left", padx=5)
-        self.file_path_var = tk.StringVar()
-        path_entry = tk.Entry(controls, textvariable=self.file_path_var,
-                              width=50)
-        path_entry.pack(side="left", padx=5)
-        # The box is editable, so a typed path has to do something. Without
-        # this, typing one was a silent dead end, and _load_selected_file - the
-        # only route to loading a bare trajectories.npy - was unreachable.
-        path_entry.bind("<Return>", lambda e: self._load_selected_file())
-
-        tk.Button(controls, text="Browse...", command=self._browse_for_session_folder,
-                 bg="lightblue", font=("Arial", 10, "bold")).pack(side="left", padx=5)
-        tk.Button(controls, text="Load", command=self._load_selected_file,
-                  bg="lightgreen", font=("Arial", 10, "bold")).pack(side="left",
-                                                                    padx=2)
-        
-        # Help text
-        tk.Label(file_frame, 
-                text="Select an idtracker.ai session folder (e.g., session_MyExperiment). "
-                     "The trajectories.npy and background.png will be found automatically.",
-                font=("Arial", 9), fg="gray", wraplength=500, justify=tk.LEFT
-        ).pack(anchor="w", padx=10, pady=(0, 10))
-
-        # Loaded files list
-        list_frame = tk.Frame(file_frame)
-        list_frame.pack(fill="both", expand=True, padx=10, pady=5)
-
-        tk.Label(list_frame, text="Loaded Files:", font=("Arial", 10, "bold")).pack(anchor="w")
-
-        list_container = tk.Frame(list_frame)
-        list_container.pack(fill="both", expand=True)
-
-        scrollbar = tk.Scrollbar(list_container)
-        scrollbar.pack(side="right", fill="y")
-
-        self.files_listbox = tk.Listbox(list_container, yscrollcommand=scrollbar.set, height=6)
-        self.files_listbox.pack(side="left", fill="both", expand=True)
-        scrollbar.config(command=self.files_listbox.yview)
-
-        # File management buttons
-        button_frame = tk.Frame(list_frame)
-        button_frame.pack(fill="x", pady=5)
-
-        tk.Button(button_frame, text="Set Active", command=self._set_active_file).pack(side="left", padx=5)
-        tk.Button(button_frame, text="View Details", command=self._show_file_details).pack(side="left", padx=5)
-        tk.Button(button_frame, text="Remove", command=self._remove_file).pack(side="left", padx=5)
-
-    def _create_calibration_section(self, parent):
-        """Create the calibration controls section."""
-        cal_frame = tk.LabelFrame(parent, text="Calibration Settings", font=("Arial", 12, "bold"))
-        cal_frame.pack(fill="x", padx=20, pady=10)
-
-        self.calibration_info_label = tk.Label(
-            cal_frame, text="Select an active file to configure calibration",
-            font=("Arial", 10), fg="gray"
-        )
-        self.calibration_info_label.pack(pady=10)
-
-        # Calibration method selection
-        self.calibration_method = tk.StringVar(value="body_length")
-
-        methods_frame = tk.Frame(cal_frame)
-        methods_frame.pack(fill="x", padx=20, pady=5)
-
-        tk.Label(methods_frame, text="Calibration method:", font=("Arial", 10, "bold")).pack(anchor="w", pady=5)
-
-        # Body length option
-        self.body_length_radio = tk.Radiobutton(
-            methods_frame, text="Use body length from tracking data",
-            variable=self.calibration_method, value="body_length",
-            command=self._on_calibration_method_changed
-        )
-        self.body_length_radio.pack(anchor="w", padx=20)
-
-        self.body_length_display = tk.Label(methods_frame, text="", font=("Arial", 9), fg="blue")
-        self.body_length_display.pack(anchor="w", padx=40)
-
-        # Custom calibration option
-        self.custom_radio = tk.Radiobutton(
-            methods_frame, text="Use custom calibration measurement",
-            variable=self.calibration_method, value="custom",
-            command=self._on_calibration_method_changed
-        )
-        self.custom_radio.pack(anchor="w", padx=20, pady=(10, 5))
-
-        custom_inputs_frame = tk.Frame(methods_frame)
-        custom_inputs_frame.pack(anchor="w", padx=40, pady=5)
-
-        tk.Label(custom_inputs_frame, text="I measured:").grid(row=0, column=0, sticky="w", padx=5)
-        self.pixels_var = tk.StringVar()
-        self.pixels_entry = tk.Entry(custom_inputs_frame, textvariable=self.pixels_var, width=10)
-        self.pixels_entry.grid(row=0, column=1, padx=5)
-        tk.Label(custom_inputs_frame, text="pixels =").grid(row=0, column=2, padx=5)
-        self.units_var = tk.StringVar(value="1")
-        self.units_entry = tk.Entry(custom_inputs_frame, textvariable=self.units_var, width=10)
-        self.units_entry.grid(row=0, column=3, padx=5)
-        self.unit_name_var = tk.StringVar(value="cm")
-        self.unit_name_entry = tk.Entry(custom_inputs_frame, textvariable=self.unit_name_var, width=8)
-        self.unit_name_entry.grid(row=0, column=4, padx=5)
-
-        tk.Label(
-            custom_inputs_frame,
-            text="(Example: '240 pixels = 10 cm' means 24 pixels per cm)",
-            font=("Arial", 8), fg="gray"
-        ).grid(row=1, column=0, columnspan=5, sticky="w", pady=2)
-
-        self.custom_input_widgets = [self.pixels_entry, self.units_entry, self.unit_name_entry]
-
-        # No calibration option
-        self.no_calibration_radio = tk.Radiobutton(
-            methods_frame, text="No calibration (keep pixel units)",
-            variable=self.calibration_method, value="none",
-            command=self._on_calibration_method_changed
-        )
-        self.no_calibration_radio.pack(anchor="w", padx=20, pady=(10, 5))
-
-        # Frame rate input
-        fps_frame = tk.Frame(cal_frame)
-        fps_frame.pack(fill="x", padx=20, pady=10)
-
-        tk.Label(fps_frame, text="Frame rate:", font=("Arial", 10)).pack(side="left", padx=5)
-        self.fps_var = tk.StringVar()
-        self.fps_entry = tk.Entry(fps_frame, textvariable=self.fps_var, width=12)
-        self.fps_entry.pack(side="left", padx=5)
-        tk.Label(fps_frame, text="fps").pack(side="left", padx=2)
-        self.fps_display = tk.Label(fps_frame, text="", font=("Arial", 9), fg="blue")
-        self.fps_display.pack(side="left", padx=10)
-
-        # Apply buttons
-        tk.Button(
-            cal_frame, text="Apply Calibration to Active File",
-            command=self._apply_calibration, bg="lightgreen", font=("Arial", 10, "bold")
-        ).pack(pady=10)
-
-        tk.Button(
-            cal_frame, text="Apply Calibration to ALL Files",
-            command=self._apply_calibration_to_all, bg="orange", font=("Arial", 10, "bold")
-        ).pack(pady=5)
-
-        tk.Label(cal_frame, text="[!] This will update calibration for every loaded file",
-                font=("Arial", 8), fg="darkorange").pack()
-
-        self.calibration_summary = tk.Label(cal_frame, text="", font=("Arial", 9),
-                                           fg="darkgreen", justify=tk.LEFT)
-        self.calibration_summary.pack(pady=5)
-
-        self._on_calibration_method_changed()
-
-    def _create_processing_parameters_section(self, parent):
-        """Create UI for configuring processing parameters."""
-        params_frame = tk.LabelFrame(parent, text="Processing Parameters", font=("Arial", 12, "bold"))
-        params_frame.pack(fill="x", padx=20, pady=10)
-
-        tk.Label(
-            params_frame, text="Configure how trajectories are processed and analyzed",
-            font=("Arial", 9), fg="gray"
-        ).pack(anchor="w", padx=10, pady=5)
-
-        settings_container = tk.Frame(params_frame)
-        settings_container.pack(fill="x", padx=10, pady=10)
-
-        params_col = tk.Frame(settings_container)
-        params_col.pack(fill="x", expand=True, padx=5)
-
-        tk.Label(params_col, text="Processing Settings:", font=("Arial", 10, "bold")).pack(anchor="w", pady=(0, 5))
-
-        # Smoothing checkbox
-        self.apply_smoothing_var = tk.BooleanVar(value=False)
-        tk.Checkbutton(params_col, text="Apply Savitzky-Golay smoothing",
-                      variable=self.apply_smoothing_var).pack(anchor="w")
-
-        # Smoothing window
-        smooth_frame = tk.Frame(params_col)
-        smooth_frame.pack(anchor="w", padx=20, pady=2)
-        tk.Label(smooth_frame, text="Window size:").pack(side="left")
-        self.smoothing_window_var = tk.StringVar(value="5")
-        tk.Entry(smooth_frame, textvariable=self.smoothing_window_var, width=5).pack(side="left", padx=5)
-        tk.Label(smooth_frame, text="frames (must be odd)").pack(side="left")
-
-        # Rest speed threshold
-        rest_frame = tk.Frame(params_col)
-        rest_frame.pack(anchor="w", pady=(10, 2))
-        tk.Label(rest_frame, text="Rest speed threshold:").pack(side="left")
-        self.rest_threshold_var = tk.StringVar(value="0.5")
-        tk.Entry(rest_frame, textvariable=self.rest_threshold_var, width=8).pack(side="left", padx=5)
-        self.rest_unit_label = tk.Label(rest_frame, text="BL/s")
-        self.rest_unit_label.pack(side="left")
-
-        # Help text
-        help_text = ("Smoothing: OFF by default. Reduces tracking jitter but also dampens "
-                    "real movement — can reduce measured speed by 20-40% for larval bout-based "
-                    "locomotion at 30fps. Only enable for continuous adult swimming or high-fps data.\n"
-                    "Rest threshold: speed below which fish are considered inactive.")
-        tk.Label(params_frame, text=help_text, font=("Arial", 8), fg="gray",
-                wraplength=600, justify=tk.LEFT).pack(anchor="w", padx=10, pady=5)
+            frame, justify=tk.LEFT, font=("Arial", 9), fg="gray",
+            text="Runs the individual analysis (speed, distance, freezing, path "
+                 "straightness, laterality) and the bout analysis for every "
+                 "session. Shoaling and spatial analyses are run from their own tabs."
+        ).pack(anchor="w", padx=10, pady=(0, 8))
 
     # =========================================================================
-    # CALIBRATION HELPER METHODS
+    # DISCARDING RESULTS THAT NO LONGER MATCH THEIR SESSION
     # =========================================================================
 
     #: Result slots cached on LoadedTrajectoryFile that a calibration change
@@ -389,305 +292,352 @@ class DataTabMixin:
                 f"because metrics computed under the old calibration cannot "
                 f"be relabelled with the new unit.\nRe-run the analysis.")
 
-    def _on_calibration_method_changed(self):
-        """Enable/disable custom calibration inputs based on selection."""
-        method = self.calibration_method.get()
-        state = tk.NORMAL if method == "custom" else tk.DISABLED
-        for widget in self.custom_input_widgets:
-            widget.config(state=state)
+    # =========================================================================
+    # SESSIONS
+    # =========================================================================
 
     def _browse_for_session_folder(self):
-        """Open folder browser dialog and automatically load the session."""
-        folder_path = filedialog.askdirectory(
-            title="Select idtracker.ai Session Folder",
-            mustexist=True
-        )
-        if folder_path:
-            self.file_path_var.set(folder_path)
-            self._load_session_folder(folder_path)
-    
-    def _load_session_folder(self, folder_path_str: str):
-        """Load a session folder and prompt for nickname."""
-        folder_path = Path(folder_path_str)
-        
-        # Generate suggested nickname from folder name
-        folder_name = folder_path.name
-        if folder_name.startswith('session_'):
-            suggested_nickname = folder_name[8:]
-        else:
-            suggested_nickname = folder_name
-        
-        # Ask for nickname
-        nickname = simpledialog.askstring(
-            "File Nickname",
-            f"Enter a nickname for this session:\n({folder_path.name})",
-            initialvalue=suggested_nickname
-        )
-        if not nickname:
-            return
+        """Pick a session folder, or a folder of them, and add what is there."""
+        folder = filedialog.askdirectory(
+            title="Select a session folder, or a folder containing sessions",
+            mustexist=True)
+        if folder:
+            self._add_path(Path(folder))
 
-        replacing = nickname in self.loaded_files
-        if replacing:
-            if not messagebox.askyesno("Nickname Exists", f"'{nickname}' already exists. Replace it?"):
-                return
+    @staticmethod
+    def _is_session_folder(folder: Path) -> bool:
+        return ((folder / "trajectories" / "trajectories.npy").is_file()
+                or (folder / "trajectories.npy").is_file())
 
-        try:
-            loaded_file = self._add_session(folder_path, nickname)
+    @staticmethod
+    def _session_name(path: Path) -> str:
+        if path.is_dir():
+            return path.name[8:] if path.name.startswith("session_") else path.name
+        return path.stem
 
-            messagebox.showinfo(
-                "Session Loaded", 
-                f"Successfully loaded '{nickname}'!\n\n"
-                f"Fish: {loaded_file.n_fish}\n"
-                f"Frames: {loaded_file.n_frames}\n"
-                f"Duration: {loaded_file.duration_minutes:.1f} minutes\n"
-                f"Background: {'Found' if loaded_file.background_image_path else 'Not found'}"
-            )
-        except Exception as e:
-            messagebox.showerror("Error Loading Session", f"Failed to load {folder_path.name}:\n\n{str(e)}")
+    def _add_path(self, path: Path) -> int:
+        """Add what `path` holds and return how many sessions were added.
 
-    def _add_session(self, folder_path: Path, nickname: str):
-        """Load a session folder under `nickname` and show it in every list.
-
-        No dialogs, and it raises on failure, so both the one-at-a-time
-        loader above and the Tracking tab's load-everything button can use it.
+        `path` may be one session folder, a folder containing several (an
+        experiment folder, as the Tracking tab leaves it), or a bare
+        trajectories .npy file. Sessions are named after their folders.
+        Failures are shown, not raised.
         """
-        loaded_file = TrajectoryFileLoader.load_from_session_folder(folder_path, nickname)
+        path = Path(path)
+        if path.is_file() and path.suffix == ".npy":
+            sessions = [path]
+        elif path.is_dir() and self._is_session_folder(path):
+            sessions = [path]
+        elif path.is_dir():
+            sessions = sorted((d for d in path.iterdir()
+                               if d.is_dir() and self._is_session_folder(d)),
+                              key=lambda d: d.name.lower())
+        else:
+            sessions = []
+        if not sessions:
+            messagebox.showerror(
+                "No sessions found",
+                "Choose an idtracker.ai session folder (for example "
+                "session_MyVideo), or a folder that contains session folders."
+                f"\n\nGot: {path}")
+            return 0
+
+        added, skipped, failed = [], [], []
+        for session in sessions:
+            nickname = self._session_name(session)
+            if nickname in self.loaded_files:
+                if len(sessions) > 1 or not messagebox.askyesno(
+                        "Already loaded",
+                        f"A session called '{nickname}' is already loaded. "
+                        "Replace it?"):
+                    skipped.append(nickname)
+                    continue
+            try:
+                self._add_session(session, nickname)
+                added.append(nickname)
+            except Exception as e:
+                failed.append(f"{nickname}: {e}")
+
+        if failed:
+            messagebox.showerror(
+                "Some sessions could not be loaded",
+                f"Loaded {len(added)} of {len(sessions)}."
+                + self._format_outcome_list("Could not be loaded:", failed))
+        elif len(sessions) > 1:
+            messagebox.showinfo(
+                "Sessions loaded",
+                f"Loaded {len(added)} session(s) from {path.name}."
+                + (self._format_outcome_list("Already loaded, left as they were:",
+                                             skipped) if skipped else ""))
+        return len(added)
+
+    def _add_session(self, path: Path, nickname: str):
+        """Load a session under `nickname`, give it the units in use, and show
+        it in every list.
+
+        No dialogs, and it raises on failure, so both the Add button and the
+        Tracking tab's load-everything button can use it.
+        """
+        path = Path(path)
+        if path.is_dir():
+            loaded_file = TrajectoryFileLoader.load_from_session_folder(path, nickname)
+        else:
+            loaded_file = TrajectoryFileLoader.load_file(path, nickname)
         if nickname in self.loaded_files:
             # Purge only after the new session loads, so a failed load
             # leaves the existing one intact.
             self._purge_file_state(nickname)
         self.loaded_files[nickname] = loaded_file
 
-        if self.active_file is None:
-            self.active_file = nickname
-
-        self._update_files_list()
-        self._update_calibration_display()
+        self._sessions_changed()
         self._update_shoaling_file_dropdown()
         return loaded_file
 
-    def _load_selected_file(self):
-        """Load the file/folder specified in the path entry."""
-        path_str = self.file_path_var.get()
-        if not path_str:
-            messagebox.showerror("Error", "Please select a session folder first")
-            return
+    def _sessions_changed(self):
+        """A session was added or removed: keep every session on one scale."""
+        if self._bl_is_auto:
+            self._fill_shared_body_length()
+        if self._applied_units is not None and not (
+                self._bl_is_auto and self._applied_units[0] == "BL"):
+            # A scale has been chosen; a newcomer simply joins it.
+            unit, pixels_per_unit = self._applied_units
+            self._set_calibration(unit, pixels_per_unit)
+        elif self.loaded_files:
+            # Nothing chosen yet, or the automatic body length just moved
+            # because the set of sessions did.
+            self._apply_units(announce=False)
+        self._update_sessions_table()
+        self._update_units_status()
 
-        path = Path(path_str)
-        
-        if path.is_dir():
-            self._load_session_folder(path_str)
-        elif path.is_file() and path.suffix == '.npy':
-            self._load_legacy_npy_file(path)
-        else:
-            messagebox.showerror(
-                "Invalid Path", 
-                f"Please select either:\n"
-                f"- An idtracker.ai session folder, or\n"
-                f"- A trajectories.npy file\n\n"
-                f"Got: {path}"
-            )
-    
-    def _load_legacy_npy_file(self, file_path: Path):
-        """Load a .npy file directly (legacy support)."""
-        suggested_nickname = file_path.stem
-        nickname = simpledialog.askstring(
-            "File Nickname",
-            "Enter a nickname for this file:",
-            initialvalue=suggested_nickname
-        )
-        if not nickname:
-            return
+    def _selected_session(self) -> Optional[str]:
+        selection = self.sessions_tree.selection()
+        if selection and selection[0] in self.loaded_files:
+            return selection[0]
+        return None
 
-        replacing = nickname in self.loaded_files
-        if replacing:
-            if not messagebox.askyesno("Nickname Exists", f"'{nickname}' already exists. Replace it?"):
-                return
-
-        try:
-            loaded_file = TrajectoryFileLoader.load_file(file_path, nickname)
-            if replacing:
-                self._purge_file_state(nickname)
-            self.loaded_files[nickname] = loaded_file
-
-            if self.active_file is None:
-                self.active_file = nickname
-
-            self._update_files_list()
-            self._update_calibration_display()
-            self._update_shoaling_file_dropdown()
-        except Exception as e:
-            messagebox.showerror("Error Loading File", f"Failed to load {file_path.name}:\n\n{str(e)}")
-
-    def _update_files_list(self):
-        """Update the files listbox in the data tab."""
-        self.files_listbox.delete(0, tk.END)
-        for nickname in self.loaded_files.keys():
-            display_text = f"> {nickname}" if nickname == self.active_file else f"  {nickname}"
-            self.files_listbox.insert(tk.END, display_text)
-
-    def _set_active_file(self):
-        """Set the selected file as the active file for calibration."""
-        selection = self.files_listbox.curselection()
-        if not selection:
-            messagebox.showinfo("Info", "Please select a file from the list")
-            return
-        nickname = list(self.loaded_files.keys())[selection[0]]
-        self.active_file = nickname
-        self._update_files_list()
-        self._update_calibration_display()
+    def _update_sessions_table(self):
+        tree = self.sessions_tree
+        selected = self._selected_session()
+        tree.delete(*tree.get_children())
+        for nickname, loaded_file in self.loaded_files.items():
+            metadata = loaded_file.metadata
+            tracked = 100.0 * np.mean(
+                ~np.isnan(loaded_file.trajectories[..., 0]), axis=0)
+            calibration = loaded_file.calibration
+            tree.insert("", "end", iid=nickname, values=(
+                nickname,
+                loaded_file.n_fish,
+                f"{loaded_file.duration_minutes:.1f}",
+                f"{tracked.mean():.1f}%  ({tracked.min():.1f}%)",
+                f"{metadata.estimated_accuracy * 100:.1f}%",
+                f"{metadata.body_length:.1f}",
+                f"{metadata.frames_per_second:.2f} fps",
+                f"{calibration.pixels_per_unit:.1f} px/{calibration.unit_name}",
+            ))
+        if selected in self.loaded_files:
+            tree.selection_set(selected)
 
     def _show_file_details(self):
-        """Show detailed information about the selected file."""
-        selection = self.files_listbox.curselection()
-        if not selection:
-            messagebox.showinfo("Info", "Please select a file from the list")
+        """Show detailed information about the selected session."""
+        nickname = self._selected_session()
+        if nickname is None:
+            messagebox.showinfo("Details", "Select a session in the table first.")
             return
-        nickname = list(self.loaded_files.keys())[selection[0]]
-        loaded_file = self.loaded_files[nickname]
-        messagebox.showinfo(f"File Details: {nickname}", loaded_file.summary())
+        messagebox.showinfo(f"Session: {nickname}",
+                            self.loaded_files[nickname].summary())
 
     def _remove_file(self):
-        """Remove the selected file from the loaded files."""
-        selection = self.files_listbox.curselection()
-        if not selection:
-            messagebox.showinfo("Info", "Please select a file from the list")
+        """Remove the selected session."""
+        nickname = self._selected_session()
+        if nickname is None:
+            messagebox.showinfo("Remove", "Select a session in the table first.")
             return
-        nickname = list(self.loaded_files.keys())[selection[0]]
-        if not messagebox.askyesno("Confirm Removal", f"Remove '{nickname}'?"):
+        if not messagebox.askyesno("Remove session", f"Remove '{nickname}'?"):
             return
         del self.loaded_files[nickname]
         self._purge_file_state(nickname)
-        if self.active_file == nickname:
-            self.active_file = next(iter(self.loaded_files), None)
-        self._update_files_list()
-        self._update_calibration_display()
+        self._sessions_changed()
         self._update_shoaling_file_dropdown()
 
-    def _update_calibration_display(self):
-        """Update the calibration section to reflect the active file."""
-        if self.active_file is None or self.active_file not in self.loaded_files:
-            self.calibration_info_label.config(text="Select an active file to configure calibration", fg="gray")
-            self.body_length_display.config(text="")
-            self.fps_display.config(text="")
-            self.calibration_summary.config(text="")
-            self.body_length_radio.config(state=tk.DISABLED)
-            self.custom_radio.config(state=tk.DISABLED)
-            self.no_calibration_radio.config(state=tk.DISABLED)
-            self.fps_entry.config(state=tk.DISABLED)
-            return
+    # =========================================================================
+    # UNITS
+    # =========================================================================
 
-        loaded_file = self.loaded_files[self.active_file]
-        metadata = loaded_file.metadata
+    def _session_body_lengths(self) -> List[float]:
+        return [f.metadata.body_length for f in self.loaded_files.values()]
 
-        self.calibration_info_label.config(text=f"Configuring calibration for: {self.active_file}", fg="black")
-        self.body_length_radio.config(state=tk.NORMAL)
-        self.custom_radio.config(state=tk.NORMAL)
-        self.no_calibration_radio.config(state=tk.NORMAL)
-        self.fps_entry.config(state=tk.NORMAL)
+    def _fill_shared_body_length(self):
+        """Suggest one body length: the median of the loaded sessions'."""
+        lengths = self._session_body_lengths()
+        self.bl_pixels_var.set(f"{float(np.median(lengths)):.1f}" if lengths else "")
+        self._bl_is_auto = True
 
-        self.body_length_display.config(text=f"  (Body length from file: {metadata.body_length:.2f} pixels)")
-        self.fps_var.set(f"{metadata.frames_per_second:.2f}")
-        self.fps_display.config(text=f"(from file: {metadata.frames_per_second:.2f} fps)")
+    def _bl_edited_by_user(self):
+        # A typed value is the user's and must not be replaced when another
+        # session is loaded.
+        self._bl_is_auto = False
 
-        current_cal = loaded_file.calibration
-        summary_text = (f"Current calibration: {current_cal.unit_name}\n"
-                       f"  {current_cal.pixels_per_unit:.2f} pixels per {current_cal.unit_name}")
-        self.calibration_summary.config(text=summary_text)
-        self.rest_unit_label.config(text=f"{current_cal.unit_name}/s")
+    def _units_from_controls(self) -> Tuple[str, float]:
+        """(unit name, pixels per unit) as the controls stand.
 
-    def _apply_calibration(self):
-        """Apply calibration settings to the active file."""
-        if self.active_file is None or self.active_file not in self.loaded_files:
-            messagebox.showerror("Error", "No active file selected")
-            return
+        Raises ValueError with a message fit to show the user.
+        """
+        def number(text: str, what: str) -> float:
+            try:
+                value = float(text)
+            except ValueError:
+                raise ValueError(f"{what} is not a number.") from None
+            if value <= 0:
+                raise ValueError(f"{what} must be more than zero.")
+            return value
 
-        loaded_file = self.loaded_files[self.active_file]
-        method = self.calibration_method.get()
+        if self.units_choice.get() == "cm":
+            if not self.cm_pixels_var.get().strip() or not self.cm_length_var.get().strip():
+                raise ValueError(
+                    "Centimetres needs a scale. Type how many pixels a known "
+                    "length covers, or press \"Measure on a video frame...\".")
+            pixels = number(self.cm_pixels_var.get(), "The pixel length")
+            length = number(self.cm_length_var.get(), "The length in cm")
+            return "cm", pixels / length
 
+        if not self.bl_pixels_var.get().strip():
+            raise ValueError("Load a session, or type the body length in pixels.")
+        return "BL", number(self.bl_pixels_var.get(), "The body length")
+
+    def _set_calibration(self, unit: str, pixels_per_unit: float) -> List[str]:
+        """Calibrate every session in `unit`. Returns the sessions whose
+        scale changed, because their results are no longer valid."""
+        changed = []
+        for nickname, loaded_file in self.loaded_files.items():
+            old = loaded_file.calibration
+            if (old.unit_name, round(old.pixels_per_unit, 6)) != (unit, round(pixels_per_unit, 6)):
+                changed.append(nickname)
+            loaded_file.calibration = CalibrationSettings(
+                pixels_per_unit=pixels_per_unit, unit_name=unit,
+                frame_rate=loaded_file.metadata.frames_per_second)
+        return changed
+
+    def _apply_units(self, announce: bool = True) -> bool:
+        """Put every session on the scale the controls describe.
+
+        Results computed under another scale are discarded: they are scaled
+        when computed but labelled when exported, so keeping them would export
+        old numbers under the new unit.
+        """
         try:
-            frame_rate = float(self.fps_var.get())
-            if frame_rate <= 0:
-                raise ValueError("Frame rate must be positive")
+            unit, pixels_per_unit = self._units_from_controls()
         except ValueError as e:
-            messagebox.showerror("Invalid Frame Rate", f"Please enter a valid frame rate: {e}")
-            return
+            if announce:
+                messagebox.showerror("Units", str(e))
+            return False
 
-        try:
-            if method == "body_length":
-                calibration = CalibrationSettings.from_body_lengths(
-                    body_length_pixels=loaded_file.metadata.body_length, frame_rate=frame_rate)
-            elif method == "custom":
-                pixels = float(self.pixels_var.get())
-                units = float(self.units_var.get())
-                unit_name = self.unit_name_var.get().strip()
-                if pixels <= 0 or units <= 0:
-                    raise ValueError("Pixel and unit values must be positive")
-                if not unit_name:
-                    raise ValueError("Please specify a unit name")
-                pixels_per_unit = pixels / units
-                calibration = CalibrationSettings.from_physical_measurement(
-                    pixels_per_unit=pixels_per_unit, unit_name=unit_name, frame_rate=frame_rate)
-            elif method == "none":
-                calibration = CalibrationSettings.no_calibration(frame_rate)
-            else:
-                return
+        previous = self._applied_units
+        # Only across a change of unit. A body length that merely moved (as
+        # the suggested one does while sessions are being loaded) leaves
+        # "0.5 BL/s" meaning 0.5 BL/s.
+        if previous is not None and previous[0] != unit:
+            self._convert_freeze_threshold(previous[1], pixels_per_unit)
 
-            loaded_file.calibration = calibration
-            cleared = self._invalidate_results_for([self.active_file])
-            self._update_calibration_display()
+        changed = self._set_calibration(unit, pixels_per_unit)
+        cleared = self._invalidate_results_for(changed)
+        self._applied_units = (unit, pixels_per_unit)
+        self.rest_unit_label.config(text=f"{unit}/s")
+        self._update_sessions_table()
+        self._update_units_status()
+        if cleared:
+            # Always said, even when triggered by loading a session: results
+            # disappearing from the other tabs unexplained is worse.
             messagebox.showinfo(
-                "Calibration Applied",
-                f"Applied:\n\n{calibration}" + self._invalidation_notice(cleared)
-            )
-        except Exception as e:
-            messagebox.showerror("Calibration Error", f"Failed:\n\n{e}")
+                "Units applied",
+                f"All sessions are now in {unit} "
+                f"({pixels_per_unit:.2f} pixels per {unit})."
+                + self._invalidation_notice(cleared))
+        return True
 
-    def _apply_calibration_to_all(self):
-        """Apply calibration settings to all loaded files."""
+    def _convert_freeze_threshold(self, old_pixels_per_unit: float,
+                                  new_pixels_per_unit: float):
+        """Keep the freeze threshold at the same physical speed.
+
+        0.5 BL/s and 0.5 cm/s are very different speeds; leaving the number
+        alone when the unit changes would silently redefine "frozen".
+        """
+        try:
+            threshold = float(self.rest_threshold_var.get())
+        except ValueError:
+            return
+        converted = threshold * old_pixels_per_unit / new_pixels_per_unit
+        self.rest_threshold_var.set(f"{converted:.3g}")
+
+    def _update_units_status(self):
+        """Say what scale is in use, and whether the controls differ from it."""
+        is_cm = self.units_choice.get() == "cm"
+        for entry in (self.cm_pixels_entry, self.cm_length_entry):
+            entry.config(state="normal" if is_cm else "disabled")
+        self.bl_pixels_entry.config(state="disabled" if is_cm else "normal")
+        self.measure_button.config(state="normal" if is_cm else "disabled")
+
+        lengths = self._session_body_lengths()
+        if len(lengths) > 1:
+            self.bl_hint_label.config(
+                text=f"(sessions measure {min(lengths):.1f} to {max(lengths):.1f} px; "
+                     "approximate, it depends on lighting)")
+        elif lengths:
+            self.bl_hint_label.config(
+                text="(from idtracker.ai's outline of the fish; approximate)")
+        else:
+            self.bl_hint_label.config(text="")
+
         if not self.loaded_files:
-            messagebox.showerror("No Files", "Please load at least one file first.")
+            self.units_status_var.set("No sessions loaded yet.")
+            self.units_status_label.config(fg="gray40")
+            self.apply_units_button.config(state="disabled")
             return
-
-        file_count = len(self.loaded_files)
-        if not messagebox.askyesno("Apply to All?", f"Apply calibration to all {file_count} file(s)?"):
-            return
-
-        method = self.calibration_method.get()
 
         try:
-            frame_rate = float(self.fps_var.get())
-            if frame_rate <= 0:
-                raise ValueError("Frame rate must be positive")
+            wanted = self._units_from_controls()
         except ValueError as e:
-            messagebox.showerror("Invalid Frame Rate", str(e))
+            self.units_status_var.set(str(e))
+            self.units_status_label.config(fg="#8a4b00")
+            self.apply_units_button.config(state="disabled")
             return
 
-        try:
-            for loaded_file in self.loaded_files.values():
-                if method == "body_length":
-                    calibration = CalibrationSettings.from_body_lengths(
-                        body_length_pixels=loaded_file.metadata.body_length, frame_rate=frame_rate)
-                elif method == "custom":
-                    pixels = float(self.pixels_var.get())
-                    units = float(self.units_var.get())
-                    unit_name = self.unit_name_var.get().strip()
-                    pixels_per_unit = pixels / units
-                    calibration = CalibrationSettings.from_physical_measurement(
-                        pixels_per_unit=pixels_per_unit, unit_name=unit_name, frame_rate=frame_rate)
-                elif method == "none":
-                    calibration = CalibrationSettings.no_calibration(frame_rate)
-                loaded_file.calibration = calibration
+        unit, pixels_per_unit = self._applied_units or wanted
+        in_use = f"In use: {unit}, {pixels_per_unit:.2f} pixels per {unit}"
+        if self._applied_units == wanted:
+            self.units_status_var.set(
+                f"{in_use}, for all {len(self.loaded_files)} session(s).")
+            self.units_status_label.config(fg="darkgreen")
+            self.apply_units_button.config(state="disabled")
+        else:
+            self.units_status_var.set(
+                f"{in_use}.  Changed to {wanted[0]}, {wanted[1]:.2f} pixels per "
+                f"{wanted[0]}: not applied yet.")
+            self.units_status_label.config(fg="#8a4b00")
+            self.apply_units_button.config(state="normal")
 
-            cleared = self._invalidate_results_for(list(self.loaded_files.keys()))
-            self._update_calibration_display()
+    def _measure_scale(self):
+        """Open a video frame to click two points a known distance apart."""
+        nickname = self._selected_session() or next(iter(self.loaded_files), None)
+        if nickname is None:
             messagebox.showinfo(
-                "Done",
-                f"Applied calibration to {file_count} file(s)."
-                + self._invalidation_notice(cleared)
-            )
-        except Exception as e:
-            messagebox.showerror("Error", str(e))
+                "Measure", "Load a session first, so there is a frame to measure on.")
+            return
+        loaded_file = self.loaded_files[nickname]
+        image = load_frame_image(loaded_file)
+        if image is None:
+            messagebox.showinfo(
+                "No frame to measure on",
+                f"No video or background image was found for '{nickname}'.\n\n"
+                "Type the pixel length and the length in cm instead.")
+            return
+
+        def use(pixels: float, centimetres: float):
+            self.cm_pixels_var.set(f"{pixels:.1f}")
+            self.cm_length_var.set(f"{centimetres:g}")
+            self.units_choice.set("cm")
+            self._update_units_status()
+
+        MeasureScaleDialog(self.root, image, nickname, use)
 
     # =========================================================================
     # ANALYSIS METHODS
@@ -695,7 +645,8 @@ class DataTabMixin:
 
     def _run_analysis_and_switch_tab(self):
         """Run individual trajectory analysis + bout analysis, then switch tab."""
-        self._run_analysis()
+        if not self._run_analysis():
+            return
         # Auto-run bout analysis if bout tab methods are available
         if hasattr(self, '_refresh_bout_file_list') and hasattr(self, '_run_bout_analysis'):
             try:
@@ -705,17 +656,26 @@ class DataTabMixin:
                 print(f"Auto bout analysis skipped: {e}")
         self.notebook.select(self.analysis_tab_frame)
 
-    def _run_analysis(self):
-        """Run individual trajectory analysis on all loaded files."""
+    def _run_analysis(self) -> bool:
+        """Run individual trajectory analysis on all loaded files.
+
+        Returns False if it could not start (no sessions, or the units or the
+        threshold are not usable).
+        """
         if not self.loaded_files:
-            messagebox.showerror("No Files", "Please load at least one trajectory file.")
-            return
+            messagebox.showerror("No sessions", "Load at least one session first.")
+            return False
+
+        # Whatever the units controls say is what gets analysed; an edit the
+        # user forgot to apply must not be silently ignored.
+        if not self._apply_units():
+            return False
 
         try:
             params = self._get_processing_parameters_from_gui()
         except ValueError as e:
             messagebox.showerror("Invalid Parameters", str(e))
-            return
+            return False
 
         # Record the parameters actually used — the Methods tab reads these to
         # describe the run, so they must not stay at the constructor defaults.
@@ -741,12 +701,6 @@ class DataTabMixin:
                         f"{nickname}: only {len(fish_list)} of "
                         f"{loaded_file.n_fish} fish analyzed"
                     )
-                failed_smoothing = [f.fish_id for f in fish_list if f.smoothing_failed]
-                if failed_smoothing:
-                    degraded.append(
-                        f"{nickname}: smoothing failed for fish "
-                        f"{failed_smoothing}, raw trajectories used"
-                    )
             except Exception as e:
                 # One bad file must not abandon the rest, and must not leave a
                 # previous run's results attached pretending to be current.
@@ -768,17 +722,16 @@ class DataTabMixin:
         )
         self._report_batch_outcome("Individual Analysis", total, succeeded,
                                    failed, degraded)
+        return True
 
     def _get_processing_parameters_from_gui(self) -> ProcessingParameters:
         """Read processing parameters from the GUI inputs."""
-        apply_smoothing = self.apply_smoothing_var.get()
-        smoothing_window = int(self.smoothing_window_var.get())
-        rest_threshold = float(self.rest_threshold_var.get())
+        try:
+            rest_threshold = float(self.rest_threshold_var.get())
+        except ValueError:
+            raise ValueError("The freeze speed threshold is not a number.") from None
 
         params = ProcessingParameters(
-            apply_smoothing=apply_smoothing,
-            smoothing_window=smoothing_window,
-            smoothing_polynomial_order=3,
             min_valid_points=10,
             min_valid_percentage=0.01,
             rest_speed_threshold=rest_threshold,

@@ -29,6 +29,26 @@ through idtracker.ai:
 - Python 3.10 or newer is required. `requirements.txt` is gone;
   `pyproject.toml` is the only dependency list.
 
+**Sessions & Units replaces Data Setup & Calibration.**
+
+- One table lists every loaded session: fish, length, tracking quality,
+  idtracker.ai accuracy, body length, frame rate and the scale in use.
+- "Add sessions..." takes one session folder or a folder containing several.
+- One scale applies to every session. Centimetres can be measured by clicking
+  two points on a video frame. Body lengths use one value for the experiment
+  instead of each video's own, because idtracker.ai's body length moves with
+  lighting and threshold (73.2 and 79.7 px for two videos from one rig).
+- The "active file", per-file calibration, the editable frame rate and the
+  pixels-only option are gone.
+- Exports gained a `PixelsPerUnit` column beside `Unit`.
+- The freeze threshold is converted when the unit changes, so it keeps the
+  same physical speed.
+
+**Position smoothing removed.** The Savitzky-Golay option changed distance and
+speed by about 1% and path straightness by about 1%; the metrics it mattered
+for were withdrawn in 2.1.0. Plot smoothing on the Individual and Shoaling
+tabs is unchanged and does not affect exported numbers.
+
 **Repository layout.** The audit trail moved to `docs/audit/`, the standalone
 scripts to `extras/`, and `run_analyzer.py` was removed in favour of the
 shortcut and `python -m fish_analyzer`.

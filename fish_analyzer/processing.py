@@ -9,9 +9,11 @@ and calculates individual behavioral metrics.
 KEY TRANSFORMATIONS:
 1. Flip Y axis (video Y=0 is top, we want Y=0 at bottom)
 2. Apply calibration (pixels → body lengths)
-3. Smooth trajectories to reduce tracking noise
-4. Calculate derivatives (speed, acceleration)
-5. Compute behavioral metrics
+3. Calculate derivatives (speed, acceleration)
+4. Compute behavioral metrics
+
+Positions are used as tracked. There is no smoothing step: it changed the
+surviving metrics by about 1% and only made two runs of one video disagree.
 
 METRICS CALCULATED:
 - Distance: total path length, net displacement
@@ -55,11 +57,6 @@ class ProcessingParameters:
     """
     Parameters controlling how trajectories are processed.
 
-    SMOOTHING:
-    Raw tracking has small random errors ("jitter"). Savitzky-Golay smoothing
-    fits a polynomial to a sliding window of points, reducing noise while
-    preserving real movement patterns better than simple averaging.
-
     FREEZE DETECTION:
     Fish are considered "frozen" (immobile) when their speed drops below
     rest_speed_threshold for at least min_freeze_frames consecutive frames.
@@ -75,9 +72,6 @@ class ProcessingParameters:
     window: straightness = net displacement / path distance. Values near 1.0
     indicate straight swimming; values near 0 indicate circling or meandering.
     """
-    apply_smoothing: bool = False
-    smoothing_window: int = 5
-    smoothing_polynomial_order: int = 3
     min_valid_points: int = 10
     min_valid_percentage: float = 0.01
     rest_speed_threshold: float = 0.5       # BL/s below which fish is "frozen"
@@ -86,13 +80,6 @@ class ProcessingParameters:
 
     def validate(self):
         """Check that all parameters are valid. Raises ValueError if not."""
-        if self.smoothing_window % 2 == 0:
-            raise ValueError(
-                f"Smoothing window must be odd, got {self.smoothing_window}. "
-                f"Try {self.smoothing_window + 1}."
-            )
-        if self.smoothing_window < 3:
-            raise ValueError(f"Smoothing window must be at least 3, got {self.smoothing_window}")
         if not 0 < self.min_valid_percentage <= 1.0:
             raise ValueError(f"Valid percentage must be between 0 and 1, got {self.min_valid_percentage}")
         if self.rest_speed_threshold < 0:
@@ -104,9 +91,6 @@ class ProcessingParameters:
     def default_for_fish(cls) -> 'ProcessingParameters':
         """Get default parameters that work well for fish tracking."""
         return cls(
-            apply_smoothing=False,
-            smoothing_window=5,
-            smoothing_polynomial_order=3,
             min_valid_points=10,
             min_valid_percentage=0.01,
             rest_speed_threshold=0.5,
@@ -129,7 +113,6 @@ class FishTrajectory:
     metrics: Dict[str, Any] = field(default_factory=dict)
     n_valid_frames: int = 0
     n_total_frames: int = 0
-    smoothing_failed: bool = False
     #: Names of metric groups whose computation raised. A NaN in the export is
     #: ambiguous on its own — it can mean "this fish never turned" as easily as
     #: "the calculation crashed" — so the exporter reads this to tell them
@@ -170,7 +153,7 @@ class TrajectoryProcessor:
     """
     Converts raw idtracker.ai trajectory data into processed TrajaDataFrames.
 
-    This class handles the coordinate transformations and smoothing. It creates
+    This class handles the coordinate transformations. It creates
     one FishTrajectory object for each fish in the file.
     """
 
@@ -195,7 +178,6 @@ class TrajectoryProcessor:
         self.excluded: Dict[int, str] = {}
 
         print(f"\nProcessing {self.file.n_fish} fish from {self.file.nickname}...")
-        print(f"Using smoothing window: {self.params.smoothing_window} frames")
 
         for fish_idx in range(self.file.n_fish):
             try:
@@ -235,43 +217,12 @@ class TrajectoryProcessor:
         trj.spatial_units = self.file.calibration.unit_name
         trj.time_units = "s"
 
-        smoothing_failed = False
-        if self.params.apply_smoothing:
-            try:
-                # Interpolate NaN gaps before smoothing to prevent
-                # traja.smooth_sg from zero-filling them (which creates
-                # large artificial spikes that corrupt neighboring frames).
-                nan_mask = trj['x'].isna() | trj['y'].isna()
-                if nan_mask.any():
-                    valid_idx = np.where(~nan_mask)[0]
-                    nan_idx = np.where(nan_mask)[0]
-                    trj.loc[nan_mask, 'x'] = np.interp(
-                        nan_idx, valid_idx, trj['x'].values[valid_idx])
-                    trj.loc[nan_mask, 'y'] = np.interp(
-                        nan_idx, valid_idx, trj['y'].values[valid_idx])
-
-                trj = traja.smooth_sg(
-                    trj,
-                    w=self.params.smoothing_window,
-                    p=self.params.smoothing_polynomial_order
-                )
-
-                # Restore NaN positions (smoothed values at gaps are
-                # interpolation artifacts, not real data)
-                if nan_mask.any():
-                    trj.loc[nan_mask, 'x'] = np.nan
-                    trj.loc[nan_mask, 'y'] = np.nan
-            except Exception:
-                print(f"    Note: Smoothing failed for fish {fish_idx}, using raw trajectory")
-                smoothing_failed = True
-
         return FishTrajectory(
             fish_id=fish_idx,
             identity_label=self.file.metadata.identity_labels[fish_idx],
             trajectory=trj,
             n_valid_frames=n_valid,
             n_total_frames=n_total,
-            smoothing_failed=smoothing_failed,
         )
 
     def _transform_coordinates(self, raw_coords: np.ndarray) -> np.ndarray:

@@ -56,7 +56,7 @@ class TrackingTabMixin:
             tab, justify=tk.LEFT, anchor="w", font=("Arial", 9), fg="gray30",
             text="Start here with new videos: idtracker.ai turns each video "
                  "into a tracked session.\nAlready have tracked sessions? Go "
-                 "straight to \"Data Setup & Calibration\"."
+                 "straight to \"Sessions & Units\"."
         ).pack(fill="x", padx=20, pady=(10, 0))
 
         self._create_tracking_videos_section(tab)
@@ -547,7 +547,7 @@ class TrackingTabMixin:
         else:
             messagebox.showinfo(
                 "Sessions loaded",
-                text + "\n\nNext: set the calibration, then press "
+                text + "\n\nNext: check the units, then press "
                        "\"Run All Analysis\".")
         if loaded or already:
             self.notebook.select(self.data_tab_frame)

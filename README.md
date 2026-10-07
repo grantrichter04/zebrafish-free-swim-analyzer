@@ -59,15 +59,26 @@ with the videos: they are the tracking results.
 
 ### 2. Analyse (the other tabs)
 
-1. **Data Setup & Calibration**: set the calibration, then press **Run All
-   Analysis**.
+1. **Sessions & Units** lists every loaded session with its fish count,
+   length, tracking quality and body length. Choose the units, then press
+   **Run All Analysis**.
+   - **Centimetres** is best. Press **Measure on a video frame...**, click the
+     two ends of something whose length you know (a ruler, or the inside width
+     of the tank), and type that length.
+   - **Body lengths** uses one value for the whole experiment, suggested from
+     the sessions. It is approximate: idtracker.ai's body length depends on
+     lighting and threshold.
+
+   One scale is used for every session, so results can be compared between
+   them, and it is written into every export.
 2. **Individual Analysis**, **Bout Analysis**, **Shoaling Analysis** and
    **Spatial Analysis** each show their results and have a CSV export button.
 3. **Video Inspector** plays the video with the tracking drawn on top, and
    exports frames and clips.
 
-Already have tracked sessions from before? Skip the Tracking tab and load them
-on **Data Setup & Calibration**.
+Already have tracked sessions from before? Skip the Tracking tab and press
+**Add sessions...** on **Sessions & Units**. It takes one session folder, or a
+folder containing several and loads them all.
 
 ### If something looks wrong
 
@@ -87,8 +98,9 @@ on **Data Setup & Calibration**.
 | Shoaling | Nearest neighbour distance (NND), inter-individual distance (IID), convex hull area |
 | Spatial | Thigmotaxis (time near the walls), position heatmaps |
 
-All distances and areas are in the unit you calibrated in; the `Unit` column in
-each export says which.
+All distances and areas are in the unit you chose; the `Unit` and
+`PixelsPerUnit` columns in each export say which and at what scale, so results
+can be converted later.
 
 Frames where idtracker.ai lost a fish are treated as *unobserved*, not as the
 fish being still. Freezes and bouts are counted within stretches of continuous

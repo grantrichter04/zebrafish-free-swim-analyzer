@@ -1011,15 +1011,7 @@ class AnalysisTabMixin:
                          for f in selected_files
                          if f in self.loaded_files and self.loaded_files[f].processed_data)
 
-        smooth_text = (
-            f"Position data were smoothed using a Savitzky-Golay filter "
-            f"(window = {p.smoothing_window} frames, polynomial order = "
-            f"{p.smoothing_polynomial_order}) prior to metric computation. "
-            f"NaN gaps were linearly interpolated before smoothing and restored after."
-        ) if p.apply_smoothing else (
-            "No position smoothing was applied to preserve the temporal "
-            "resolution of bout-based locomotion."
-        )
+        from .. import __version__
 
         text = (
             "METHODS — Individual Trajectory Analysis\n"
@@ -1027,12 +1019,13 @@ class AnalysisTabMixin:
             "The following is a draft methods paragraph. Edit as needed.\n\n"
             "---\n\n"
             f"Zebrafish trajectories were tracked using idtracker.ai and "
-            f"analyzed using the Zebrafish Free Swim Analyzer (v2.1). "
+            f"analyzed using the Zebrafish Free Swim Analyzer (v{__version__}). "
             f"Trajectory coordinates were converted from pixels to "
             f"{cal.unit_name} using a calibration factor of "
             f"{cal.scale_factor:.6f} {cal.unit_name}/pixel "
-            f"(frame rate: {cal.frame_rate:.1f} fps). "
-            f"{smooth_text} "
+            f"({cal.pixels_per_unit:.2f} pixels per {cal.unit_name}; "
+            f"frame rate: {cal.frame_rate:.1f} fps). "
+            f"Positions were used as tracked, without smoothing. "
             f"Fish with fewer than {p.min_valid_points} valid position "
             f"frames were excluded from analysis.\n\n"
             f"Frames in which idtracker.ai did not locate a fish were treated "
@@ -1075,7 +1068,6 @@ class AnalysisTabMixin:
             f"  Calibration unit:          {cal.unit_name}\n"
             f"  Scale factor:              {cal.scale_factor:.6f} {cal.unit_name}/px\n"
             f"  Frame rate:                {cal.frame_rate:.1f} fps\n"
-            f"  Smoothing:                 {'ON (window=' + str(p.smoothing_window) + ')' if p.apply_smoothing else 'OFF'}\n"
             f"  Rest speed threshold:      {p.rest_speed_threshold} {cal.unit_name}/s\n"
             f"  Min freeze duration:       {p.min_freeze_frames} frames ({p.min_freeze_frames / cal.frame_rate * 1000:.0f} ms)\n"
             f"  Path straightness window:  {p.straightness_window_seconds} s\n"

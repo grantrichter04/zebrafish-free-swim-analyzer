@@ -114,11 +114,19 @@ def app(_gui_app):
                     _gui_app.video_readers):
         mapping.clear()
 
-    _gui_app.active_file = None
     _gui_app.current_arena_file = None
     _gui_app.arena_definition = None
     _gui_app.arena_vertices = []
     _gui_app.processing_params = ProcessingParameters.default_for_fish()
+    # The Sessions & Units tab: back to "nothing loaded, nothing chosen".
+    _gui_app._applied_units = None
+    _gui_app.units_choice.set("bl")
+    _gui_app.cm_pixels_var.set("")
+    _gui_app.cm_length_var.set("")
+    _gui_app.rest_threshold_var.set("0.5")
+    _gui_app._fill_shared_body_length()
+    _gui_app._update_sessions_table()
+    _gui_app._update_units_status()
     _gui_app._log_lines.clear()
     _gui_app._insp_needs_rebuild = True
     _gui_app._insp_fig = None

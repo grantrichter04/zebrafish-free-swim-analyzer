@@ -322,7 +322,7 @@ def test_tracked_sessions_load_into_the_analysis_tabs(
 
     assert list(tab.loaded_files) == ["control"]
     assert tab.loaded_files["control"].n_fish == 3
-    assert tab.active_file == "control"
+    assert tab.loaded_files["control"].calibration.unit_name == "BL"
     assert "Loaded 1 session(s)" in shown[0]
     assert tab.notebook.select() == str(tab.data_tab_frame)
 

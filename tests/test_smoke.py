@@ -102,7 +102,7 @@ def test_gui_constructs(app):
 
     assert tabs == [
         "Tracking",
-        "Data Setup & Calibration",
+        "Sessions & Units",
         "Individual Analysis",
         "Bout Analysis",
         "Shoaling Analysis",
@@ -113,7 +113,7 @@ def test_gui_constructs(app):
     # One control from each tab's mixin, so a tab that silently built nothing
     # would be caught rather than merely counted.
     for attr in ("tracking_videos_tree",     # TrackingTabMixin
-                 "file_path_var",            # DataTabMixin
+                 "sessions_tree",            # DataTabMixin
                  "speed_dist_collapse_var",  # AnalysisTabMixin
                  "inspector_frame_slider",   # InspectorTabMixin
                  "inspector_mark_label"):    # InspectorExportMixin

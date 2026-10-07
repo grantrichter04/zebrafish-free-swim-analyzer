@@ -99,7 +99,6 @@ class GUIBase:
         """Initialize the application and create the GUI."""
         # Data storage
         self.loaded_files: Dict[str, LoadedTrajectoryFile] = {}
-        self.active_file: Optional[str] = None
 
         # Default parameters
         self.processing_params = ProcessingParameters.default_for_fish()

@@ -92,6 +92,7 @@ def export_combined_summary_csv(
                 'FishID':                      fish.fish_id,
                 'Label':                       fish.identity_label,
                 'Unit':                        unit,
+                'PixelsPerUnit':               round(loaded_file.calibration.pixels_per_unit, 4),
                 'Status':                      fish.status,
                 'ValidFrames_pct':             round(fish.valid_percentage * 100, 1),
                 'ObservedDuration_s':          round(m.get('observed_duration_s', nan), 2),
@@ -180,6 +181,7 @@ def export_combined_summary_csv(
             excluded.update({
                 'Group': group, 'File': nickname, 'FishID': fish_idx,
                 'Label': _label_for(loaded_file, fish_idx), 'Unit': unit,
+                'PixelsPerUnit': round(loaded_file.calibration.pixels_per_unit, 4),
                 'Status': f'excluded: {reason}',
             })
             rows.append(excluded)
@@ -264,6 +266,7 @@ def export_individual_metrics_csv(
                 'FishID': fish.fish_id,
                 'Label': fish.identity_label,
                 'Unit': unit,
+                'PixelsPerUnit': round(loaded_file.calibration.pixels_per_unit, 4),
                 'Status': fish.status,
                 'ValidFrames_pct': round(fish.valid_percentage * 100, 1),
                 'ObservedDuration_s': round(m.get('observed_duration_s', float('nan')), 2),
@@ -328,6 +331,7 @@ def export_shoaling_metrics_csv(loaded_files: Dict, output_path: Path) -> int:
             rows.append({
                 'File': nickname,
                 'Unit': loaded_file.calibration.unit_name,
+                'PixelsPerUnit': round(loaded_file.calibration.pixels_per_unit, 4),
                 'SampleIndex': i,
                 'FrameNumber': int(results.frame_indices[i]),
                 'Time_s': round(float(results.timestamps[i]), 2),
@@ -372,6 +376,7 @@ def export_shoaling_summary_csv(loaded_files: Dict, output_path: Path) -> int:
         rows.append({
             'File': nickname,
             'Unit': loaded_file.calibration.unit_name,
+            'PixelsPerUnit': round(loaded_file.calibration.pixels_per_unit, 4),
             'NumFish': results.n_fish,
             'NumSamples': results.n_samples_used,
             'MeanNND': round(results.mean_nnd, 4),
