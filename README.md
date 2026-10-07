@@ -58,59 +58,50 @@ head_detection/          # Standalone: head-vs-tail and turn analysis
 
 ## Installation
 
-### Quick setup with pip (recommended)
+### On the lab laptop (tracking and analysis)
+
+1. Install [Miniconda](https://www.anaconda.com/download/success) and a current
+   NVIDIA driver, if they are not already there.
+2. Download or clone this repository.
+3. Double-click **`install.bat`**.
+
+It builds one conda environment, `freeswim`, holding both idtracker.ai and the
+analyzer, checks it, and puts a **Free Swim Analyzer** shortcut on the desktop.
+It downloads about 5 GB and is safe to run again.
+
+To check a machine at any time, press **Check Setup** at the bottom right of
+the app, or run:
 
 ```bash
-python -m venv venv
-venv\Scripts\activate          # macOS/Linux: source venv/bin/activate
-pip install -e ".[dev]"
+python -m fish_analyzer --check
 ```
 
-### Alternative: conda
+### On any other machine (analysis only)
 
 ```bash
 conda env create -f environment.yml
-conda activate fishanalyzer
+conda activate freeswim
 pip install -e ".[dev]"
-```
-
-Both install the package itself in editable mode. That is what lets
-`import fish_analyzer` work from any directory rather than only from the
-repository root, and it is why `pytest` and `python -m fish_analyzer` need no
-path juggling. The `[dev]` extra adds pytest; drop it if you only want to run
-the application.
-
-Verify the install before pointing it at data — the suite is synthetic and
-takes a few seconds:
-
-```bash
 pytest -q
 ```
 
-> **Which Python?** If you have several installed, make sure the one you
-> activate is the one you run. `import traja` failing is the usual sign you are
-> on the wrong interpreter.
+This skips idtracker.ai and PyTorch. Every analysis tab works; tracking does
+not.
 
 ### Requirements
 
-- **Python 3.9 or newer.** CI runs the full suite on 3.9 and 3.12 on Windows;
-  3.12 is the recommended default. Note that `trajectorytools` and
-  idtracker.ai 6.x both require 3.10+, so pick 3.12 if you expect to use them
-  alongside this tool.
-- Dependencies are declared in [`pyproject.toml`](pyproject.toml).
-  [`requirements.txt`](requirements.txt) carries the same constraints for
-  anyone who prefers `pip install -r`, and [`environment.yml`](environment.yml)
-  is the conda equivalent. `scikit-learn` is **not** optional — `traja` imports
-  it without declaring it, so `import traja` fails if it is missing.
-- `shapely` (thigmotaxis) and `opencv-python` (video frame reading) are
-  functionally optional: without them those features are disabled rather than
-  crashing. They are installed by default because most workflows use them.
+- **Python 3.10 or newer**; 3.12 is what `install.bat` builds and what CI tests.
+- Dependencies are declared once, in [`pyproject.toml`](pyproject.toml).
+  [`constraints-win-cu128.txt`](constraints-win-cu128.txt) pins the exact
+  versions the lab laptop install was tested with.
+- OpenCV is installed as `opencv-python-headless`, the same build idtracker.ai
+  uses. Do not also install `opencv-python` into the same environment.
 
-The standalone scripts need more:
+The standalone scripts (`fish_posture_analyzer.py`, `head_detection/`) need
+more:
 
 ```bash
 pip install -e ".[standalone]"
-# head_detection/ additionally needs idtrackerai — install per idtracker.ai's docs
 ```
 
 ---
