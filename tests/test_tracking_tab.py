@@ -329,3 +329,70 @@ def test_tracked_sessions_load_into_the_analysis_tabs(
     tab._tracking_load_sessions()
     assert "Loaded 0 session(s)" in shown[1] and "control" in shown[1]
 
+
+# --- reviewing in the validator ---------------------------------------------------
+
+def test_review_is_offered_only_for_a_tracked_video(tab, experiment):
+    tab._tracking_set_folder(experiment)
+
+    tab.tracking_videos_tree.selection_set("0")       # control.avi, tracked
+    tab._tracking_update_buttons()
+    assert tab.tracking_review_button["state"] == "normal"
+
+    tab.tracking_videos_tree.selection_set("1")       # exp.avi, not tracked
+    tab._tracking_update_buttons()
+    assert tab.tracking_review_button["state"] == "disabled"
+
+
+def test_corrections_saved_in_the_validator_reload_a_loaded_session(
+        tab, experiment, synthetic_npy, synthetic_npy_larger_fish, dialogs, monkeypatch):
+    import json
+    import shutil
+    session = experiment / "session_control"
+    trajectories = session / "trajectories" / "trajectories.npy"
+    shutil.copy(synthetic_npy, trajectories)
+    told = []
+    monkeypatch.setattr("tkinter.messagebox.showinfo",
+                        lambda title, text: told.append(title))
+    tab._tracking_set_folder(experiment)
+    tab._tracking_load_sessions()
+    assert tab.loaded_files["control"].metadata.body_length == 40.0
+    tab.loaded_files["control"].processed_data = ["old results"]
+
+    def validator(command, cwd, on_line, should_stop=lambda: False):
+        assert command[-1] == str(session)
+        shutil.copy(synthetic_npy_larger_fish, trajectories)   # "Ctrl+S"
+        (session / "session.json").write_text(
+            json.dumps({"last_validated": "2026-10-08T11:00:00"}))
+        return 0
+
+    monkeypatch.setattr(tracking, "run_process", validator)
+    tab.tracking_videos_tree.selection_set("0")
+
+    tab._tracking_review()
+    _wait_until_idle(tab)
+
+    assert tab.loaded_files["control"].metadata.body_length == 52.0, "reloaded"
+    assert tab.loaded_files["control"].processed_data is None
+    assert "Session reloaded" in told
+    assert dict(_rows(tab))["control.avi"] == "tracked, reviewed 2026-10-08"
+    assert "corrections saved" in tab.tracking_hint_var.get()
+
+
+def test_a_review_that_changes_nothing_leaves_loaded_sessions_alone(
+        tab, experiment, synthetic_npy, dialogs, monkeypatch):
+    import shutil
+    shutil.copy(synthetic_npy, experiment / "session_control" / "trajectories"
+                / "trajectories.npy")
+    monkeypatch.setattr("tkinter.messagebox.showinfo", lambda *a, **k: None)
+    tab._tracking_set_folder(experiment)
+    tab._tracking_load_sessions()
+    tab.loaded_files["control"].processed_data = ["results"]
+    monkeypatch.setattr(tracking, "run_process", lambda *a, **k: 0)
+    tab.tracking_videos_tree.selection_set("0")
+
+    tab._tracking_review()
+    _wait_until_idle(tab)
+
+    assert tab.loaded_files["control"].processed_data == ["results"]
+    assert "nothing was changed" in tab.tracking_hint_var.get()

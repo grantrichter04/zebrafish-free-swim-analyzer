@@ -17,6 +17,7 @@ video that belongs to it:
 idtracker.ai always runs as a separate process. Its window is Qt and ours is
 tkinter, and a crash while tracking must not take the analyzer down with it.
 """
+import json
 import os
 import re
 import subprocess
@@ -70,6 +71,31 @@ def tracking_status(video: Path) -> str:
     if session.is_dir():
         return INCOMPLETE
     return NOT_TRACKED
+
+
+def reviewed_on(video: Path) -> Optional[str]:
+    """The date (YYYY-MM-DD) the session was last saved from idtracker.ai's
+    validator, or None if it never was."""
+    try:
+        with open(session_folder_for(video) / "session.json", encoding="utf-8") as file:
+            stamp = json.load(file).get("last_validated")
+    except (OSError, ValueError):
+        return None
+    return str(stamp)[:10] if stamp else None
+
+
+def build_review_command(video: Path) -> List[str]:
+    """Open idtracker.ai's validator on a tracked video's session.
+
+    The validator shows the video with each fish's identity drawn on it, lists
+    the frames it is unsure about, and lets identities be corrected. Saving
+    there rewrites the session's trajectories file in place, which is the file
+    the analysis loads.
+    """
+    return [python_executable(), "-c",
+            "from idtrackerai.extra_tools.validator import "
+            "idtrackerai_validate_entrypoint as run; run()",
+            str(session_folder_for(video))]
 
 
 def idtrackerai_available() -> bool:

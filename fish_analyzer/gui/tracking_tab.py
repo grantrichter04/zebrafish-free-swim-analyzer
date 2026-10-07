@@ -99,6 +99,8 @@ class TrackingTabMixin:
         self.tracking_videos_tree.column("video", width=600, anchor="w")
         self.tracking_videos_tree.column("status", width=140, anchor="w")
         self.tracking_videos_tree.pack(fill="x", padx=10, pady=(0, 8))
+        self.tracking_videos_tree.bind(
+            "<<TreeviewSelect>>", lambda e: self._tracking_update_buttons())
 
     def _create_tracking_setup_section(self, parent):
         frame = tk.LabelFrame(parent, text="2. Setup", font=("Arial", 12, "bold"))
@@ -156,6 +158,10 @@ class TrackingTabMixin:
             command=self._tracking_load_sessions,
             bg="lightblue", font=("Arial", 10, "bold"))
         self.tracking_load_button.pack(side="right", padx=5)
+        self.tracking_review_button = tk.Button(
+            controls, text="Review tracking of selected video...",
+            command=self._tracking_review)
+        self.tracking_review_button.pack(side="right", padx=5)
 
         self.tracking_progress_var = tk.StringVar()
         tk.Label(frame, textvariable=self.tracking_progress_var, anchor="w",
@@ -195,7 +201,8 @@ class TrackingTabMixin:
         """The folder's answer, unless this run knows better."""
         status = tracking.tracking_status(video)
         if status == tracking.TRACKED:
-            return status
+            reviewed = tracking.reviewed_on(video)
+            return f"tracked, reviewed {reviewed}" if reviewed else status
         return self._tracking_live.get(video, status)
 
     def _tracking_refresh(self, select_setup: Optional[Path] = None):
@@ -274,6 +281,10 @@ class TrackingTabMixin:
             state=state(self._tracking_batch_running and not self._tracking_stop))
         self.tracking_load_button.config(
             state=state(idle and self._tracking_tracked()))
+        selected = self._tracking_selected_video()
+        self.tracking_review_button.config(state=state(
+            tracking.idtrackerai_available() and idle and selected is not None
+            and tracking.tracking_status(selected) == tracking.TRACKED))
 
     # =========================================================================
     # MAKING AND CHECKING A SETUP IN IDTRACKER.AI
@@ -519,6 +530,69 @@ class TrackingTabMixin:
         if stopped and not failed:
             return
         self._report_batch_outcome("Tracking", len(todo), succeeded, failed, [])
+
+    # =========================================================================
+    # REVIEWING A TRACKED VIDEO IN IDTRACKER.AI'S VALIDATOR
+    # =========================================================================
+
+    def _tracking_review(self):
+        """Open idtracker.ai's validator on the selected tracked video.
+
+        Optional. It is where identity swaps are found and corrected; saving
+        there rewrites the session's trajectories, so a session already loaded
+        for analysis is reloaded afterwards.
+        """
+        video = self._tracking_selected_video()
+        if video is None or tracking.tracking_status(video) != tracking.TRACKED:
+            messagebox.showinfo(
+                "Review tracking", "Select a tracked video in the list first.")
+            return
+        if not messagebox.askokcancel(
+                "Review tracking in idtracker.ai",
+                f"idtracker.ai's validator will open on:\n    {video.name}\n\n"
+                "It plays the video with each fish's identity drawn on it and "
+                "lists the frames it is least sure of. Use it to check that "
+                "fish were not swapped, and to correct the ones that were.\n\n"
+                "If you change anything, save in the validator (Ctrl+S) before "
+                "closing it. The corrected tracking replaces the original."):
+            return
+
+        trajectories = (tracking.session_folder_for(video)
+                        / "trajectories" / "trajectories.npy")
+        before = trajectories.stat().st_mtime_ns
+        command = tracking.build_review_command(video)
+
+        def work(log):
+            log(f"> reviewing {video.name}")
+            return tracking.run_process(command, video.parent, log,
+                                        lambda: self._tracking_stop)
+
+        def finished(exit_code):
+            self._tracking_refresh()
+            if trajectories.stat().st_mtime_ns == before:
+                self.tracking_hint_var.set(
+                    f"Reviewed {video.name}: nothing was changed.")
+                return
+            self.tracking_hint_var.set(
+                f"Reviewed {video.name}: corrections saved.")
+            self._tracking_reload_if_loaded(trajectories)
+
+        self.tracking_hint_var.set(
+            f"idtracker.ai's validator is open on {video.name}.")
+        self._tracking_background(work, finished)
+
+    def _tracking_reload_if_loaded(self, trajectories: Path):
+        """A loaded session whose file was just corrected is holding the old
+        tracking; analysing it would ignore the corrections."""
+        for nickname, loaded in list(self.loaded_files.items()):
+            if Path(loaded.file_path).resolve() != trajectories.resolve():
+                continue
+            self._add_session(trajectories.parent.parent, nickname)
+            messagebox.showinfo(
+                "Session reloaded",
+                f"'{nickname}' was already loaded for analysis, so it has "
+                "been reloaded with the corrected tracking. Its previous "
+                "results were discarded; run the analysis again.")
 
     # =========================================================================
     # HANDING TRACKED SESSIONS TO THE ANALYSIS TABS

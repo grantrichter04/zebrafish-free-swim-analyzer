@@ -165,3 +165,25 @@ def test_a_stopped_run_is_not_a_success_even_if_files_exist(tmp_path, monkeypatc
                                     should_stop=lambda: "x" in lines)
 
     assert outcome.stopped and not outcome.ok
+
+
+def test_review_command_opens_the_validator_on_the_session(tmp_path):
+    video = tmp_path / "exp 1.avi"
+    command = tracking.build_review_command(video)
+
+    assert command[1] == "-c" and "validator" in command[2]
+    assert command[-1] == str(tmp_path / "session_exp 1")
+
+
+def test_reviewed_on_reads_the_date_the_validator_saved(tmp_path):
+    video = _touch(tmp_path / "exp.avi")
+    assert tracking.reviewed_on(video) is None, "no session at all"
+
+    session = tmp_path / "session_exp"
+    session.mkdir()
+    (session / "session.json").write_text('{"last_validated": null}')
+    assert tracking.reviewed_on(video) is None
+
+    (session / "session.json").write_text(
+        '{"last_validated": "2026-10-08T11:02:33.123456"}')
+    assert tracking.reviewed_on(video) == "2026-10-08"
