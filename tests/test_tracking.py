@@ -145,7 +145,8 @@ def test_exit_code_zero_without_trajectories_is_a_failure(tmp_path, monkeypatch)
     _pretend_idtrackerai(
         monkeypatch,
         "print('Loading video'); "
-        "print('IdtrackeraiError: too many blobs      run.py:80'); print('')")
+        "print('09:15:02 IdtrackeraiError: too many blobs      run.py:80'); "
+        "print('         Log file copied to                    run.py:106'); print('')")
 
     outcome = tracking.run_tracking(video, tmp_path / "rig.toml", lambda _: None)
 

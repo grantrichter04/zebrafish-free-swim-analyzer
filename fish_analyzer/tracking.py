@@ -188,13 +188,23 @@ class TrackOutcome:
     last_lines: List[str] = field(default_factory=list)
 
     def reason(self) -> str:
-        """The last thing idtracker.ai said, for a one-line failure summary."""
-        for line in reversed(self.last_lines):
-            # Drop the "file.py:123" column idtracker.ai's logger appends.
-            text = re.sub(r"\s+\S+\.py:\d+\s*$", "", line).strip()
-            if text:
-                return text[:200]
-        return "idtracker.ai gave no output"
+        """One line saying why it failed, taken from idtracker.ai's output.
+
+        Its last lines are usually about where the log file was copied, so an
+        error line is preferred when there is one.
+        """
+        def clean(line: str) -> str:
+            # Drop the "file.py:123" column idtracker.ai's logger appends,
+            # and the timestamp it starts some lines with.
+            line = re.sub(r"\s+\S+\.py:\d+\s*$", "", line)
+            return re.sub(r"^\d\d:\d\d:\d\d\s+", "", line.strip()).strip()
+
+        lines = [text for text in map(clean, self.last_lines) if text]
+        errors = [text for text in lines
+                  if re.search(r"CRITICAL|ERROR|Error|Exception", text)]
+        if errors:
+            return errors[-1][:200]
+        return lines[-1][:200] if lines else "idtracker.ai gave no output"
 
 
 def run_tracking(video: Path, setup: Path,
@@ -206,7 +216,7 @@ def run_tracking(video: Path, setup: Path,
     the exit code: idtracker.ai exits with 0 whether or not tracking worked.
     """
     video = Path(video)
-    tail: deque = deque(maxlen=12)
+    tail: deque = deque(maxlen=60)
     stopped = [False]
 
     def line(text: str) -> None:
