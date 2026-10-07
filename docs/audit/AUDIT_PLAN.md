@@ -1,7 +1,7 @@
 # Audit Plan — zebrafish-free-swim-analyzer
 
 Stock-take written 2026-07-30 from a full read of the repo at `17fe96d`.
-The audit prompts live in [`audit/`](audit/) — one file per pass, each self-contained and ready to start a session with.
+The audit prompts live in [`audit/`](.) — one file per pass, each self-contained and ready to start a session with.
 
 ---
 
@@ -10,21 +10,21 @@ The audit prompts live in [`audit/`](audit/) — one file per pass, each self-co
 Open a fresh session with this repo as the working directory and say:
 
 ```
-Follow audit/PASS_A_reproducibility.md
+Follow docs/audit/PASS_A_reproducibility.md
 ```
 
 Every prompt carries the same shared rules: **report don't fix**, **verify don't inherit my reading**, **label every finding CONFIRMED or PLAUSIBLE**, and **report what's already fine** — a list of only problems says nothing about what's trustworthy. Each pass writes one findings file to the repo root.
 
 | Pass | Prompt | Focus | Status |
 |---|---|---|---|
-| **A** | [PASS_A_reproducibility.md](audit/PASS_A_reproducibility.md) | Environment, packaging, doc truth | ✅ **done** → [AUDIT_A_REPRODUCIBILITY.md](AUDIT_A_REPRODUCIBILITY.md), fixes applied, real-data addendum added |
-| **H** | [PASS_H_approach.md](audit/PASS_H_approach.md) | Is this the right approach at all | ✅ **done** → [AUDIT_H_APPROACH.md](AUDIT_H_APPROACH.md), verdict: build, don't rewrite |
-| **D** | [PASS_D_gui_architecture.md](audit/PASS_D_gui_architecture.md) | GUI structure, failure visibility | ✅ **done** → [AUDIT_D_GUI.md](AUDIT_D_GUI.md), 8 fixes applied + 15 regression tests |
-| **B** | [PASS_B_correctness.md](audit/PASS_B_correctness.md) | Are the exported numbers right | ✅ **done** → [AUDIT_B_CORRECTNESS.md](AUDIT_B_CORRECTNESS.md), 17 findings + 113 tests; **fully remediated** — 8 columns withdrawn, all 10 code findings fixed, no xfail left |
-| **E** | [PASS_E_integration.md](audit/PASS_E_integration.md) | Where head_detection / posture belong | ⏳ re-scoped — see amendment in the prompt |
-| **C** | [PASS_C_cleanliness.md](audit/PASS_C_cleanliness.md) | One source of truth + code cleanliness | 🔀 **folded** — see below |
-| **F** | [PASS_F_performance.md](audit/PASS_F_performance.md) | Speed, memory, hot paths | 🔀 **folded** — see below |
-| **G** | [PASS_G_ux.md](audit/PASS_G_ux.md) | What the researcher experiences | 🔀 **folded** — see below |
+| **A** | [PASS_A_reproducibility.md](PASS_A_reproducibility.md) | Environment, packaging, doc truth | ✅ **done** → [AUDIT_A_REPRODUCIBILITY.md](AUDIT_A_REPRODUCIBILITY.md), fixes applied, real-data addendum added |
+| **H** | [PASS_H_approach.md](PASS_H_approach.md) | Is this the right approach at all | ✅ **done** → [AUDIT_H_APPROACH.md](AUDIT_H_APPROACH.md), verdict: build, don't rewrite |
+| **D** | [PASS_D_gui_architecture.md](PASS_D_gui_architecture.md) | GUI structure, failure visibility | ✅ **done** → [AUDIT_D_GUI.md](AUDIT_D_GUI.md), 8 fixes applied + 15 regression tests |
+| **B** | [PASS_B_correctness.md](PASS_B_correctness.md) | Are the exported numbers right | ✅ **done** → [AUDIT_B_CORRECTNESS.md](AUDIT_B_CORRECTNESS.md), 17 findings + 113 tests; **fully remediated** — 8 columns withdrawn, all 10 code findings fixed, no xfail left |
+| **E** | [PASS_E_integration.md](PASS_E_integration.md) | Where head_detection / posture belong | ⏳ re-scoped — see amendment in the prompt |
+| **C** | [PASS_C_cleanliness.md](PASS_C_cleanliness.md) | One source of truth + code cleanliness | 🔀 **folded** — see below |
+| **F** | [PASS_F_performance.md](PASS_F_performance.md) | Speed, memory, hot paths | 🔀 **folded** — see below |
+| **G** | [PASS_G_ux.md](PASS_G_ux.md) | What the researcher experiences | 🔀 **folded** — see below |
 
 ## Revision, 2026-07-31 — the remaining plan is compressed
 
@@ -218,7 +218,7 @@ Plus `fish_analyzer/backup/gui.py.backup` — 3,318 lines of dead pre-refactor G
 
 ## Correctness questions I'd want answered before trusting an export
 
-Unverified suspicions from reading, not confirmed bugs. Full list in [PASS_B](audit/PASS_B_correctness.md); the ones that would change a published number:
+Unverified suspicions from reading, not confirmed bugs. Full list in [PASS_B](PASS_B_correctness.md); the ones that would change a published number:
 
 - **Calibration is bypassed in two analysis modules.** `shoaling.py:204` and `spatial.py:344` compute `1.0 / metadata.body_length` directly instead of using `calibration.scale_factor`. Calibrate in cm and individual metrics switch to cm while NND/IID/hull/thigmotaxis silently stay in body lengths — with export columns hardcoded `MeanNND_BL`, `HullArea_BL2`. Replicated ~6 more times in the GUI.
 - **Two independent speed pipelines.** `processing.py:309` uses `traja.get_derivatives()`; `bout_analysis.py:428` uses `np.diff`. Same `0.5` threshold applied to both.

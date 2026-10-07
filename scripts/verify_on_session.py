@@ -9,7 +9,7 @@ to end on real recordings: ``NetDisplacement`` was NaN for half the fish
 
 So the synthetic suite cannot be the only check. This script is the other
 half: point it at real sessions and it re-verifies every claim in
-AUDIT_B_CORRECTNESS.md that depends on real data. It contains no data and no
+docs/audit/AUDIT_B_CORRECTNESS.md that depends on real data. It contains no data and no
 paths — the sessions come from the command line.
 
     python scripts/verify_on_session.py <session_folder> [<session_folder> ...]
@@ -34,7 +34,7 @@ from fish_analyzer.processing import ProcessingParameters, process_and_analyze_f
 from fish_analyzer.shoaling import ShoalingCalculator, ShoalingParameters
 
 #: Columns Audit B withdrew. Their reappearance in an export means someone has
-#: restored a metric that measures centroid noise — see AUDIT_B_CORRECTNESS.md.
+#: restored a metric that measures centroid noise — see docs/audit/AUDIT_B_CORRECTNESS.md.
 WITHDRAWN = {
     "MeanAngularVelocity_deg_s", "ErraticMovementCount",
     "ErraticMovements_per_min", "BurstCount", "BurstMeanSpeed",

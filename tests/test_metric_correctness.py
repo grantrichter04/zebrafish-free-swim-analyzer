@@ -6,7 +6,7 @@ metric *should* return; they will start failing — loudly — the moment the
 underlying defect is fixed, which is the signal to delete the marker.
 
 Everything is synthetic. No real session data, no network, no disk writes.
-See AUDIT_B_CORRECTNESS.md for what each xfail means scientifically.
+See docs/audit/AUDIT_B_CORRECTNESS.md for what each xfail means scientifically.
 """
 import sys
 from pathlib import Path
@@ -179,9 +179,9 @@ def test_laterality_index_is_unbiased_under_symmetric_jitter():
 #
 # Audit B found eight columns to be readouts of idtracker.ai centroid noise
 # rather than of fish behaviour, and none of them is recoverable from centroid
-# data — see AUDIT_B_CORRECTNESS.md B1, B3 and B15. They were removed rather
+# data — see docs/audit/AUDIT_B_CORRECTNESS.md B1, B3 and B15. They were removed rather
 # than repaired. These two tests exist so they cannot drift back in unnoticed:
-# reintroducing any of them needs real head direction from head_detection/,
+# reintroducing any of them needs real head direction from extras/head_detection/,
 # plus a deliberate edit here.
 # -----------------------------------------------------------------------------
 

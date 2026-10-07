@@ -39,7 +39,7 @@ Both are correct; mixing them up shifts every event by a frame.
 ``backward_speed_slices`` and ``forward_speed_slices`` do that mapping so no
 caller has to get it right by hand.
 
-See AUDIT_B_CORRECTNESS.md findings B4, B5 and B6.
+See docs/audit/AUDIT_B_CORRECTNESS.md findings B4, B5 and B6.
 """
 
 from typing import List, Sequence, Tuple

@@ -26,7 +26,7 @@ Anything whose *consequence* needs a live window (flicker, freeze duration, even
 
 ## A1. The status bar is a write-only channel, and the history is unreachable — `CONFIRMED`
 
-`GUILogRedirector` ([base.py:25-63](fish_analyzer/gui/base.py:25)) keeps the last 100 lines in `self._log_lines` and exposes them via `get_log()`. **`get_log()` is defined once and called from nowhere** — a repo-wide grep for the name returns exactly one hit, the definition itself. The history is dead code; the only surface is `status_label.config(text=...)`, one line, last writer wins.
+`GUILogRedirector` ([base.py:25-63](../../fish_analyzer/gui/base.py:25)) keeps the last 100 lines in `self._log_lines` and exposes them via `get_log()`. **`get_log()` is defined once and called from nowhere** — a repo-wide grep for the name returns exactly one hit, the definition itself. The history is dead code; the only surface is `status_label.config(text=...)`, one line, last writer wins.
 
 Because `set_status()` and every `print()` write to the same single label, **any message survives only until the next one**. In a loop over files that is microseconds.
 
@@ -41,11 +41,11 @@ Tk.report_callback_exception  →  print("Exception in Tkinter callback", file=s
                                  traceback.print_exception(...)   # → stderr
 ```
 
-`_setup_log_redirect()` ([base.py:155-159](fish_analyzer/gui/base.py:155)) replaces **`sys.stdout` only**. `sys.stderr` is untouched. So an unhandled exception in any button command prints to a terminal the researcher probably does not have (double-click / `pythonw` launch = no console at all), the button appears to do nothing, and the app keeps running.
+`_setup_log_redirect()` ([base.py:155-159](../../fish_analyzer/gui/base.py:155)) replaces **`sys.stdout` only**. `sys.stderr` is untouched. So an unhandled exception in any button command prints to a terminal the researcher probably does not have (double-click / `pythonw` launch = no console at all), the button appears to do nothing, and the app keeps running.
 
 ## A3. Exceptions in matplotlib event handlers vanish the same way — `CONFIRMED`
 
-The arena editor's vertex-placing handler `_on_arena_click` ([spatial_tab.py:432](fish_analyzer/gui/spatial_tab.py:432)) is wired with `mpl_connect`. Verified against matplotlib 3.10.8:
+The arena editor's vertex-placing handler `_on_arena_click` ([spatial_tab.py:432](../../fish_analyzer/gui/spatial_tab.py:432)) is wired with `mpl_connect`. Verified against matplotlib 3.10.8:
 
 ```
 Figure.__init__            →  self._canvas_callbacks = cbook.CallbackRegistry(signals=...)
@@ -63,13 +63,13 @@ _exception_printer(exc)    →  if _get_running_interactive_framework() in ["hea
 
 ### Path 1 — an analysis raises during batch processing
 
-`Run All Analysis` → `_run_analysis()` ([data_tab.py:582-641](fish_analyzer/gui/data_tab.py:582)). Six files loaded, `process_and_analyze_file` raises on file 3:
+`Run All Analysis` → `_run_analysis()` ([data_tab.py:582-641](../../fish_analyzer/gui/data_tab.py:582)). Six files loaded, `process_and_analyze_file` raises on file 3:
 
 | Step | What happens | What the user sees |
 |---|---|---|
 | 1 | Files 1–2 processed, `loaded_file.processed_data` assigned | Status line flickers through per-file `[OK]` messages |
 | 2 | File 3 raises | — |
-| 3 | `except Exception` at [:634](fish_analyzer/gui/data_tab.py:634) sets status to `Error: ...`, then **immediately overwrites it** with `Analysis failed: ...` at [:636](fish_analyzer/gui/data_tab.py:636) | One grey status line, 9pt, at the bottom of the window |
+| 3 | `except Exception` at [:634](../../fish_analyzer/gui/data_tab.py:634) sets status to `Error: ...`, then **immediately overwrites it** with `Analysis failed: ...` at [:636](../../fish_analyzer/gui/data_tab.py:636) | One grey status line, 9pt, at the bottom of the window |
 | 4 | `traceback.print_exc()` → **stderr** → nowhere (§A2) | nothing |
 | 5 | `finally:` hides the progress bar | Progress bar disappears at 2/6, same as a normal finish |
 | 6 | `_update_analysis_files_listbox()` and `_update_analysis_visualizations()` are **inside the `try`** and are skipped | Plots still show the *previous* run |
@@ -77,7 +77,7 @@ _exception_printer(exc)    →  if _get_running_interactive_framework() in ["hea
 
 Files 4–6 keep `processed_data` from an earlier run, or `None`. `_export_individual_csv` filters on `if v.processed_data` — so a stale-but-truthy file **is exported**, mixed in with fresh ones, indistinguishable in the CSV. `CONFIRMED`.
 
-Nested inside this: `TrajectoryProcessor.process_all_fish` ([processing.py:182-192](fish_analyzer/processing.py:182)) catches per-fish exceptions and `print`s `Fish N: [FAILED]`, then `continue`s. That print lands on the status bar for microseconds before the next fish overwrites it. The surviving signal is the count in `[OK] {nickname}: {len(fish_list)}/{n_fish} fish analyzed` at [data_tab.py:620](fish_analyzer/gui/data_tab.py:620) — **which is itself overwritten by the next file's line**. With 6 files, only file 6's fish count is ever readable. `CONFIRMED`.
+Nested inside this: `TrajectoryProcessor.process_all_fish` ([processing.py:182-192](../../fish_analyzer/processing.py:182)) catches per-fish exceptions and `print`s `Fish N: [FAILED]`, then `continue`s. That print lands on the status bar for microseconds before the next fish overwrites it. The surviving signal is the count in `[OK] {nickname}: {len(fish_list)}/{n_fish} fish analyzed` at [data_tab.py:620](../../fish_analyzer/gui/data_tab.py:620) — **which is itself overwritten by the next file's line**. With 6 files, only file 6's fish count is ever readable. `CONFIRMED`.
 
 ### Path 2 — an exception inside the arena click handler
 
@@ -87,7 +87,7 @@ Spatial Analysis → select file → click on the arena canvas → `_on_arena_cl
 |---|---|---|
 | 1 | matplotlib catches it, calls `_exception_printer` | — |
 | 2 | Framework is `"tk"` → `traceback.print_exc()` → stderr | nothing |
-| 3 | Handler returns; `arena_vertices` is left **partially mutated** (the append at [:456](fish_analyzer/gui/spatial_tab.py:456) happens *before* the redraw that could fail) | no vertex marker drawn |
+| 3 | Handler returns; `arena_vertices` is left **partially mutated** (the append at [:456](../../fish_analyzer/gui/spatial_tab.py:456) happens *before* the redraw that could fail) | no vertex marker drawn |
 | 4 | User clicks again | a second invisible vertex is appended |
 | 5 | User gives up and clicks `Complete` | An arena is built from vertices the user never saw placed |
 
@@ -99,7 +99,7 @@ Spatial Analysis → select file → click on the arena canvas → `_on_arena_cl
 except Exception:
     pass  # Never let a render error break the animation chain
 ```
-[inspector_tab.py:740-741](fish_analyzer/gui/inspector_tab.py:740)
+[inspector_tab.py:740-741](../../fish_analyzer/gui/inspector_tab.py:740)
 
 This wraps `_update_inspector_info()` **and** `_inspector_update_fast()` — i.e. the entire render path including all overlay drawing. During playback, a render error produces **no output on any channel**: the frame counter keeps advancing, the image freezes on the last good frame, and there is no way to distinguish that from a video that happens to be still. This is the only `except: pass` in the codebase with no logging at all, and it sits on the most-watched code path.
 
@@ -108,21 +108,21 @@ This wraps `_update_inspector_info()` **and** `_inspector_update_fast()` — i.e
 | # | Route | Location | Visible to user? |
 |---|---|---|---|
 | 1 | Calibration change silently mislabels exported units | §C1 | **No** |
-| 2 | Per-fish processing failure → fish silently missing from export | [processing.py:190](fish_analyzer/processing.py:190) | Count on a status line that is then overwritten |
-| 3 | Per-file bout failure → file silently missing from `bout_results` | [bout_tab.py:313](fish_analyzer/gui/bout_tab.py:313) | `print` overwritten; final count says "N file(s)" without saying N of what |
+| 2 | Per-fish processing failure → fish silently missing from export | [processing.py:190](../../fish_analyzer/processing.py:190) | Count on a status line that is then overwritten |
+| 3 | Per-file bout failure → file silently missing from `bout_results` | [bout_tab.py:313](../../fish_analyzer/gui/bout_tab.py:313) | `print` overwritten; final count says "N file(s)" without saying N of what |
 | 4 | Batch analysis aborts mid-way → mixed fresh/stale state | §A4 path 1 | One status line, no dialog |
-| 5 | Render error during playback | [inspector_tab.py:740](fish_analyzer/gui/inspector_tab.py:740) | **No** |
+| 5 | Render error during playback | [inspector_tab.py:740](../../fish_analyzer/gui/inspector_tab.py:740) | **No** |
 | 6 | Any matplotlib event-handler error | §A3 | **No** |
-| 7 | `except Exception: density = np.zeros_like(x_grid)` in KDE plotting | [analysis_tab.py:659](fish_analyzer/gui/analysis_tab.py:659), [:747](fish_analyzer/gui/analysis_tab.py:747), [bout_tab.py:667](fish_analyzer/gui/bout_tab.py:667) | A flat ridge line reads as "this fish barely moved", not as "the KDE failed" |
+| 7 | `except Exception: density = np.zeros_like(x_grid)` in KDE plotting | [analysis_tab.py:659](../../fish_analyzer/gui/analysis_tab.py:659), [:747](../../fish_analyzer/gui/analysis_tab.py:747), [bout_tab.py:667](../../fish_analyzer/gui/bout_tab.py:667) | A flat ridge line reads as "this fish barely moved", not as "the KDE failed" |
 
 Route 7 deserves a note: a `gaussian_kde` failure (singular covariance — every value identical, e.g. a fish that never moved) is rendered as a **flat density curve indistinguishable from real data**. That is a plot a researcher could put in a figure.
 
 ## A7. Failure visibility — what is already right
 
-- The bout panel's **staleness banner** ([inspector_tab.py:1160-1176, 1240-1249](fish_analyzer/gui/inspector_tab.py:1160)) compares the current UI parameter values against `_bout_run_params` from the run that produced the displayed bouts, and turns the title firebrick red with `⚠ params changed — re-run analysis`. This is the correct pattern, correctly implemented. **It is the only place in the app that does this**, and §E recommends generalising exactly it.
-- `_export_bout_csv` writes the four detection parameters into every row ([bout_tab.py:948-960](fish_analyzer/gui/bout_tab.py:948)) — the only export with provenance.
-- `smoothing_failed` is tracked per fish and surfaced in the status bar ([data_tab.py:613-618](fish_analyzer/gui/data_tab.py:613)) — a deliberate fix for exactly this class of bug.
-- Shoaling reports per-file failures with a **modal** `showwarning` ([shoaling_tab.py:246](fish_analyzer/gui/shoaling_tab.py:246)) rather than a print. Spatial reports a `N/M files` success count ([spatial_tab.py:743](fish_analyzer/gui/spatial_tab.py:743)). Both are better than the bout and individual paths; they are the in-repo precedent to standardise on.
+- The bout panel's **staleness banner** ([inspector_tab.py:1160-1176, 1240-1249](../../fish_analyzer/gui/inspector_tab.py:1160)) compares the current UI parameter values against `_bout_run_params` from the run that produced the displayed bouts, and turns the title firebrick red with `⚠ params changed — re-run analysis`. This is the correct pattern, correctly implemented. **It is the only place in the app that does this**, and §E recommends generalising exactly it.
+- `_export_bout_csv` writes the four detection parameters into every row ([bout_tab.py:948-960](../../fish_analyzer/gui/bout_tab.py:948)) — the only export with provenance.
+- `smoothing_failed` is tracked per fish and surfaced in the status bar ([data_tab.py:613-618](../../fish_analyzer/gui/data_tab.py:613)) — a deliberate fix for exactly this class of bug.
+- Shoaling reports per-file failures with a **modal** `showwarning` ([shoaling_tab.py:246](../../fish_analyzer/gui/shoaling_tab.py:246)) rather than a print. Spatial reports a `N/M files` success count ([spatial_tab.py:743](../../fish_analyzer/gui/spatial_tab.py:743)). Both are better than the bout and individual paths; they are the in-repo precedent to standardise on.
 - Optional dependencies degrade gracefully with actionable messages (`Install with: pip install shapely`, `pip install opencv-python`), not tracebacks.
 
 ---
@@ -157,15 +157,15 @@ Eight calls cross mixin boundaries, five of them guarded by `hasattr`:
 
 | Caller → callee | Guard |
 |---|---|
-| data → `_refresh_bout_file_list`, `_run_bout_analysis` | `hasattr` ([data_tab.py:574](fish_analyzer/gui/data_tab.py:574)) |
+| data → `_refresh_bout_file_list`, `_run_bout_analysis` | `hasattr` ([data_tab.py:574](../../fish_analyzer/gui/data_tab.py:574)) |
 | data → `_update_analysis_files_listbox`, `_update_analysis_visualizations` | unguarded |
 | data, shoaling → `_update_shoaling_file_dropdown` | unguarded |
-| shoaling → `_update_inspector_file_dropdown`, `_update_analysis_files_listbox`, `_update_spatial_file_dropdown` | `hasattr` ([shoaling_tab.py:192-201](fish_analyzer/gui/shoaling_tab.py:192)) |
+| shoaling → `_update_inspector_file_dropdown`, `_update_analysis_files_listbox`, `_update_spatial_file_dropdown` | `hasattr` ([shoaling_tab.py:192-201](../../fish_analyzer/gui/shoaling_tab.py:192)) |
 | bout, shoaling → `_inspector_rebuild_needed` | `hasattr` |
 
 `_update_shoaling_file_dropdown` is misnamed: it is the fan-out that refreshes **every** tab's file widget, and it lives in the shoaling mixin. That is the one genuine layering violation.
 
-The `hasattr` guards are defensive against a class composition that is fixed at import time in `gui/__init__.py:29` — all six mixins are always present. They can never be false. `spatial_tab` goes further and `hasattr`-guards **its own** attributes ([:319](fish_analyzer/gui/spatial_tab.py:319), [:688](fish_analyzer/gui/spatial_tab.py:688), [:820](fish_analyzer/gui/spatial_tab.py:820), [:897](fish_analyzer/gui/spatial_tab.py:897), [:1021](fish_analyzer/gui/spatial_tab.py:1021)) — all created unconditionally in `_create_spatial_controls`. This is cargo-cult defensiveness that makes real bugs (an attribute genuinely missing because construction order changed) fail silently into a default instead of loudly.
+The `hasattr` guards are defensive against a class composition that is fixed at import time in `gui/__init__.py:29` — all six mixins are always present. They can never be false. `spatial_tab` goes further and `hasattr`-guards **its own** attributes ([:319](../../fish_analyzer/gui/spatial_tab.py:319), [:688](../../fish_analyzer/gui/spatial_tab.py:688), [:820](../../fish_analyzer/gui/spatial_tab.py:820), [:897](../../fish_analyzer/gui/spatial_tab.py:897), [:1021](../../fish_analyzer/gui/spatial_tab.py:1021)) — all created unconditionally in `_create_spatial_controls`. This is cargo-cult defensiveness that makes real bugs (an attribute genuinely missing because construction order changed) fail silently into a default instead of loudly.
 
 ### Was commit `9ad0345` a cluster of cross-mixin state bugs?
 
@@ -178,7 +178,7 @@ The `hasattr` guards are defensive against a class composition that is fixed at 
 | Inspector status "Rebuilding inspector…" | **Missing progress feedback** (§D) |
 | `smoothing_failed` surfaced in status bar | **Failure visibility** (§A) |
 
-Three of four are the subject of *this* section, not of mixin aliasing. The one GUI-structural fix (#3) added the `set_status` + `update_idletasks` at [inspector_tab.py:936-937](fish_analyzer/gui/inspector_tab.py:936) that, because of §D1, now fires on *every single frame*. The bug clusters in this repo come from invisible failure and stale derived state, not from shared `self`.
+Three of four are the subject of *this* section, not of mixin aliasing. The one GUI-structural fix (#3) added the `set_status` + `update_idletasks` at [inspector_tab.py:936-937](../../fish_analyzer/gui/inspector_tab.py:936) that, because of §D1, now fires on *every single frame*. The bug clusters in this repo come from invisible failure and stale derived state, not from shared `self`.
 
 ---
 
@@ -194,13 +194,13 @@ Each of these is a sequence a researcher can actually perform. **None of the inv
 3. Individual Analysis tab → Export Results to CSV
 ```
 
-- `_apply_calibration` ([data_tab.py:519](fish_analyzer/gui/data_tab.py:519)) assigns `loaded_file.calibration = calibration` and touches nothing else. `processed_data` is untouched.
-- Scaling is applied **at processing time**: `transformed = transformed * self.file.calibration.scale_factor` ([processing.py:266](fish_analyzer/processing.py:266)). The stored metrics are still in BL.
-- The unit label is read **at export time**: `unit = loaded_file.calibration.unit_name` ([export.py:60](fish_analyzer/export.py:60), [:215](fish_analyzer/export.py:215)).
+- `_apply_calibration` ([data_tab.py:519](../../fish_analyzer/gui/data_tab.py:519)) assigns `loaded_file.calibration = calibration` and touches nothing else. `processed_data` is untouched.
+- Scaling is applied **at processing time**: `transformed = transformed * self.file.calibration.scale_factor` ([processing.py:266](../../fish_analyzer/processing.py:266)). The stored metrics are still in BL.
+- The unit label is read **at export time**: `unit = loaded_file.calibration.unit_name` ([export.py:60](../../fish_analyzer/export.py:60), [:215](../../fish_analyzer/export.py:215)).
 
-**Result: a CSV whose `Unit` column says `cm` over numbers in body lengths.** No warning, no dialog, no status message. The same mismatch appears in the summary tables (`Distance (cm)` header over BL values, [analysis_tab.py:268](fish_analyzer/gui/analysis_tab.py:268)) and in the Methods panel (`Scale factor: 0.041667 cm/px`, describing a scale factor that was never used).
+**Result: a CSV whose `Unit` column says `cm` over numbers in body lengths.** No warning, no dialog, no status message. The same mismatch appears in the summary tables (`Distance (cm)` header over BL values, [analysis_tab.py:268](../../fish_analyzer/gui/analysis_tab.py:268)) and in the Methods panel (`Scale factor: 0.041667 cm/px`, describing a scale factor that was never used).
 
-The trajectory plot is the *only* place the user could notice: `_plot_trajectory_view` sets `xlim` from the **new** `scale_factor` ([analysis_tab.py:937-939](fish_analyzer/gui/analysis_tab.py:937)) while plotting **old** coordinates, so the trajectories collapse into a corner of the axes. That visual glitch is the sole hint that anything is wrong.
+The trajectory plot is the *only* place the user could notice: `_plot_trajectory_view` sets `xlim` from the **new** `scale_factor` ([analysis_tab.py:937-939](../../fish_analyzer/gui/analysis_tab.py:937)) while plotting **old** coordinates, so the trajectories collapse into a corner of the axes. That visual glitch is the sole hint that anything is wrong.
 
 ## C2. Remove a file, then export bouts → data from the removed file is exported — `CONFIRMED`
 
@@ -210,9 +210,9 @@ The trajectory plot is the *only* place the user could notice: `_plot_trajectory
 3. Bout tab → Export Bout Data to CSV
 ```
 
-`_remove_file` ([data_tab.py:434-448](fish_analyzer/gui/data_tab.py:434)) deletes from `loaded_files` **only**. It leaves behind: `bout_results['A']`, `file_arena_definitions['A']`, `file_roi_definitions['A']`, `file_groups['A']`, and `video_readers['A']` (an open `cv2.VideoCapture` plus its frame cache — never `.close()`d; the only `close()` call in the repo is [inspector_tab.py:865](fish_analyzer/gui/inspector_tab.py:865), on video *replacement*).
+`_remove_file` ([data_tab.py:434-448](../../fish_analyzer/gui/data_tab.py:434)) deletes from `loaded_files` **only**. It leaves behind: `bout_results['A']`, `file_arena_definitions['A']`, `file_roi_definitions['A']`, `file_groups['A']`, and `video_readers['A']` (an open `cv2.VideoCapture` plus its frame cache — never `.close()`d; the only `close()` call in the repo is [inspector_tab.py:865](../../fish_analyzer/gui/inspector_tab.py:865), on video *replacement*).
 
-`_export_bout_csv` iterates `self.bout_results.items()` directly ([bout_tab.py:919](fish_analyzer/gui/bout_tab.py:919)), so A's bouts are written out. Worse, `loaded_file = self.loaded_files.get(filename)` returns `None`, and the code falls back to `fps = 30.0` / `unit = "BL"` ([bout_tab.py:921-924](fish_analyzer/gui/bout_tab.py:921)). **If the recording was not 30 fps, every `BoutStartTime_s` and `Duration_ms` for that file is silently wrong** — the fallback exists precisely to avoid crashing, and so guarantees a wrong number instead of an error.
+`_export_bout_csv` iterates `self.bout_results.items()` directly ([bout_tab.py:919](../../fish_analyzer/gui/bout_tab.py:919)), so A's bouts are written out. Worse, `loaded_file = self.loaded_files.get(filename)` returns `None`, and the code falls back to `fps = 30.0` / `unit = "BL"` ([bout_tab.py:921-924](../../fish_analyzer/gui/bout_tab.py:921)). **If the recording was not 30 fps, every `BoutStartTime_s` and `Duration_ms` for that file is silently wrong** — the fallback exists precisely to avoid crashing, and so guarantees a wrong number instead of an error.
 
 ## C3. Reload a session under an existing nickname → the old video is kept — `CONFIRMED`
 
@@ -222,19 +222,19 @@ The trajectory plot is the *only* place the user could notice: `_plot_trajectory
 3. Video Inspector → select Control_01
 ```
 
-`_load_session_folder` ([data_tab.py:336](fish_analyzer/gui/data_tab.py:336)) replaces the `loaded_files` entry. `video_readers['Control_01']` still holds the **old** reader, and `_inspector_try_auto_load_video` short-circuits on `if selected in self.video_readers: return True` ([inspector_tab.py:794](fish_analyzer/gui/inspector_tab.py:794)). The inspector then draws the new session's trajectory dots on the old session's video frames. `file_arena_definitions`, `file_groups` and `bout_results` are inherited the same way.
+`_load_session_folder` ([data_tab.py:336](../../fish_analyzer/gui/data_tab.py:336)) replaces the `loaded_files` entry. `video_readers['Control_01']` still holds the **old** reader, and `_inspector_try_auto_load_video` short-circuits on `if selected in self.video_readers: return True` ([inspector_tab.py:794](../../fish_analyzer/gui/inspector_tab.py:794)). The inspector then draws the new session's trajectory dots on the old session's video frames. `file_arena_definitions`, `file_groups` and `bout_results` are inherited the same way.
 
 ## C4. Arena drawn on file A, applied to file B of different dimensions — `CONFIRMED`
 
-`_apply_arena_to_selected` ([spatial_tab.py:633-636](fish_analyzer/gui/spatial_tab.py:633)) does `self.file_arena_definitions[filename] = self.arena_definition.copy()` with **no check** on `video_width`, `video_height` or `body_length`.
+`_apply_arena_to_selected` ([spatial_tab.py:633-636](../../fish_analyzer/gui/spatial_tab.py:633)) does `self.file_arena_definitions[filename] = self.arena_definition.copy()` with **no check** on `video_width`, `video_height` or `body_length`.
 
-Arena vertices are stored in body lengths, derived from A's `body_length` and Y-flipped with A's `video_height` ([spatial_tab.py:535-539](fish_analyzer/gui/spatial_tab.py:535)). Applied to B, the polygon lands somewhere else entirely — and if B's fish are larger (smaller BL-space arena), the polygon may not even enclose the trajectories, in which case thigmotaxis reports a plausible-looking percentage computed against a wrong boundary. The dialog reports success: `Arena copied to N additional file(s)`.
+Arena vertices are stored in body lengths, derived from A's `body_length` and Y-flipped with A's `video_height` ([spatial_tab.py:535-539](../../fish_analyzer/gui/spatial_tab.py:535)). Applied to B, the polygon lands somewhere else entirely — and if B's fish are larger (smaller BL-space arena), the polygon may not even enclose the trajectories, in which case thigmotaxis reports a plausible-looking percentage computed against a wrong boundary. The dialog reports success: `Arena copied to N additional file(s)`.
 
-The same silent cross-file copy happens for ROIs, without even a button: `_run_roi_analysis` ([spatial_tab.py:756-761](fish_analyzer/gui/spatial_tab.py:756)) applies `self.roi_definition` to every selected file that lacks one.
+The same silent cross-file copy happens for ROIs, without even a button: `_run_roi_analysis` ([spatial_tab.py:756-761](../../fish_analyzer/gui/spatial_tab.py:756)) applies `self.roi_definition` to every selected file that lacks one.
 
 ## C5. The Methods paragraph reports default parameters, not the ones used — `CONFIRMED`
 
-`_run_analysis` builds parameters from the GUI into a **local** variable and passes them to the processor ([data_tab.py:589, 610](fish_analyzer/gui/data_tab.py:589)). It never assigns them to `self.processing_params`. AST confirms `processing_params` has exactly one store in the entire package — `ProcessingParameters.default_for_fish()` at [base.py:88](fish_analyzer/gui/base.py:88) — and one load, at [analysis_tab.py:1022](fish_analyzer/gui/analysis_tab.py:1022), which is the Methods text generator.
+`_run_analysis` builds parameters from the GUI into a **local** variable and passes them to the processor ([data_tab.py:589, 610](../../fish_analyzer/gui/data_tab.py:589)). It never assigns them to `self.processing_params`. AST confirms `processing_params` has exactly one store in the entire package — `ProcessingParameters.default_for_fish()` at [base.py:88](../../fish_analyzer/gui/base.py:88) — and one load, at [analysis_tab.py:1022](../../fish_analyzer/gui/analysis_tab.py:1022), which is the Methods text generator.
 
 So: tick **Apply Savitzky-Golay smoothing**, set the rest threshold to 1.0, run the analysis — and the Methods tab, whose stated purpose is *"a draft paragraph … suitable for a manuscript methods section"*, reports `Smoothing: OFF` and `Rest speed threshold: 0.5`. The numbers in the table are correct; the description of how they were produced is not.
 
@@ -242,13 +242,13 @@ This is a one-line fix (`self.processing_params = params`) and it should be the 
 
 ## C6. Partial re-runs leave mismatched result sets across tabs — `CONFIRMED`
 
-- `_run_bout_analysis` calls `self.bout_results.clear()` ([bout_tab.py:305](fish_analyzer/gui/bout_tab.py:305)) then repopulates **only the selected files**. Run bouts on A only, then `Export Combined Summary (per fish)`: the "Bout data missing" prompt at [analysis_tab.py:1132](fish_analyzer/gui/analysis_tab.py:1132) only fires when `bout_results` is *entirely* empty. With A present, B..N are exported with blank `Bout_*` columns and **no warning at all**.
-- `_export_shoaling_csv` and `_export_thigmotaxis_csv` export **every** file that has a result attached ([shoaling_tab.py:496](fish_analyzer/gui/shoaling_tab.py:496), [spatial_tab.py:1276](fish_analyzer/gui/spatial_tab.py:1276)), regardless of which files were selected for the last run. Change the sample interval, re-run on a subset, export → one CSV containing rows computed under two different parameter sets, with no column distinguishing them.
+- `_run_bout_analysis` calls `self.bout_results.clear()` ([bout_tab.py:305](../../fish_analyzer/gui/bout_tab.py:305)) then repopulates **only the selected files**. Run bouts on A only, then `Export Combined Summary (per fish)`: the "Bout data missing" prompt at [analysis_tab.py:1132](../../fish_analyzer/gui/analysis_tab.py:1132) only fires when `bout_results` is *entirely* empty. With A present, B..N are exported with blank `Bout_*` columns and **no warning at all**.
+- `_export_shoaling_csv` and `_export_thigmotaxis_csv` export **every** file that has a result attached ([shoaling_tab.py:496](../../fish_analyzer/gui/shoaling_tab.py:496), [spatial_tab.py:1276](../../fish_analyzer/gui/spatial_tab.py:1276)), regardless of which files were selected for the last run. Change the sample interval, re-run on a subset, export → one CSV containing rows computed under two different parameter sets, with no column distinguishing them.
 - Re-running `Run All Analysis` does not clear `shoaling_results` or `thigmotaxis_results`, which were computed from the previous trajectories.
 
 ## C7. Analysis units and displayed units can disagree between tabs — `CONFIRMED` (cross-reference to Pass B)
 
-The inspector's NND/IID overlay labels use `loaded.calibration.scale_factor` ([inspector_tab.py:1306, 1525, 1566](fish_analyzer/gui/inspector_tab.py:1306)), while `ShoalingCalculator` computes `1.0 / metadata.body_length` ([shoaling.py:204](fish_analyzer/shoaling.py:204)) and `ThigmotaxisCalculator` does the same ([spatial.py:344](fish_analyzer/spatial.py:344)). Calibrate in cm and **the number drawn on the video frame and the number in the shoaling table are in different units**, while the table header and the plot axis both say `BL` (hardcoded at [shoaling_tab.py:280-282, 331, 373, 416](fish_analyzer/gui/shoaling_tab.py:280)). The GUI replicates the `1.0 / body_length` bypass in six further places in `spatial_tab.py` ([:385](fish_analyzer/gui/spatial_tab.py:385), [:535](fish_analyzer/gui/spatial_tab.py:535), [:783](fish_analyzer/gui/spatial_tab.py:783), [:1049](fish_analyzer/gui/spatial_tab.py:1049), [:1104](fish_analyzer/gui/spatial_tab.py:1104)) and once in `inspector_tab.py` ([:993](fish_analyzer/gui/inspector_tab.py:993)).
+The inspector's NND/IID overlay labels use `loaded.calibration.scale_factor` ([inspector_tab.py:1306, 1525, 1566](../../fish_analyzer/gui/inspector_tab.py:1306)), while `ShoalingCalculator` computes `1.0 / metadata.body_length` ([shoaling.py:204](../../fish_analyzer/shoaling.py:204)) and `ThigmotaxisCalculator` does the same ([spatial.py:344](../../fish_analyzer/spatial.py:344)). Calibrate in cm and **the number drawn on the video frame and the number in the shoaling table are in different units**, while the table header and the plot axis both say `BL` (hardcoded at [shoaling_tab.py:280-282, 331, 373, 416](../../fish_analyzer/gui/shoaling_tab.py:280)). The GUI replicates the `1.0 / body_length` bypass in six further places in `spatial_tab.py` ([:385](../../fish_analyzer/gui/spatial_tab.py:385), [:535](../../fish_analyzer/gui/spatial_tab.py:535), [:783](../../fish_analyzer/gui/spatial_tab.py:783), [:1049](../../fish_analyzer/gui/spatial_tab.py:1049), [:1104](../../fish_analyzer/gui/spatial_tab.py:1104)) and once in `inspector_tab.py` ([:993](../../fish_analyzer/gui/inspector_tab.py:993)).
 
 The fix belongs to Pass B/C; recorded here because the *user-visible symptom* is two contradictory numbers on screen at once.
 
@@ -258,19 +258,19 @@ The fix belongs to Pass B/C; recorded here because the *user-visible symptom* is
 
 ## D1. The inspector rebuilds its entire widget tree on every frame in the default configuration — `CONFIRMED`
 
-`_inspector_update_fast` decides whether to rebuild from `self._insp_fig is None` ([inspector_tab.py:926-933](fish_analyzer/gui/inspector_tab.py:926)). But `_insp_fig` is set to `None` at the top of `_inspector_rebuild_figure` ([:974](fish_analyzer/gui/inspector_tab.py:974)) and **only reassigned inside `if show_time:`** ([:1030](fish_analyzer/gui/inspector_tab.py:1030)).
+`_inspector_update_fast` decides whether to rebuild from `self._insp_fig is None` ([inspector_tab.py:926-933](../../fish_analyzer/gui/inspector_tab.py:926)). But `_insp_fig` is set to `None` at the top of `_inspector_rebuild_figure` ([:974](../../fish_analyzer/gui/inspector_tab.py:974)) and **only reassigned inside `if show_time:`** ([:1030](../../fish_analyzer/gui/inspector_tab.py:1030)).
 
-`show_time = time_mode != "none"`, and the Time Panel radio defaults to `"none"` ([:407](fish_analyzer/gui/inspector_tab.py:407)). **So with default settings `_insp_fig` is permanently `None`, and every slider tick, every playback step, and every trail-slider drag destroys and rebuilds the whole display panel** — `winfo_children()` destroy, new `tk.Canvas`, new `<Configure>` binding, re-read of the background PNG from disk via `plt.imread` ([:1096](fish_analyzer/gui/inspector_tab.py:1096)).
+`show_time = time_mode != "none"`, and the Time Panel radio defaults to `"none"` ([:407](../../fish_analyzer/gui/inspector_tab.py:407)). **So with default settings `_insp_fig` is permanently `None`, and every slider tick, every playback step, and every trail-slider drag destroys and rebuilds the whole display panel** — `winfo_children()` destroy, new `tk.Canvas`, new `<Configure>` binding, re-read of the background PNG from disk via `plt.imread` ([:1096](../../fish_analyzer/gui/inspector_tab.py:1096)).
 
-It also means the `set_status("Rebuilding inspector...")` + `root.update_idletasks()` added by commit `9ad0345` ([:936-937](fish_analyzer/gui/inspector_tab.py:936)) executes on every frame — a synchronous event-loop pump inside the render path.
+It also means the `set_status("Rebuilding inspector...")` + `root.update_idletasks()` added by commit `9ad0345` ([:936-937](../../fish_analyzer/gui/inspector_tab.py:936)) executes on every frame — a synchronous event-loop pump inside the render path.
 
-Consequences that need a live run to quantify (`PLAUSIBLE`): visible flicker during playback, background image re-decoded per frame, and a possible **rebuild feedback loop** — `_on_inspector_resize` schedules `_resume` → `_inspector_update_fast` → rebuild → destroys the canvas that fired `<Configure>` → new canvas → new `<Configure>` → `_on_inspector_resize` again ([:1025, :704](fish_analyzer/gui/inspector_tab.py:1025)).
+Consequences that need a live run to quantify (`PLAUSIBLE`): visible flicker during playback, background image re-decoded per frame, and a possible **rebuild feedback loop** — `_on_inspector_resize` schedules `_resume` → `_inspector_update_fast` → rebuild → destroys the canvas that fired `<Configure>` → new canvas → new `<Configure>` → `_on_inspector_resize` again ([:1025, :704](../../fish_analyzer/gui/inspector_tab.py:1025)).
 
 One-line fix: assign `self._insp_fig` unconditionally, or track rebuild-needed in a dedicated `self._insp_needs_rebuild` flag rather than overloading a figure handle as a sentinel.
 
 ## D2. `root.update()` inside the processing loop is a genuine reentrancy hazard — `CONFIRMED` (mechanism) / `PLAUSIBLE` (consequence)
 
-[data_tab.py:601, 608, 622](fish_analyzer/gui/data_tab.py:601) call `self.root.update()` — not `update_idletasks()`. `update()` processes the **full** event queue including user input. The `Run All Analysis` button is never disabled, so a second click during processing re-enters `_run_analysis_and_switch_tab` from inside the first call's loop. Both invocations then write `loaded_file.processed_data` for the same objects and both run the `finally: pack_forget()`. The inner call also fires `_run_bout_analysis`, which calls `self.bout_results.clear()` while the outer call is still iterating.
+[data_tab.py:601, 608, 622](../../fish_analyzer/gui/data_tab.py:601) call `self.root.update()` — not `update_idletasks()`. `update()` processes the **full** event queue including user input. The `Run All Analysis` button is never disabled, so a second click during processing re-enters `_run_analysis_and_switch_tab` from inside the first call's loop. Both invocations then write `loaded_file.processed_data` for the same objects and both run the `finally: pack_forget()`. The inner call also fires `_run_bout_analysis`, which calls `self.bout_results.clear()` while the outer call is still iterating.
 
 Every other button in the app is live during this window too — including `Remove` (mutating `loaded_files` while `_run_analysis` iterates it → `RuntimeError: dictionary changed size during iteration`, which lands in §A4 path 1).
 
@@ -278,7 +278,7 @@ The minimal fix is not threading: disable the button (`config(state=DISABLED)`) 
 
 ## D3. Thigmotaxis has no progress feedback of any kind — `CONFIRMED`
 
-The only `ttk.Progressbar` in the repo is `analysis_progress` in `data_tab.py`. The thigmotaxis batch loop ([spatial_tab.py:715-732](fish_analyzer/gui/spatial_tab.py:715)) contains **no `set_status`, no `update()`, no progress bar** — nothing between "user clicks Run Analysis" and the completion dialog. Given Pass F's finding that thigmotaxis is a Python double loop constructing a shapely `Point` per fish per frame (~360k `contains()` calls for a 6-fish 30k-frame recording), the window will be marked *Not Responding* by Windows for the whole run. The user's only feedback is a frozen window.
+The only `ttk.Progressbar` in the repo is `analysis_progress` in `data_tab.py`. The thigmotaxis batch loop ([spatial_tab.py:715-732](../../fish_analyzer/gui/spatial_tab.py:715)) contains **no `set_status`, no `update()`, no progress bar** — nothing between "user clicks Run Analysis" and the completion dialog. Given Pass F's finding that thigmotaxis is a Python double loop constructing a shapely `Point` per fish per frame (~360k `contains()` calls for a 6-fish 30k-frame recording), the window will be marked *Not Responding* by Windows for the whole run. The user's only feedback is a frozen window.
 
 ## D4. Threading vs cooperative chunking — one recommendation
 
@@ -293,7 +293,7 @@ Reasoning:
 
 Concretely: one `_with_progress(items, label)` generator in `gui/utils.py` that disables a given button, shows the progress bar, yields each item, calls `set_status` + `update_idletasks()` between items, and restores state in a `finally`. Applied to the four batch loops (individual, bout, shoaling, spatial), that is ~30 lines of helper replacing ~40 lines of ad-hoc pumping, and it fixes D2 and D3 together.
 
-The one place threading is genuinely warranted is video frame reading — where it already exists, and where Pass F reports an unsynchronised `cv2.VideoCapture` shared between `_preload_worker` and the main thread ([video_utils.py:227-230](fish_analyzer/video_utils.py:227)). That is a correctness bug in the inspector, and it is the reason to be conservative about adding more threads here.
+The one place threading is genuinely warranted is video frame reading — where it already exists, and where Pass F reports an unsynchronised `cv2.VideoCapture` shared between `_preload_worker` and the main thread ([video_utils.py:227-230](../../fish_analyzer/video_utils.py:227)). That is a correctness bug in the inspector, and it is the reason to be conservative about adding more threads here.
 
 ## D5. Decomposition proposals
 
@@ -301,26 +301,26 @@ The one place threading is genuinely warranted is video frame reading — where 
 
 | Proposed module | Lines | Content | Why |
 |---|---|---|---|
-| **`inspector_render.py`** | ~250 | `_inspector_draw_cv2`, `_inspector_draw_numpy`, `_inspector_update_zoom`, `_rgba_to_bgr`, `_rgba_to_rgb_uint8` ([:1466-1683](fish_analyzer/gui/inspector_tab.py:1466)) | **Do this one.** These are pure functions over numpy arrays — they mutate `display` in place and return nothing. Their *only* contact with `self` is reading tk `BooleanVar`s. Hoist those into an `OverlayOptions` dataclass at the call site and the whole block becomes GUI-free and **unit-testable** (assert a dot lands at the right pixel, assert NND label text). It is the one part of the inspector with real logic, and today none of it can be tested. |
-| `inspector_controls.py` | ~420 | `_make_collapsible`, `_create_inspector_controls`, `_create_inspector_display` ([:49-466](fish_analyzer/gui/inspector_tab.py:49)) | Pure widget construction, zero logic. Splitting it is cosmetic but it is 25% of the file and it is what you scroll past to reach anything interesting. |
-| `inspector_playback.py` | ~220 | Frame index, jump, step, play/pause, resize debounce ([:529-750](fish_analyzer/gui/inspector_tab.py:529)) | A self-contained state machine over `(frame_var, step, after_id)`. Also where D1's rebuild-flag bug lives. |
+| **`inspector_render.py`** | ~250 | `_inspector_draw_cv2`, `_inspector_draw_numpy`, `_inspector_update_zoom`, `_rgba_to_bgr`, `_rgba_to_rgb_uint8` ([:1466-1683](../../fish_analyzer/gui/inspector_tab.py:1466)) | **Do this one.** These are pure functions over numpy arrays — they mutate `display` in place and return nothing. Their *only* contact with `self` is reading tk `BooleanVar`s. Hoist those into an `OverlayOptions` dataclass at the call site and the whole block becomes GUI-free and **unit-testable** (assert a dot lands at the right pixel, assert NND label text). It is the one part of the inspector with real logic, and today none of it can be tested. |
+| `inspector_controls.py` | ~420 | `_make_collapsible`, `_create_inspector_controls`, `_create_inspector_display` ([:49-466](../../fish_analyzer/gui/inspector_tab.py:49)) | Pure widget construction, zero logic. Splitting it is cosmetic but it is 25% of the file and it is what you scroll past to reach anything interesting. |
+| `inspector_playback.py` | ~220 | Frame index, jump, step, play/pause, resize debounce ([:529-750](../../fish_analyzer/gui/inspector_tab.py:529)) | A self-contained state machine over `(frame_var, step, after_id)`. Also where D1's rebuild-flag bug lives. |
 | remains in `inspector_tab.py` | ~700 | File selection, video source management, `_inspector_update_fast`, `_rebuild_figure`, `_build_bout_panels`, `_update_dynamic` | Coherent: this is "own the figure lifecycle". |
 
 ### `spatial_tab.py` — 1,299 lines → one clean lift, one merge
 
 | Proposed module | Lines | Content | Why |
 |---|---|---|---|
-| **`spatial_heatmaps.py`** | ~145 | `_generate_comparison_heatmaps`, `_plot_combined_heatmaps`, `_plot_individual_fish_heatmaps` ([:1003-1147](fish_analyzer/gui/spatial_tab.py:1003)) | Zero dependency on arena, thigmotaxis or ROI state — needs only `(loaded_file, grid_size, mode, shared_scale)`. Clean lift, no untangling. |
-| `arena_editor.py` | ~290 | `_setup_arena_canvas_for_file` … `_draw_rectangle_arena` ([:372-661](fish_analyzer/gui/spatial_tab.py:372)) | A self-contained interactive polygon editor. Worth isolating **because it is the thing that most needs to be reused** — the plan identifies re-drawing arenas every session as the single largest time cost in the tool, so persistence will be built on top of this. |
-| **merge, don't split** | ~150 | ROI mode ([:1163-1209](fish_analyzer/gui/spatial_tab.py:1163), [:746-815](fish_analyzer/gui/spatial_tab.py:746)) | The ROI code is a **second, parallel implementation** of polygon drawing and point-in-polygon analysis, bolted onto the arena canvas via a `_roi_drawing_mode` flag checked inside `_on_arena_click`. Splitting it out would preserve the duplication. Fold it into `arena_editor.py` as "draw a polygon, tagged arena or ROI". |
+| **`spatial_heatmaps.py`** | ~145 | `_generate_comparison_heatmaps`, `_plot_combined_heatmaps`, `_plot_individual_fish_heatmaps` ([:1003-1147](../../fish_analyzer/gui/spatial_tab.py:1003)) | Zero dependency on arena, thigmotaxis or ROI state — needs only `(loaded_file, grid_size, mode, shared_scale)`. Clean lift, no untangling. |
+| `arena_editor.py` | ~290 | `_setup_arena_canvas_for_file` … `_draw_rectangle_arena` ([:372-661](../../fish_analyzer/gui/spatial_tab.py:372)) | A self-contained interactive polygon editor. Worth isolating **because it is the thing that most needs to be reused** — the plan identifies re-drawing arenas every session as the single largest time cost in the tool, so persistence will be built on top of this. |
+| **merge, don't split** | ~150 | ROI mode ([:1163-1209](../../fish_analyzer/gui/spatial_tab.py:1163), [:746-815](../../fish_analyzer/gui/spatial_tab.py:746)) | The ROI code is a **second, parallel implementation** of polygon drawing and point-in-polygon analysis, bolted onto the arena canvas via a `_roi_drawing_mode` flag checked inside `_on_arena_click`. Splitting it out would preserve the duplication. Fold it into `arena_editor.py` as "draw a polygon, tagged arena or ROI". |
 
-Also delete the two orphan widgets at [:78-79](fish_analyzer/gui/spatial_tab.py:78) — `spatial_compare_listbox = tk.Listbox(tk.Frame())` is parented to a throwaway frame, never packed, never read. Same for `roi_analysis_done` ([:809](fish_analyzer/gui/spatial_tab.py:809)), an attribute injected onto `LoadedTrajectoryFile` and read nowhere.
+Also delete the two orphan widgets at [:78-79](../../fish_analyzer/gui/spatial_tab.py:78) — `spatial_compare_listbox = tk.Listbox(tk.Frame())` is parented to a throwaway frame, never packed, never read. Same for `roi_analysis_done` ([:809](../../fish_analyzer/gui/spatial_tab.py:809)), an attribute injected onto `LoadedTrajectoryFile` and read nowhere.
 
 ### `analysis_tab.py` — 1,163 lines → **one lift, then leave it alone**
 
 | Proposed module | Lines | Content |
 |---|---|---|
-| `distribution_plots.py` | ~285 | `_plot_speed_histograms`, `_plot_speed_ridge`, `_plot_speed_collapsed_ridge`, `_plot_speed_collapsed_histograms`, `_build_collapsed_info` ([:487-816](fish_analyzer/gui/analysis_tab.py:487)) — a ridge/histogram library over `[(label, values, color, unit)]`, already written to that shape. `bout_tab.py`'s `_plot_bout_ridge` ([:569-716](fish_analyzer/gui/bout_tab.py:569)) is a fourth copy of the same layout maths and should call it. |
+| `distribution_plots.py` | ~285 | `_plot_speed_histograms`, `_plot_speed_ridge`, `_plot_speed_collapsed_ridge`, `_plot_speed_collapsed_histograms`, `_build_collapsed_info` ([:487-816](../../fish_analyzer/gui/analysis_tab.py:487)) — a ridge/histogram library over `[(label, values, color, unit)]`, already written to that shape. `bout_tab.py`'s `_plot_bout_ridge` ([:569-716](../../fish_analyzer/gui/bout_tab.py:569)) is a fourth copy of the same layout maths and should call it. |
 
 The remaining ~880 lines (controls, summary tables, behavioural comparison, trajectory view, methods text, export) are **long but coherent** — one tab, one data type, one flow. Leave them. Splitting on line count alone would just add import ceremony.
 
@@ -360,7 +360,7 @@ A restructure would cost weeks against 6,698 untested lines and fix none of the 
 - **Delete the impossible `hasattr` guards** (5 cross-mixin + 5 self-guards). They can never be false and they convert real construction-order bugs into silent defaults.
 - **Move `_update_shoaling_file_dropdown` into `GUIBase` and rename it `_refresh_all_file_widgets`.** It is the fan-out for every tab; it should not live in the shoaling mixin.
 - **Declare the contract where it already half-exists.** Every mixin docstring already lists "Expects the following attributes from base class" — and every one of those lists is incomplete (`DataTabMixin` omits `file_groups`, `analysis_files_listbox`, `analysis_progress`; `BoutTabMixin` omits `bout_results`, which it creates itself). Bring them in line with §B's table and they become the documented interface, for free.
-- **Initialise `bout_results` in `GUIBase.__init__`**, not partway through `_create_bout_tab` ([bout_tab.py:60](fish_analyzer/gui/bout_tab.py:60)). That removes all four `getattr(self, 'bout_results', {})` defensive reads.
+- **Initialise `bout_results` in `GUIBase.__init__`**, not partway through `_create_bout_tab` ([bout_tab.py:60](../../fish_analyzer/gui/bout_tab.py:60)). That removes all four `getattr(self, 'bout_results', {})` defensive reads.
 
 ## Sequenced recommendations
 

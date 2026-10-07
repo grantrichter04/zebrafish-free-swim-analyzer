@@ -1,11 +1,11 @@
 # Audit B — Numerical and scientific correctness
 
 Run 2026-07-31 against `60c6c2e` on branch `audit/passes-a-h-d`, following
-[`audit/PASS_B_correctness.md`](audit/PASS_B_correctness.md).
+[`audit/PASS_B_correctness.md`](PASS_B_correctness.md).
 
 The audit itself changed nothing. It left behind
-[`tests/synthetic_tracks.py`](tests/synthetic_tracks.py) and
-[`tests/test_metric_correctness.py`](tests/test_metric_correctness.py) — one
+[`tests/synthetic_tracks.py`](../../tests/synthetic_tracks.py) and
+[`tests/test_metric_correctness.py`](../../tests/test_metric_correctness.py) — one
 test per metric, `xfail(strict=True)` on each confirmed defect.
 
 > ### Acted on 2026-08-01 — eight columns withdrawn
@@ -64,7 +64,7 @@ truth *and* survive the real-data check. Those you can publish.
 **Would it change a published number?** It *is* the published number. There is
 no signal underneath to recover.
 
-`_calc_movement_direction_metrics` ([processing.py:558-572](fish_analyzer/processing.py#L558))
+`_calc_movement_direction_metrics` ([processing.py:558-572](../../fish_analyzer/processing.py#L558))
 takes `arctan2` of raw frame-to-frame displacement with no displacement floor,
 while `bout_analysis.py:255` guards the identical computation with
 `_MIN_DISP = 0.05` BL. `apply_smoothing` defaults to `False`.
@@ -148,7 +148,7 @@ Test: withdrawn 2026-08-01; guarded by `test_noise_dominated_metrics_are_not_com
 
 Two separate defects in the same function, independent of B2.
 
-**Duration.** [processing.py:491](fish_analyzer/processing.py#L491) counts frames
+**Duration.** [processing.py:491](../../fish_analyzer/processing.py#L491) counts frames
 where *acceleration* exceeds threshold and reports that span as
 `burst_mean_duration_s`. The docstring promises "For each burst, we record the
 peak speed and duration".
@@ -163,7 +163,7 @@ under a column name that says otherwise. That is a definitional mislabel, not a
 rounding error: the two quantities differ by 9× on this case.
 
 **Peak speed.** The `speed_segment` slice at
-[processing.py:493](fish_analyzer/processing.py#L493) ends where acceleration
+[processing.py:493](../../fish_analyzer/processing.py#L493) ends where acceleration
 falls below threshold, which is not where speed peaks.
 
 > Synthetic case: speed rises as √t (decaying acceleration) to a plateau of
@@ -186,7 +186,7 @@ unused — it encodes the ground truth a replacement burst detector must return.
 tracks tracking quality, which differs between recordings and therefore between
 experimental groups.
 
-[bout_analysis.py:432](fish_analyzer/bout_analysis.py#L432) sets NaN speed to
+[bout_analysis.py:432](../../fish_analyzer/bout_analysis.py#L432) sets NaN speed to
 `0.0`, so a tracking gap reads as "the fish stopped". A gap in the middle of
 continuous swimming splits one bout into two and inserts an inter-bout interval
 equal to the gap length.
@@ -219,7 +219,7 @@ Test: `test_a_tracking_gap_does_not_become_an_inter_bout_interval` (`xfail`).
 
 ## B5 — Freeze count is set by the dropout policy, not by the fish `CONFIRMED`
 
-[processing.py:413](fish_analyzer/processing.py#L413) sets NaN speed to
+[processing.py:413](../../fish_analyzer/processing.py#L413) sets NaN speed to
 *not-frozen* — the opposite of `bout_analysis.py`'s convention. A gap therefore
 severs a freeze run into two.
 
@@ -253,7 +253,7 @@ Test: `test_dropout_does_not_split_one_freeze_into_many` (`xfail`).
 
 ## B6 — `FreezeFraction_pct` and `FreezeTotalDuration_s` use different denominators `CONFIRMED`
 
-[processing.py:434-443](fish_analyzer/processing.py#L434): `freeze_fraction_pct`
+[processing.py:434-443](../../fish_analyzer/processing.py#L434): `freeze_fraction_pct`
 divides frozen frames by `n_valid`; `freeze_total_duration_s` divides by frame
 rate over the whole recording.
 
@@ -272,8 +272,8 @@ Test: `test_freeze_fraction_and_freeze_duration_use_the_same_denominator` (`xfai
 
 ## B7 — Group and spatial metrics ignore calibration; "BL" is a different unit per file `CONFIRMED`
 
-[shoaling.py:204](fish_analyzer/shoaling.py#L204) and
-[spatial.py:344](fish_analyzer/spatial.py#L344) compute
+[shoaling.py:204](../../fish_analyzer/shoaling.py#L204) and
+[spatial.py:344](../../fish_analyzer/spatial.py#L344) compute
 `pixels_to_bl = 1.0 / metadata.body_length` instead of using
 `calibration.scale_factor`.
 
@@ -317,12 +317,12 @@ Test: `test_group_metrics_ignore_calibration` (`xfail`);
 
 ## B8 — 77% of "straight" bouts are guard returns, not measurements `CONFIRMED`
 
-`_compute_heading_change` ([bout_analysis.py:240](fish_analyzer/bout_analysis.py#L240))
+`_compute_heading_change` ([bout_analysis.py:240](../../fish_analyzer/bout_analysis.py#L240))
 returns a literal `0.0` from five separate guard paths: no room for the
 look-back window (`pre == start or post == end`), NaN in the look-back vectors,
 sub-`_MIN_DISP` displacement, and two more in the `np.sum(valid) < 2` fallback.
 `compute_summary` then classifies `|heading_change| <= 5°` as straight
-([bout_analysis.py:363](fish_analyzer/bout_analysis.py#L363)), and `0.0` sits
+([bout_analysis.py:363](../../fish_analyzer/bout_analysis.py#L363)), and `0.0` sits
 in the middle of that dead zone.
 
 > Synthetic case: a 1-frame bout at array index 0, immediately followed by an
@@ -349,7 +349,7 @@ Test: `test_an_unmeasurable_heading_change_is_not_reported_as_straight` (`xfail`
 
 ## B9 — Thigmotaxis percentages need not sum to 100, and the warning understates the problem `CONFIRMED`
 
-[spatial.py:411-434](fish_analyzer/spatial.py#L411): a position outside the
+[spatial.py:411-434](../../fish_analyzer/spatial.py#L411): a position outside the
 arena polygon increments `frames_valid` but neither `frames_in_border` nor
 `frames_in_center`. Both exported percentages divide by `frames_valid`.
 
@@ -368,7 +368,7 @@ the numerators only, while keeping them in the denominator, is not a policy —
 it silently deflates both percentages by the out-of-arena fraction.
 
 **Sub-finding.** The warning at
-[spatial.py:444-457](fish_analyzer/spatial.py#L444) computes
+[spatial.py:444-457](../../fish_analyzer/spatial.py#L444) computes
 `total_outside / (total_valid + total_outside)`, but `frames_outside_arena` is
 *already* counted inside `frames_valid`. On the case above it printed
 **33.3%** where the true out-of-arena share is **50%**. The warning
@@ -402,7 +402,7 @@ least signal *something*, but they too are indistinguishable from the legitimate
 NaN a never-moving fish produces (verified: a motionless fish with zero jitter
 returns NaN for all direction metrics via the `n_moving == 0` path).
 
-`process_all_fish` ([processing.py:190](fish_analyzer/processing.py#L190))
+`process_all_fish` ([processing.py:190](../../fish_analyzer/processing.py#L190))
 additionally swallows per-fish failures with a `print` and `continue`, so a
 fish that failed entirely is simply **absent** from the CSV rather than present
 with a failure marker. Combined with Audit D's finding that the GUI log's
@@ -419,8 +419,8 @@ Test: `test_a_failed_direction_calculation_is_distinguishable_from_a_real_zero`
 
 ## B11 — `min_valid_percentage = 0.01` lets a 1%-tracked fish into the export `CONFIRMED`
 
-[processing.py:73](fish_analyzer/processing.py#L73) and
-[processing.py:210](fish_analyzer/processing.py#L210).
+[processing.py:73](../../fish_analyzer/processing.py#L73) and
+[processing.py:210](../../fish_analyzer/processing.py#L210).
 
 > Synthetic case: a fish tracked in 10 of 1,000 frames.
 > **Actual: exported, with `ValidFrames_pct = 1.0`, `MeanSpeed = 1.2000`
@@ -442,7 +442,7 @@ deliberately).
 
 ## B12 — Shoaling samples are not evenly spaced in time `CONFIRMED`, minor
 
-[shoaling.py:232](fish_analyzer/shoaling.py#L232) does
+[shoaling.py:232](../../fish_analyzer/shoaling.py#L232) does
 `complete_frame_indices[::sample_interval_frames]` — every 30th *complete*
 frame, not every 30th frame. The `ShoalingParameters` docstring says "we sample
 at regular intervals (e.g., every 30 frames = 1/sec)".
@@ -623,7 +623,7 @@ make the numbers self-consistent without making them meaningful for this assay.
 
 Every item below was checked against an analytically known answer and matched.
 All are covered by passing tests in
-[`tests/test_metric_correctness.py`](tests/test_metric_correctness.py).
+[`tests/test_metric_correctness.py`](../../tests/test_metric_correctness.py).
 
 ### Exact on synthetic ground truth
 
@@ -764,14 +764,14 @@ pytest -q
 47 passed, 13 xfailed in 5.19s
 ```
 
-- **[`tests/synthetic_tracks.py`](tests/synthetic_tracks.py)** — the trajectory
+- **[`tests/synthetic_tracks.py`](../../tests/synthetic_tracks.py)** — the trajectory
   builders, each documenting its ground truth: `straight_line`, `circler`
   (with an explicit on-screen rotation direction so the turn-sign tests mean
   something), `stationary`, `jittered_straight_line`, `discrete_bouts`,
   `single_swim_event`, `three_fish_fixed_geometry`, `with_dropout`,
   `with_scattered_dropout`, plus `make_file` to wrap an array in a
   `LoadedTrajectoryFile` without touching disk.
-- **[`tests/test_metric_correctness.py`](tests/test_metric_correctness.py)** —
+- **[`tests/test_metric_correctness.py`](../../tests/test_metric_correctness.py)** —
   24 passing tests asserting the verified-correct values in (c), and 13
   `xfail(strict=True)` tests asserting the value each broken metric *should*
   return. `strict=True` means an unexpected pass is a failure, so fixing a
@@ -930,7 +930,7 @@ different ways.
 
 ## The change
 
-A new module, [`fish_analyzer/segments.py`](fish_analyzer/segments.py), owns
+A new module, [`fish_analyzer/segments.py`](../../fish_analyzer/segments.py), owns
 one rule: **a frame in which idtracker.ai did not locate the fish is
 unobserved — not "still", not "moving".** Every run-length metric now works
 inside stretches of continuous tracking and never across them, and gap frames
@@ -942,7 +942,7 @@ package derives speed two ways — `traja` gives a backward difference where
 `speed[i]` spans `[i, i+1)` — so a segment loses its *first* frame under one
 convention and its *last* under the other. `backward_speed_slices` and
 `forward_speed_slices` do that mapping so no caller has to get it right by
-hand. 31 tests in [`tests/test_segments.py`](tests/test_segments.py) pin it.
+hand. 31 tests in [`tests/test_segments.py`](../../tests/test_segments.py) pin it.
 
 ## Complete vs censored episodes
 

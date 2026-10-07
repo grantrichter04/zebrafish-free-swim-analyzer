@@ -1066,7 +1066,7 @@ class AnalysisTabMixin:
             f"are deliberately not reported. All three are derived from the "
             f"direction of frame-to-frame centroid displacement, which at "
             f"this tracker's noise level is dominated by tracking jitter "
-            f"rather than by fish movement; see AUDIT_B_CORRECTNESS.md. "
+            f"rather than by fish movement; see docs/audit/AUDIT_B_CORRECTNESS.md. "
             f"Reporting them requires head-direction tracking rather than "
             f"centroid positions.\n\n"
             f"Analysis included {n_files} file(s) with {total_fish} fish total.\n\n"

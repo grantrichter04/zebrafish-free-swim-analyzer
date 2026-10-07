@@ -38,7 +38,7 @@ dev = [
 tracking = [
     "idtrackerai>=6.0.14,<6.1",
 ]
-# The standalone scripts under head_detection/ and fish_posture_analyzer.py.
+# The standalone scripts under extras/head_detection/ and extras/fish_posture_analyzer.py.
 # idtrackerai itself is not listed: install it per idtracker.ai's own docs.
 standalone = [
     "scikit-image>=0.19",
@@ -48,7 +48,7 @@ standalone = [
 fish-analyzer = "fish_analyzer.__main__:main"
 
 [tool.setuptools]
-# Explicit, so the standalone head_detection/ scripts are not swept in as
+# Explicit, so the standalone extras/head_detection/ scripts are not swept in as
 # though they were part of the package.
 packages = ["fish_analyzer", "fish_analyzer.gui"]
 

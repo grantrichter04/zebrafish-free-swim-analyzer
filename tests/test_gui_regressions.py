@@ -1,10 +1,10 @@
-"""Regression tests for the fixes applied after AUDIT_D_GUI.md.
+"""Regression tests for the fixes applied after docs/audit/AUDIT_D_GUI.md.
 
 Each test pins one defect that produced a wrong or invisible result for the
 user. They are cheap and need no real session data; the fixtures live in
 conftest.py.
 
-See AUDIT_D_GUI.md for the traced failure paths these correspond to.
+See docs/audit/AUDIT_D_GUI.md for the traced failure paths these correspond to.
 """
 import sys
 from contextlib import contextmanager

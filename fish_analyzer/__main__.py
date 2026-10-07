@@ -6,9 +6,8 @@ Entry point for `python -m fish_analyzer` and the `fish-analyzer` command.
     fish-analyzer            open the application
     fish-analyzer --check    report whether this machine is set up, and exit
 
-run_analyzer.py at the repo root opens the application too and still works
-from a plain checkout, without installing anything. This module is what an
-installed copy and the desktop shortcut use.
+The desktop shortcut runs launch.pyw at the repo root instead, which shows a
+"Starting" window first and then opens the same application.
 """
 import argparse
 import sys

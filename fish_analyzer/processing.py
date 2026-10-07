@@ -29,11 +29,11 @@ synthetic swimmer at the observed median speed, with 0.5-1.0 px of centroid
 noise, reproduced the entire range those columns reported across four real
 sessions. They were removed rather than repaired because no amount of
 thresholding recovers a signal that is not there -- recovering them needs real
-head direction (see head_detection/), not better arithmetic.
+head direction (see extras/head_detection/), not better arithmetic.
 
 Laterality survives because it counts turn *directions*, which stay balanced
 under symmetric noise, rather than turn *rates*, which do not. See
-AUDIT_B_CORRECTNESS.md B1, B3 and B15, and tests/test_metric_correctness.py.
+docs/audit/AUDIT_B_CORRECTNESS.md B1, B3 and B15, and tests/test_metric_correctness.py.
 """
 
 from dataclasses import dataclass, field

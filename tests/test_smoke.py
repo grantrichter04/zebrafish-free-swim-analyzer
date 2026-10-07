@@ -14,7 +14,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-# These tests read repository files - the banner in run_analyzer.py, the README
+# These tests read repository files - the startup banner, the README
 # example - rather than importing the package, so they need the repo root as a
 # path. Not a sys.path insert: the package is imported normally.
 REPO = Path(__file__).resolve().parent.parent
@@ -30,9 +30,8 @@ def test_package_imports():
 
 
 def test_version_matches_banner():
-    """run_analyzer.py's banner must not drift from __version__."""
-    import fish_analyzer
-    src = (REPO / "run_analyzer.py").read_text(encoding="utf-8")
+    """The startup banner must not drift from __version__."""
+    src = (REPO / "fish_analyzer" / "__main__.py").read_text(encoding="utf-8")
     assert "__version__" in src, "banner should interpolate __version__, not hardcode it"
 
 
