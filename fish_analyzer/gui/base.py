@@ -165,6 +165,11 @@ class GUIBase:
             font=("Arial", 8), relief="flat", padx=6
         ).pack(side="right", padx=(0, 4), pady=1)
 
+        tk.Button(
+            status_frame, text="Check Setup", command=self._show_setup_check,
+            font=("Arial", 8), relief="flat", padx=6
+        ).pack(side="right", padx=(0, 4), pady=1)
+
         self.status_label = tk.Label(
             status_frame, text="  Ready", anchor="w",
             font=("Arial", 9), fg="gray40"
@@ -216,6 +221,28 @@ class GUIBase:
         text.insert("1.0", log)
         text.see("end")
         text.config(state="disabled")
+
+    def _show_setup_check(self):
+        """Open a window reporting whether this machine is set up.
+
+        The same report `fish-analyzer --check` prints. Loading PyTorch to ask
+        about the GPU takes a few seconds, hence the status message first.
+        """
+        from .. import selfcheck
+
+        self.set_status("Checking setup...")
+        self.root.update_idletasks()
+        report = selfcheck.format_report(selfcheck.run_checks())
+        self.set_status("Ready")
+
+        win = tk.Toplevel(self.root)
+        win.title("Setup Check")
+        win.geometry("700x260")
+        text = tk.Text(win, wrap="word", font=("Courier", 10), padx=10, pady=10)
+        text.pack(fill="both", expand=True)
+        text.insert("1.0", report)
+        text.config(state="disabled")
+        return win
 
     # =========================================================================
     # ERROR REPORTING

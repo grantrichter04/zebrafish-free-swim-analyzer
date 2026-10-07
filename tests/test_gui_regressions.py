@@ -853,3 +853,24 @@ def test_csv_save_dialog_offers_csv_first(monkeypatch):
     assert seen["filetypes"][0] == ("CSV files", "*.csv")
     assert seen["title"] == "Export Thing"
     assert seen["initialfile"] == "thing.csv"
+
+
+def test_check_setup_window_shows_the_self_check_report(app, monkeypatch):
+    """The RA's way to answer 'is this laptop set up?' without a terminal."""
+    import tkinter as tk
+    from fish_analyzer import selfcheck
+
+    monkeypatch.setattr(selfcheck, "run_checks", lambda: [
+        selfcheck.CheckItem("Analyzer", True, "9.9.9", required=True),
+        selfcheck.CheckItem("idtracker.ai", False, "not installed",
+                            required=False),
+    ])
+
+    win = app._show_setup_check()
+    try:
+        text = next(w for w in win.winfo_children() if isinstance(w, tk.Text))
+        shown = text.get("1.0", "end")
+        assert "[ OK ] Analyzer" in shown and "9.9.9" in shown
+        assert "[WARN] idtracker.ai" in shown
+    finally:
+        win.destroy()
