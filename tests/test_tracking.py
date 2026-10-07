@@ -111,3 +111,56 @@ def test_run_process_can_be_stopped(tmp_path):
 
     assert time.monotonic() - started < 20
     assert code != 0
+
+
+def _pretend_idtrackerai(monkeypatch, script: str):
+    """Make build_track_command run a Python one-liner instead. The script
+    gets the video path as sys.argv[1]."""
+    monkeypatch.setattr(
+        tracking, "build_track_command",
+        lambda video, setup: [sys.executable, "-c", script, str(video)])
+
+
+WRITES_TRAJECTORIES = (
+    "import sys, pathlib; v = pathlib.Path(sys.argv[1]);"
+    "d = v.parent / ('session_' + v.stem) / 'trajectories';"
+    "d.mkdir(parents=True); (d / 'trajectories.npy').write_bytes(b'');"
+    "print('Success')")
+
+
+def test_run_tracking_succeeds_when_trajectories_appear(tmp_path, monkeypatch):
+    video = _touch(tmp_path / "exp.avi")
+    _pretend_idtrackerai(monkeypatch, WRITES_TRAJECTORIES)
+
+    outcome = tracking.run_tracking(video, tmp_path / "rig.toml", lambda _: None)
+
+    assert outcome.ok and not outcome.stopped
+    assert outcome.video == video
+
+
+def test_exit_code_zero_without_trajectories_is_a_failure(tmp_path, monkeypatch):
+    """idtracker.ai exits 0 even when tracking fails, so the exit code is not
+    evidence of anything."""
+    video = _touch(tmp_path / "exp.avi")
+    _pretend_idtrackerai(
+        monkeypatch,
+        "print('Loading video'); "
+        "print('IdtrackeraiError: too many blobs      run.py:80'); print('')")
+
+    outcome = tracking.run_tracking(video, tmp_path / "rig.toml", lambda _: None)
+
+    assert not outcome.ok and not outcome.stopped
+    assert outcome.reason() == "IdtrackeraiError: too many blobs"
+
+
+def test_a_stopped_run_is_not_a_success_even_if_files_exist(tmp_path, monkeypatch):
+    video = _touch(tmp_path / "exp.avi")
+    _pretend_idtrackerai(
+        monkeypatch,
+        WRITES_TRAJECTORIES + "; import time; print('x', flush=True); time.sleep(60)")
+    lines = []
+
+    outcome = tracking.run_tracking(video, tmp_path / "rig.toml", lines.append,
+                                    should_stop=lambda: "x" in lines)
+
+    assert outcome.stopped and not outcome.ok

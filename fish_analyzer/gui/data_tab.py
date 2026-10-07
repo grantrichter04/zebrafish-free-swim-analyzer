@@ -37,6 +37,7 @@ class DataTabMixin:
         """Create the data loading and setup tab with scrolling support."""
         tab = ttk.Frame(self.notebook)
         self.notebook.add(tab, text="Data Setup & Calibration")
+        self.data_tab_frame = tab
 
         # Create scrollable container
         canvas = tk.Canvas(tab, highlightthickness=0)
@@ -431,20 +432,8 @@ class DataTabMixin:
                 return
 
         try:
-            loaded_file = TrajectoryFileLoader.load_from_session_folder(folder_path, nickname)
-            if replacing:
-                # Purge only after the new session loads, so a failed load
-                # leaves the existing one intact.
-                self._purge_file_state(nickname)
-            self.loaded_files[nickname] = loaded_file
+            loaded_file = self._add_session(folder_path, nickname)
 
-            if self.active_file is None:
-                self.active_file = nickname
-
-            self._update_files_list()
-            self._update_calibration_display()
-            self._update_shoaling_file_dropdown()
-            
             messagebox.showinfo(
                 "Session Loaded", 
                 f"Successfully loaded '{nickname}'!\n\n"
@@ -455,6 +444,27 @@ class DataTabMixin:
             )
         except Exception as e:
             messagebox.showerror("Error Loading Session", f"Failed to load {folder_path.name}:\n\n{str(e)}")
+
+    def _add_session(self, folder_path: Path, nickname: str):
+        """Load a session folder under `nickname` and show it in every list.
+
+        No dialogs, and it raises on failure, so both the one-at-a-time
+        loader above and the Tracking tab's load-everything button can use it.
+        """
+        loaded_file = TrajectoryFileLoader.load_from_session_folder(folder_path, nickname)
+        if nickname in self.loaded_files:
+            # Purge only after the new session loads, so a failed load
+            # leaves the existing one intact.
+            self._purge_file_state(nickname)
+        self.loaded_files[nickname] = loaded_file
+
+        if self.active_file is None:
+            self.active_file = nickname
+
+        self._update_files_list()
+        self._update_calibration_display()
+        self._update_shoaling_file_dropdown()
+        return loaded_file
 
     def _load_selected_file(self):
         """Load the file/folder specified in the path entry."""

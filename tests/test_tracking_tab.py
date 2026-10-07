@@ -26,6 +26,8 @@ def tab(app, monkeypatch):
     yield app
     app._tracking_folder = None
     app._tracking_checked.clear()
+    app._tracking_live.clear()
+    app.tracking_progress_var.set("")
     app._tracking_refresh()
 
 
@@ -202,3 +204,128 @@ def test_cancelling_the_instructions_starts_nothing(
     tab._tracking_configure(edit=False)
 
     assert not tab._tracking_busy
+
+
+# --- tracking the folder ------------------------------------------------------
+
+def _fake_tracking(monkeypatch, fail=(), on_start=None):
+    """Stand in for idtracker.ai tracking: make the session folder, or fail."""
+    tracked = []
+
+    def run(video, setup, on_line, should_stop=lambda: False):
+        tracked.append((video.name, setup.name))
+        if on_start:
+            on_start(video)
+        on_line(f"tracking {video.name}")
+        stopped = should_stop()
+        ok = video.name not in fail and not stopped
+        if ok:
+            target = tracking.session_folder_for(video) / "trajectories"
+            target.mkdir(parents=True)
+            (target / "trajectories.npy").write_bytes(b"")
+        else:
+            tracking.session_folder_for(video).mkdir(exist_ok=True)
+        return tracking.TrackOutcome(video, ok, stopped, 1.0,
+                                     ["Starting", "Too many blobs   run.py:9"])
+
+    monkeypatch.setattr(tracking, "run_tracking", run)
+    return tracked
+
+
+@pytest.fixture
+def reports(tab, monkeypatch):
+    seen = []
+    monkeypatch.setattr(
+        tab, "_report_batch_outcome",
+        lambda what, total, ok, failed, degraded: seen.append((total, ok, failed)))
+    return seen
+
+
+def test_track_all_tracks_only_the_untracked_videos(
+        tab, experiment, dialogs, reports, monkeypatch):
+    (experiment / "third.avi").write_bytes(b"")
+    (experiment / "rig.toml").write_text("number_of_animals = 6\n")
+    tracked = _fake_tracking(monkeypatch)
+    tab._tracking_set_folder(experiment)
+    assert tab.tracking_track_button["state"] == "normal"
+    assert tab.tracking_stop_button["state"] == "disabled"
+
+    tab._tracking_track_all()
+    _wait_until_idle(tab)
+
+    assert tracked == [("exp.avi", "rig.toml"), ("third.avi", "rig.toml")]
+    assert [status for _, status in _rows(tab)] == ["tracked"] * 3
+    assert reports == [(2, ["exp.avi", "third.avi"], [])]
+    assert "2 of 2 video(s) tracked" in tab.tracking_progress_var.get()
+    assert tab.tracking_track_button["state"] == "disabled", "nothing left to track"
+    assert "tracking third.avi" in tab.tracking_log_text.get("1.0", "end")
+
+
+def test_one_failed_video_does_not_stop_the_rest(
+        tab, experiment, dialogs, reports, monkeypatch):
+    (experiment / "third.avi").write_bytes(b"")
+    (experiment / "rig.toml").write_text("number_of_animals = 6\n")
+    tracked = _fake_tracking(monkeypatch, fail={"exp.avi"})
+    tab._tracking_set_folder(experiment)
+
+    tab._tracking_track_all()
+    _wait_until_idle(tab)
+
+    assert [name for name, _ in tracked] == ["exp.avi", "third.avi"]
+    assert dict(_rows(tab)) == {"control.avi": "tracked", "exp.avi": "failed",
+                                "third.avi": "tracked"}
+    assert reports == [(2, ["third.avi"], ["exp.avi: Too many blobs"])]
+    assert tab.tracking_track_button["state"] == "normal", "exp.avi can be retried"
+
+
+def test_stop_ends_the_batch_after_the_current_video(
+        tab, experiment, dialogs, reports, monkeypatch):
+    (experiment / "third.avi").write_bytes(b"")
+    (experiment / "rig.toml").write_text("number_of_animals = 6\n")
+    monkeypatch.setattr("tkinter.messagebox.askyesno", lambda *a, **k: True)
+
+    def press_stop(video):
+        tab._tracking_batch_running = True
+        tab._tracking_stop = True
+
+    tracked = _fake_tracking(monkeypatch, on_start=press_stop)
+    tab._tracking_set_folder(experiment)
+
+    tab._tracking_track_all()
+    _wait_until_idle(tab)
+
+    assert [name for name, _ in tracked] == ["exp.avi"], "third.avi never started"
+    assert dict(_rows(tab))["exp.avi"] == "stopped"
+    assert dict(_rows(tab))["third.avi"] == "not tracked"
+    assert reports == [], "a deliberate stop is not reported as a failure"
+    assert "Stopped before the rest" in tab.tracking_progress_var.get()
+    assert not tab._tracking_stop
+
+
+def test_tracking_needs_a_setup(tab, experiment):
+    tab._tracking_set_folder(experiment)
+    assert tab.tracking_track_button["state"] == "disabled"
+
+
+def test_tracked_sessions_load_into_the_analysis_tabs(
+        tab, experiment, synthetic_npy, monkeypatch):
+    import shutil
+    shutil.copy(synthetic_npy, experiment / "session_control" / "trajectories"
+                / "trajectories.npy")
+    shown = []
+    monkeypatch.setattr("tkinter.messagebox.showinfo",
+                        lambda title, text: shown.append(text))
+    tab._tracking_set_folder(experiment)
+    assert tab.tracking_load_button["state"] == "normal"
+
+    tab._tracking_load_sessions()
+
+    assert list(tab.loaded_files) == ["control"]
+    assert tab.loaded_files["control"].n_fish == 3
+    assert tab.active_file == "control"
+    assert "Loaded 1 session(s)" in shown[0]
+    assert tab.notebook.select() == str(tab.data_tab_frame)
+
+    tab._tracking_load_sessions()
+    assert "Loaded 0 session(s)" in shown[1] and "control" in shown[1]
+

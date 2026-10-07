@@ -18,10 +18,13 @@ idtracker.ai always runs as a separate process. Its window is Qt and ours is
 tkinter, and a crash while tracking must not take the analyzer down with it.
 """
 import os
+import re
 import subprocess
 import sys
 import threading
 import time
+from collections import deque
+from dataclasses import dataclass, field
 from importlib import util
 from pathlib import Path
 from typing import Callable, List, Optional
@@ -173,3 +176,52 @@ def run_process(command: List[str], cwd: Path,
     process.wait()
     reader.join(timeout=5)
     return process.returncode
+
+
+@dataclass
+class TrackOutcome:
+    """How tracking one video went."""
+    video: Path
+    ok: bool
+    stopped: bool
+    seconds: float
+    last_lines: List[str] = field(default_factory=list)
+
+    def reason(self) -> str:
+        """The last thing idtracker.ai said, for a one-line failure summary."""
+        for line in reversed(self.last_lines):
+            # Drop the "file.py:123" column idtracker.ai's logger appends.
+            text = re.sub(r"\s+\S+\.py:\d+\s*$", "", line).strip()
+            if text:
+                return text[:200]
+        return "idtracker.ai gave no output"
+
+
+def run_tracking(video: Path, setup: Path,
+                 on_line: Callable[[str], None],
+                 should_stop: Callable[[], bool] = lambda: False) -> TrackOutcome:
+    """Track one video. Blocks; call from a worker thread.
+
+    Success is judged by the trajectories file existing afterwards, not by
+    the exit code: idtracker.ai exits with 0 whether or not tracking worked.
+    """
+    video = Path(video)
+    tail: deque = deque(maxlen=12)
+    stopped = [False]
+
+    def line(text: str) -> None:
+        tail.append(text)
+        on_line(text)
+
+    def stop() -> bool:
+        stopped[0] = stopped[0] or should_stop()
+        return stopped[0]
+
+    started = time.monotonic()
+    run_process(build_track_command(video, setup), video.parent, line, stop)
+    return TrackOutcome(
+        video=video,
+        ok=not stopped[0] and tracking_status(video) == TRACKED,
+        stopped=stopped[0],
+        seconds=time.monotonic() - started,
+        last_lines=list(tail))
