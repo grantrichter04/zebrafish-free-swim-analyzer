@@ -116,7 +116,8 @@ class InspectorExportMixin:
 
         composed = compose_frame(base, loaded.trajectories, frame_idx,
                                  self.render_settings_from_vars(),
-                                 loaded.calibration.scale_factor)
+                                 loaded.calibration.scale_factor,
+                                 labels=loaded.metadata.identity_labels)
         return composed, loaded, frame_idx
 
     def _inspector_save_frame(self):
@@ -125,7 +126,7 @@ class InspectorExportMixin:
         if composed is None:
             messagebox.showwarning(
                 "No File Selected",
-                "Select a file in the Video Inspector first."
+                "Choose a session in the Video Inspector first."
             )
             return
 
@@ -157,20 +158,20 @@ class InspectorExportMixin:
         """(ok, reason) - whether an export can produce a meaningful clip.
 
         The point is to refuse before writing anything, rather than encode a
-        panel reading "Run Shoaling Analysis first" into a video.
+        panel reading "Press Run All Analysis" into a video.
         """
         selected = self.inspector_file_var.get()
         if not selected or selected not in self.loaded_files:
-            return False, "Select a file in the Video Inspector first."
+            return False, "Choose a session in the Video Inspector first."
 
         loaded = self.loaded_files[selected]
         time_mode = self.inspector_time_mode_var.get()
 
-        if time_mode in ('nnd', 'iid', 'hull') and not loaded.shoaling_results:
+        if time_mode != 'none' and not loaded.shoaling_results:
             return False, (
-                f"The Time Panel is set to {time_mode.upper()}, but no "
-                f"shoaling results exist for '{selected}'.\n\n"
-                "Run Shoaling Analysis first, or set the Time Panel to 'None'."
+                "Nearest-neighbour distance over time is ticked, but "
+                f"'{selected}' has no shoaling results.\n\n"
+                "Press Run All Analysis on Sessions & Units first, or untick it."
             )
 
         return True, ""
@@ -189,7 +190,7 @@ class InspectorExportMixin:
         n_frames = end - start + 1
 
         # Measured at 28 ms/frame exporting 1288x964 + strip with positions,
-        # NND, hull and trails on.
+        # nearest-neighbour lines and trails on.
         estimate_s = n_frames * 28 / 1000.0
 
         marked = (self.inspector_mark_in is not None
@@ -232,7 +233,7 @@ class InspectorExportMixin:
     def _inspector_time_scale_for(time_mode):
         """Data units per second on the time panel's x axis.
 
-        The NND, IID and Hull panels are plotted against minutes
+        The time panel is plotted against minutes
         (_inspector_rebuild_figure divides timestamps by 60, and the live
         cursor does the same), while the export loop counts seconds.
 
@@ -292,8 +293,8 @@ class InspectorExportMixin:
         if video_path is None:
             messagebox.showwarning(
                 "No Video",
-                "Clip export needs a video.\n\n"
-                "Tick 'Use video frames' and load one with Browse Video..."
+                "Clip export needs the session's video.\n\n"
+                "Use \"Find video...\" under the session name."
             )
             return
 
@@ -382,7 +383,8 @@ class InspectorExportMixin:
                 composed = compose_frame(base, loaded.trajectories,
                                          cursor["frame"], settings,
                                          loaded.calibration.scale_factor,
-                                         colors)
+                                         colors,
+                                         loaded.metadata.identity_labels)
 
                 if strip is None:
                     frame_out = composed

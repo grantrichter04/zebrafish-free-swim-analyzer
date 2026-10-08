@@ -157,8 +157,8 @@ def cursor_x(t, x0, px_per_unit):
 class TimeStrip:
     """The time panel rasterised once, with the cursor stamped per frame.
 
-    Valid only while the axes are fixed for the whole session, which is true of
-    the NND, IID and Hull panels (xlim is set once at rebuild).
+    Valid only while the axes are fixed for the whole clip, which is true of
+    the inspector's time panel (xlim is set once, before the export starts).
 
     Rendering the figure per frame costs 50-100 ms; this costs a memcpy and a
     line, which is the same trick the live view uses when it blits.
@@ -168,9 +168,9 @@ class TimeStrip:
                  color=(255, 60, 60), width=2):
         """
         time_scale : float
-            Data units per second on this axis. The inspector's NND, IID and
-            Hull panels are plotted against minutes, so they need 1/60; an axis
-            already in seconds needs 1.0. Getting this wrong does not fail
+            Data units per second on this axis. The inspector's time panel
+            is plotted against minutes, so it needs 1/60; an axis already in
+            seconds needs 1.0. Getting this wrong does not fail
             loudly - the cursor is simply clamped to an edge and never appears
             to move.
         """

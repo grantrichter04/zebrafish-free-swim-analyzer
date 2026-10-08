@@ -132,9 +132,7 @@ tank's shorter side wide, measured in from the tank outline.
 **Shoaling:**
 
 - **NND**: distance from each fish to its closest neighbour.
-- **IID**: mean distance over all pairs of fish. The Shoaling tab and the CSV
-  report this group value; the Video Inspector's IID panel plots the *focus
-  fish's* mean distance to the others, to match the lines it draws.
+- **IID**: mean distance over all pairs of fish.
 - **Convex hull**: area of the polygon enclosing all fish.
 
 Some turning and burst metrics from version 2.1.0 were withdrawn because they
@@ -146,31 +144,30 @@ measured tracking noise rather than behaviour. See
 
 ## Exporting figures and clips
 
-The Video Inspector draws overlays (fish positions, NND lines, convex hull, IID
-lines, trails) on the video frames.
+The Video Inspector draws the tracking on the video: fish positions, numbered
+as in the results, trails, and lines to each fish's nearest neighbour.
 
-- **Save Frame (PNG)** writes the current frame with its overlays at full video
+- **Save frame (PNG)** writes the current frame with its overlays at full video
   resolution.
-- **Export Clip** writes a marked range as an MP4, or as a numbered PNG
+- **Export clip** writes a marked range as an MP4, or as a numbered PNG
   sequence for lossless frames. Mark the range with **Set In** / **Set Out**
   beside the frame slider. With neither set, the whole recording is exported,
   and the dialog says so first.
 
-Both export what the tab is showing, including the time-series panel when the
-Time Panel is set to NND, IID or Hull. If that panel needs shoaling results
-that have not been run, the export refuses rather than writing a
-clip with a "run the analysis first" message in it.
+Both export what the tab is showing, including nearest-neighbour distance over
+time when that is ticked. If the session has not been analysed yet, the export
+refuses rather than writing a clip with a "run the analysis first" message in
+it.
 
-In an exported clip the time panel covers only the exported range. A very short
-clip therefore shows few samples: at the default shoaling interval of 30 frames
-that is one per second, so lower the interval for a denser trace.
+In an exported clip the time panel covers only the exported range, at one
+sample a second.
 
 Expect roughly 28 ms per frame at 1288×964 with a time panel, about 8 seconds
 for a 10-second clip.
 
 The source video is found automatically when it sits beside the session folder,
-which is where the Tracking tab leaves it. Otherwise attach it with
-**Browse Video...**.
+which is where the Tracking tab leaves it. Otherwise **Find video...** appears
+under the session name.
 
 ---
 

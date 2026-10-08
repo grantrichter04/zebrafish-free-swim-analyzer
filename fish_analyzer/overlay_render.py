@@ -33,9 +33,6 @@ class OverlaySettings:
     """
     show_positions: bool = False
     show_nnd: bool = False
-    show_hull: bool = False
-    show_iid: bool = False
-    iid_focus: int = 0
     trail_length: int = 0
     trail_opacity: float = 0.6
     trail_width: float = 1.0
@@ -56,7 +53,8 @@ def rgb_uint8(rgba) -> tuple:
     return (int(rgba[0] * 255), int(rgba[1] * 255), int(rgba[2] * 255))
 
 
-def compose_frame(base, trajectories, frame_idx, settings, scale, colors=None):
+def compose_frame(base, trajectories, frame_idx, settings, scale, colors=None,
+                  labels=None):
     """Draw the overlays for one frame onto a copy of `base`.
 
     Parameters
@@ -73,6 +71,9 @@ def compose_frame(base, trajectories, frame_idx, settings, scale, colors=None):
     colors : np.ndarray, optional
         Result of fish_colors(n_fish). Passed in by callers that render many
         frames so it is not recomputed per frame.
+    labels : sequence of str, optional
+        What to write on each fish's dot: idtracker.ai's identity labels, so a
+        fish has the same number here as in the results. Defaults to 1, 2, ...
 
     Returns
     -------
@@ -83,12 +84,14 @@ def compose_frame(base, trajectories, frame_idx, settings, scale, colors=None):
     n_fish = trajectories.shape[1]
     if colors is None:
         colors = fish_colors(n_fish)
+    if labels is None:
+        labels = [str(i + 1) for i in range(n_fish)]
 
     positions = trajectories[frame_idx]
 
     if CV2_AVAILABLE:
         _draw_cv2(display, trajectories, positions, frame_idx, n_fish,
-                  colors, settings, scale)
+                  colors, settings, scale, labels)
     else:
         _draw_numpy(display, positions, n_fish, colors, settings)
     return display
@@ -116,19 +119,15 @@ def _draw_numpy(display, positions, n_fish, colors, settings):
 
 
 def _draw_cv2(display, trajectories, positions, frame_idx, n_fish, colors,
-              settings, scale):
+              settings, scale, labels):
     """Draw every enabled overlay directly onto the array.
 
-    Order matters: trails and the hull go underneath, dots and labels on top.
+    Order matters: trails go underneath, dots and labels on top.
     """
     _draw_trails(display, trajectories, frame_idx, n_fish, colors, settings)
     if settings.show_nnd:
         _draw_nnd(display, positions, scale)
-    if settings.show_hull:
-        _draw_hull(display, positions)
-    if settings.show_iid:
-        _draw_iid(display, positions, n_fish, settings, scale)
-    _draw_positions(display, positions, n_fish, colors, settings)
+    _draw_positions(display, positions, n_fish, colors, settings, labels)
 
 
 def _draw_trails(display, trajectories, frame_idx, n_fish, colors, settings):
@@ -182,36 +181,7 @@ def _draw_nnd(display, positions, scale):
         _label(display, f'{nnd[i] * scale:.1f}', mid, (255, 255, 255))
 
 
-def _draw_hull(display, positions):
-    """Tinted convex hull of every tracked fish."""
-    valid = positions[~np.isnan(positions[:, 0])]
-    if len(valid) < 3:
-        return
-    hull = cv2.convexHull(valid.astype(np.float32).astype(np.int32))
-    overlay = display.copy()
-    cv2.fillPoly(overlay, [hull], (100, 200, 100))
-    cv2.addWeighted(overlay, 0.2, display, 0.8, 0, display)
-    cv2.polylines(display, [hull], True, (0, 180, 0), 2, lineType=cv2.LINE_AA)
-
-
-def _draw_iid(display, positions, n_fish, settings, scale):
-    """Magenta lines from one focus fish to every other tracked fish."""
-    focus = settings.iid_focus
-    if focus >= n_fish or np.isnan(positions[focus, 0]):
-        return
-    pf = (int(positions[focus, 0]), int(positions[focus, 1]))
-    for j in range(n_fish):
-        if j == focus or np.isnan(positions[j, 0]):
-            continue
-        pj = (int(positions[j, 0]), int(positions[j, 1]))
-        cv2.line(display, pf, pj, (255, 100, 255), 2, lineType=cv2.LINE_AA)
-        d = np.hypot(positions[focus, 0] - positions[j, 0],
-                     positions[focus, 1] - positions[j, 1]) * scale
-        mid = ((pf[0] + pj[0]) // 2, (pf[1] + pj[1]) // 2)
-        _label(display, f'{d:.1f}', mid, (255, 100, 255))
-
-
-def _draw_positions(display, positions, n_fish, colors, settings):
+def _draw_positions(display, positions, n_fish, colors, settings, labels):
     if not settings.show_positions:
         return
     r = settings.dot_radius
@@ -223,7 +193,7 @@ def _draw_positions(display, positions, n_fish, colors, settings):
         cv2.circle(display, (px, py), r, color, -1, lineType=cv2.LINE_AA)
         cv2.circle(display, (px, py), r, (0, 0, 0), 2, lineType=cv2.LINE_AA)
         font_scale = max(0.3, r / 20.0)
-        text = str(i)
+        text = str(labels[i])
         (tw, th), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX,
                                       font_scale, 1)
         cv2.putText(display, text, (px - tw // 2, py + th // 2),

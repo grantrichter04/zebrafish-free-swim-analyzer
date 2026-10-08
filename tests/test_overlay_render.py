@@ -112,21 +112,6 @@ def test_nnd_label_uses_the_calibration_scale():
     assert nnd[0] * 0.0125 == pytest.approx(0.25)
 
 
-def test_hull_needs_three_tracked_fish():
-    out = compose_frame(blank(), two_fish_at((20.0, 20.0), (60.0, 60.0)), 0,
-                        OverlaySettings(show_hull=True), 1.0)
-    assert out.sum() == 0
-
-
-def test_hull_is_drawn_for_three_tracked_fish():
-    traj = np.full((1, 3, 2), np.nan)
-    traj[0, 0] = (20.0, 20.0)
-    traj[0, 1] = (80.0, 20.0)
-    traj[0, 2] = (50.0, 80.0)
-    out = compose_frame(blank(), traj, 0, OverlaySettings(show_hull=True), 1.0)
-    assert out[40, 50].sum() > 0, "hull interior not tinted"
-
-
 def test_adding_a_second_fish_does_not_fade_the_first_ones_trail():
     """One blend for all trails, not one blend per fish.
 
@@ -156,14 +141,15 @@ def test_adding_a_second_fish_does_not_fade_the_first_ones_trail():
         "fish 0's trail changed when a second fish was added"
 
 
-def test_iid_lines_radiate_from_the_focus_fish():
-    traj = np.full((1, 3, 2), np.nan)
-    traj[0, 0] = (10.0, 50.0)
-    traj[0, 1] = (90.0, 50.0)
-    traj[0, 2] = (50.0, 10.0)
+def test_dots_carry_the_identity_labels_and_count_from_one_without_them():
+    """Results and Shoaling name fish by idtracker.ai's labels, which start at
+    1. A dot numbered from 0 sent the reader to the wrong fish."""
+    settings = OverlaySettings(show_positions=True, dot_radius=20)
+    default = compose_frame(blank(), one_fish_at(50, 50), 0, settings, 1.0)
+    one = compose_frame(blank(), one_fish_at(50, 50), 0, settings, 1.0,
+                        labels=["1"])
+    seven = compose_frame(blank(), one_fish_at(50, 50), 0, settings, 1.0,
+                          labels=["7"])
 
-    out = compose_frame(blank(), traj, 0,
-                        OverlaySettings(show_iid=True, iid_focus=0), 1.0)
-    assert out[50, 50].sum() > 0, "no line from fish 0 to fish 1"
-
-
+    assert np.array_equal(default, one)
+    assert not np.array_equal(one, seven)

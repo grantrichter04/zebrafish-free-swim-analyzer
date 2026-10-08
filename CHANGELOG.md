@@ -69,6 +69,17 @@ from the validator is ticked as Reviewed and reloaded.
 speed by about 1% and path straightness by about 1%; the metrics it mattered
 for were withdrawn in 2.1.0.
 
+**Video Inspector slimmed down.** The left column is now three short groups:
+the session, what to show (fish positions, lines to the nearest neighbour,
+trail length, nearest-neighbour distance over time) and export. The video
+loads with the session, and "Find video..." appears only when it is not
+found. Fish are numbered as in Results and Shoaling. The scrubber and the
+step buttons move one frame at a time, and playback faster than 1x skips
+frames. Removed: the convex-hull and inter-individual-distance overlays and
+their time panels, the drawing-style sliders, the step-size and jump-to
+boxes, and the video quality setting. Fixed: a second, stationary cursor
+could appear on the time panel and in exported clips.
+
 **Spatial Analysis folded into Results.** "Where they swim" on Results is the
 position heatmap: one map per session, square cells of one size and one
 colour scale for all sessions, with the tank outline. "Tank outline..." on

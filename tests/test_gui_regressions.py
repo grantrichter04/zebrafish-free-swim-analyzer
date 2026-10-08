@@ -320,15 +320,13 @@ def test_render_settings_reflect_the_inspector_controls(app):
     something other than what the controls say.
     """
     app.inspector_show_nnd_var.set(True)
-    app.inspector_show_hull_var.set(False)
-    app.inspector_dot_size_var.set(11)
+    app.inspector_show_positions_var.set(False)
     app.inspector_trail_var.set(45)
 
     settings = app.render_settings_from_vars()
 
     assert settings.show_nnd is True
-    assert settings.show_hull is False
-    assert settings.dot_radius == 11
+    assert settings.show_positions is False
     assert settings.trail_length == 45
 
 
@@ -416,7 +414,7 @@ def test_current_composite_reports_no_file_rather_than_raising(app):
 
 def test_export_refuses_when_the_time_panel_needs_missing_shoaling(
         app, synthetic_npy):
-    """The on-screen panel says 'Run Shoaling Analysis first'; an export must
+    """The on-screen panel says 'Press Run All Analysis'; an export must
     refuse rather than bake that placeholder into a video."""
     from fish_analyzer.file_loading import TrajectoryFileLoader
 
@@ -430,7 +428,7 @@ def test_export_refuses_when_the_time_panel_needs_missing_shoaling(
     ok, reason = app._inspector_can_export()
 
     assert ok is False
-    assert "Shoaling" in reason
+    assert "Run All Analysis" in reason
 
 
 def test_export_is_allowed_when_the_time_panel_is_off(app, synthetic_npy):
@@ -449,7 +447,7 @@ def test_export_refuses_with_no_file_selected(app):
     ok, reason = app._inspector_can_export()
 
     assert ok is False
-    assert "Select a file" in reason
+    assert "Choose a session" in reason
 
 
 # ---------------------------------------------------------------------------
@@ -490,12 +488,10 @@ def test_recapture_is_a_noop_when_there_is_no_time_panel(app):
 
 
 def test_export_converts_seconds_to_the_panel_time_units(app):
-    """The NND/IID/Hull panels are drawn against minutes, the export counts
-    seconds. Without the conversion the exported cursor pins to the right edge
-    and never advances, which is silent - nothing raises."""
+    """The time panel is drawn against minutes, the export counts seconds.
+    Without the conversion the exported cursor pins to the right edge and
+    never advances, which is silent - nothing raises."""
     assert app._inspector_time_scale_for("nnd") == pytest.approx(1.0 / 60.0)
-    assert app._inspector_time_scale_for("iid") == pytest.approx(1.0 / 60.0)
-    assert app._inspector_time_scale_for("hull") == pytest.approx(1.0 / 60.0)
 
 
 def test_export_strip_covers_only_the_exported_segment(app, synthetic_npy):
@@ -564,47 +560,99 @@ def test_export_strip_cursor_sweeps_the_whole_clip(app, synthetic_npy):
 
 
 # ---------------------------------------------------------------------------
-# The IID panel must describe the fish the overlay draws
+# The time cursor must not be baked into the chart it moves over
 # ---------------------------------------------------------------------------
 
-def test_iid_focus_change_forces_a_panel_rebuild(app, synthetic_npy):
-    """The IID panel plots one fish, so switching focus has to redraw it.
+def test_the_time_cursor_is_left_out_of_the_cached_chart(
+        app, tmp_path, synthetic_npy, monkeypatch):
+    """The chart is drawn once and the cursor blitted over it. A chart
+    re-cached while the cursor sat mid-recording kept a second, stationary
+    cursor - on screen and, through the export strip, in clips."""
+    from fish_analyzer.gui import data_tab
+    monkeypatch.setattr(data_tab.messagebox, "showinfo", lambda *a, **k: None)
+    monkeypatch.setattr(app, "_report_batch_outcome", lambda *a, **k: None)
+    target = tmp_path / "session_s1" / "trajectories"
+    target.mkdir(parents=True)
+    import shutil
+    shutil.copy(synthetic_npy, target / "trajectories.npy")
+    app._add_path(tmp_path / "session_s1")
+    app._run_analysis()
+    app.inspector_file_var.set("s1")
+    app._on_inspector_file_selected()
+    app.inspector_time_mode_var.set("nnd")
+    app._inspector_rebuild_needed()
 
-    Focus was not in the rebuild condition, so the trace kept describing
-    whichever fish was selected when the panel was first built.
-    """
+    def chart():
+        app._insp_canvas.draw()
+        return np.asarray(app._insp_canvas.buffer_rgba()).copy()
+
+    try:
+        assert app._insp_time_marker is not None
+        at_start = chart()
+        app.inspector_frame_var.set(app.loaded_files["s1"].n_frames // 2)
+        app._inspector_update_fast()
+        assert np.array_equal(chart(), at_start), \
+            "a full draw of the chart must not include the cursor"
+    finally:
+        app.inspector_time_mode_var.set("none")
+        app._inspector_rebuild_needed()
+
+
+# ---------------------------------------------------------------------------
+# One slider position per frame
+# ---------------------------------------------------------------------------
+
+def test_the_scrubber_and_the_step_buttons_move_in_single_frames(app, synthetic_npy):
     from fish_analyzer.file_loading import TrajectoryFileLoader
 
     loaded = TrajectoryFileLoader.load_file(synthetic_npy, "s1")
     app.loaded_files["s1"] = loaded
     app.inspector_file_var.set("s1")
-    app.inspector_time_mode_var.set("iid")
+    app._on_inspector_file_selected()
 
-    app._insp_needs_rebuild = False
-    app._insp_cached_file = "s1"
-    app._insp_cached_time_mode = "iid"
-    app._insp_cached_overlays = app.inspector_video_var.get()
-    app._insp_cached_iid_focus = 0
+    assert int(app.inspector_frame_slider.cget("to")) == loaded.n_frames - 1
+    app._inspector_step_forward()
+    app._inspector_step_forward()
+    assert app._get_inspector_frame_idx() == 2
+    app._inspector_step_back()
+    assert app._get_inspector_frame_idx() == 1
+    for _ in range(3):
+        app._inspector_step_back()
+    assert app._get_inspector_frame_idx() == 0, "it stops at the first frame"
+    app.inspector_frame_var.set(loaded.n_frames - 1)
+    app._inspector_step_forward()
+    assert app._get_inspector_frame_idx() == loaded.n_frames - 1, "and at the last"
 
-    app.inspector_iid_focus_var.set("2")
 
-    assert app._inspector_iid_focus_index(loaded.n_fish) == 2
-    assert app._insp_cached_iid_focus != \
-        app._inspector_iid_focus_index(loaded.n_fish), \
-        "cached focus should differ, which is what triggers the rebuild"
+@pytest.mark.parametrize("speed, stride, tick_ms", [
+    ("0.25x", 1, 133), ("1x", 1, 33), ("4x", 4, 33), ("8x", 8, 33)])
+def test_fast_playback_skips_frames_instead_of_outrunning_the_drawing(
+        app, speed, stride, tick_ms):
+    """Drawing a frame takes about as long as a frame lasts, so 8x cannot
+    mean eight times as many frames a second."""
+    app.inspector_speed_var.set(speed)
+    try:
+        assert app._inspector_playback_pace(30.0) == (stride, tick_ms)
+    finally:
+        app.inspector_speed_var.set("1x")
 
 
-def test_iid_focus_index_clamps_to_an_existing_fish(app, synthetic_npy):
-    """A focus left over from a six-fish session must not index a three-fish one."""
+def test_a_session_without_its_video_offers_to_find_it(app, synthetic_npy):
     from fish_analyzer.file_loading import TrajectoryFileLoader
 
     loaded = TrajectoryFileLoader.load_file(synthetic_npy, "s1")
-    app.inspector_iid_focus_var.set("5")
+    loaded.video_file_path = None
+    app.loaded_files["s1"] = loaded
+    app.inspector_file_var.set("s1")
+    app._on_inspector_file_selected()
 
-    assert app._inspector_iid_focus_index(loaded.n_fish) == 0
+    assert app.inspector_video_var.get() is False
+    assert "not found" in app.inspector_video_status.cget("text")
+    assert app.inspector_find_video_button.winfo_manager() == "pack"
 
-    app.inspector_iid_focus_var.set("not a number")
-    assert app._inspector_iid_focus_index(loaded.n_fish) == 0
+    app._inspector_show_video_status("tank.avi", True)
+    assert app.inspector_find_video_button.winfo_manager() == "", \
+        "nothing to find once a video is showing"
 
 
 # ---------------------------------------------------------------------------

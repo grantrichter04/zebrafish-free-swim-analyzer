@@ -3,10 +3,9 @@ fish_analyzer/gui/inspector_tab.py
 ===================================
 Video Inspector Tab - Unified frame-by-frame viewer with configurable overlays.
 
-An interactive inspector with overlay checkboxes for:
-- Fish positions and trails
-- Shoaling overlays (NND lines, convex hull, IID lines)
-- Video frame overlay
+Plays a session's video with the tracking drawn on it: fish positions, trails
+and lines to each fish's nearest neighbour, with nearest-neighbour distance
+over time underneath. Frames and clips are exported from here.
 """
 
 from typing import Dict, Any, Optional, List
@@ -66,281 +65,94 @@ class InspectorTabMixin:
     # CONTROLS
     # =========================================================================
 
-    @staticmethod
-    def _make_collapsible(parent, title, initially_open=True):
-        """Create a collapsible section with a toggle button.
-
-        Returns (outer_frame, content_frame) — pack widgets into content_frame.
-        """
-        outer = tk.Frame(parent)
-        outer.pack(fill="x", padx=5, pady=2)
-
-        prefix = "\u25BC " if initially_open else "\u25B6 "
-        btn = tk.Button(outer, text=prefix + title, font=("Arial", 9, "bold"),
-                        relief="flat", anchor="w", bg="#e0e0e0",
-                        activebackground="#d0d0d0")
-        btn.pack(fill="x")
-
-        content = tk.Frame(outer)
-        if initially_open:
-            content.pack(fill="x")
-
-        def toggle():
-            if content.winfo_viewable():
-                content.pack_forget()
-                btn.config(text="\u25B6 " + title)
-            else:
-                content.pack(fill="x")
-                btn.config(text="\u25BC " + title)
-            # Update scrollregion
-            parent.event_generate("<Configure>")
-
-        btn.config(command=toggle)
-        return outer, content
+    #: How the overlays are drawn. Fixed: nobody needs to tune these to check
+    #: a recording, and three sliders for it buried the controls that matter.
+    DOT_RADIUS = 12
+    TRAIL_OPACITY = 0.5
 
     def _create_inspector_controls(self, parent):
-        """Create all inspector controls in a scrollable panel."""
-        canvas = tk.Canvas(parent, width=300, highlightthickness=0)
-        scrollbar = tk.Scrollbar(parent, orient="vertical", command=canvas.yview)
-        scroll_frame = ttk.Frame(canvas)
+        """The left column: which session, what to draw on it, and export."""
+        column = tk.Frame(parent, width=250)
+        column.pack(fill="y", expand=True, padx=8)
+        column.pack_propagate(False)
 
-        scroll_frame.bind(
-            "<Configure>",
-            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
-        )
-        canvas.create_window((0, 0), window=scroll_frame, anchor="nw")
-        canvas.configure(yscrollcommand=scrollbar.set)
+        def heading(text):
+            tk.Label(column, text=text, font=("Arial", 10, "bold")
+                     ).pack(anchor="w", pady=(14, 3))
 
-        scrollbar.pack(side="right", fill="y")
-        canvas.pack(side="left", fill="both", expand=True)
-
-        # --- File Selection ---
-        file_frame = tk.LabelFrame(scroll_frame, text="File",
-                                    font=("Arial", 10, "bold"))
-        file_frame.pack(fill="x", padx=5, pady=5)
-
+        # --- Session ---
+        heading("Session")
         self.inspector_file_var = tk.StringVar()
         self.inspector_file_dropdown = ttk.Combobox(
-            file_frame, textvariable=self.inspector_file_var,
-            state="readonly", width=25
-        )
-        self.inspector_file_dropdown.pack(fill="x", padx=5, pady=3)
+            column, textvariable=self.inspector_file_var, state="readonly")
+        self.inspector_file_dropdown.pack(fill="x")
         self.inspector_file_dropdown.bind(
-            "<<ComboboxSelected>>", self._on_inspector_file_selected
-        )
+            "<<ComboboxSelected>>", self._on_inspector_file_selected)
 
-        # --- Frame Navigation ---
-        nav_frame = tk.LabelFrame(scroll_frame, text="Navigation",
-                                   font=("Arial", 10, "bold"))
-        nav_frame.pack(fill="x", padx=5, pady=5)
-
-        # The frame slider and the transport controls live under the video
-        # instead, where there is room to scrub precisely - see
-        # _create_inspector_transport.
-
-        # Step size
-        step_row = tk.Frame(nav_frame)
-        step_row.pack(fill="x", padx=5, pady=2)
-        tk.Label(step_row, text="Step:").pack(side="left")
-        self.inspector_step_var = tk.StringVar(value="30")
-        step_combo = ttk.Combobox(
-            step_row, textvariable=self.inspector_step_var,
-            values=["1", "5", "10", "30", "60", "150", "300"],
-            width=5, state="readonly"
-        )
-        step_combo.pack(side="left", padx=3)
-        step_combo.bind("<<ComboboxSelected>>", self._on_inspector_step_change)
-        tk.Label(step_row, text="frames/step").pack(side="left")
-
-        # Jump controls
-        jump_row = tk.Frame(nav_frame)
-        jump_row.pack(fill="x", padx=5, pady=3)
-        tk.Label(jump_row, text="Jump to:").pack(side="left")
-
-        tk.Label(jump_row, text="Frame:").pack(side="left", padx=(5, 2))
-        self.inspector_jump_frame_var = tk.StringVar()
-        entry_f = tk.Entry(jump_row, textvariable=self.inspector_jump_frame_var,
-                           width=7)
-        entry_f.pack(side="left")
-        entry_f.bind("<Return>", lambda e: self._inspector_jump_to_input())
-
-        tk.Label(jump_row, text="Time:").pack(side="left", padx=(5, 2))
-        self.inspector_jump_time_var = tk.StringVar()
-        entry_t = tk.Entry(jump_row, textvariable=self.inspector_jump_time_var,
-                           width=7)
-        entry_t.pack(side="left")
-        entry_t.bind("<Return>", lambda e: self._inspector_jump_to_input())
-
-        tk.Button(jump_row, text="Go", command=self._inspector_jump_to_input,
-                  width=3).pack(side="left", padx=3)
-
-        # --- Trails (collapsible) ---
-        _, trail_frame = self._make_collapsible(scroll_frame, "Trails")
-
-        tl_row = tk.Frame(trail_frame)
-        tl_row.pack(fill="x", padx=5, pady=3)
-        tk.Label(tl_row, text="Length:").pack(side="left")
-        self.inspector_trail_var = tk.IntVar(value=0)
-        tk.Scale(
-            tl_row, from_=0, to=200, orient=tk.HORIZONTAL,
-            variable=self.inspector_trail_var,
-            command=lambda v: self._inspector_update_fast(),
-            length=120, showvalue=True
-        ).pack(side="left", padx=3, fill="x", expand=True)
-        tk.Label(tl_row, text="frames").pack(side="left")
-
-        # --- Drawing Style (collapsible, initially closed) ---
-        _, style_frame = self._make_collapsible(scroll_frame, "Drawing Style",
-                                                 initially_open=False)
-
-        # Dot size
-        dot_row = tk.Frame(style_frame)
-        dot_row.pack(fill="x", padx=5, pady=2)
-        tk.Label(dot_row, text="Dot size:").pack(side="left")
-        self.inspector_dot_size_var = tk.IntVar(value=12)
-        tk.Scale(
-            dot_row, from_=5, to=30, orient=tk.HORIZONTAL,
-            variable=self.inspector_dot_size_var,
-            command=lambda v: self._inspector_update_fast(),
-            length=100, showvalue=True
-        ).pack(side="left", padx=3, fill="x", expand=True)
-        tk.Label(dot_row, text="px").pack(side="left")
-
-        # Trail opacity
-        opacity_row = tk.Frame(style_frame)
-        opacity_row.pack(fill="x", padx=5, pady=2)
-        tk.Label(opacity_row, text="Trail opacity:").pack(side="left")
-        self.inspector_trail_opacity_var = tk.DoubleVar(value=0.5)
-        tk.Scale(
-            opacity_row, from_=0.1, to=1.0, orient=tk.HORIZONTAL,
-            variable=self.inspector_trail_opacity_var, resolution=0.1,
-            command=lambda v: self._inspector_update_fast(),
-            length=100, showvalue=True
-        ).pack(side="left", padx=3, fill="x", expand=True)
-
-        # Trail width
-        width_row = tk.Frame(style_frame)
-        width_row.pack(fill="x", padx=5, pady=2)
-        tk.Label(width_row, text="Trail width:").pack(side="left")
-        self.inspector_trail_width_var = tk.DoubleVar(value=1.0)
-        tk.Scale(
-            width_row, from_=0.5, to=3.0, orient=tk.HORIZONTAL,
-            variable=self.inspector_trail_width_var, resolution=0.5,
-            command=lambda v: self._inspector_update_fast(),
-            length=100, showvalue=True
-        ).pack(side="left", padx=3, fill="x", expand=True)
-
-        # --- Video Overlay (collapsible) ---
-        _, video_frame = self._make_collapsible(scroll_frame, "Video Overlay",
-                                                 initially_open=False)
-
+        # The video is found from the session; this is only for when it is not.
+        #: True while frames come from the video rather than the background.
         self.inspector_video_var = tk.BooleanVar(value=False)
-        tk.Checkbutton(
-            video_frame, text="Use video frames",
-            variable=self.inspector_video_var,
-            command=self._inspector_on_video_toggle
-        ).pack(anchor="w", padx=5)
-
-        btn_row = tk.Frame(video_frame)
-        btn_row.pack(fill="x", padx=5, pady=2)
-        tk.Button(btn_row, text="Browse Video...",
-                  command=self._inspector_browse_video,
-                  width=15).pack(side="left")
-
         self.inspector_video_status = tk.Label(
-            video_frame, text="No video loaded",
-            font=("Arial", 8), fg="gray"
-        )
-        self.inspector_video_status.pack(anchor="w", padx=5, pady=2)
+            column, text="", font=("Arial", 8), fg="gray", wraplength=235,
+            justify="left")
+        self.inspector_video_status.pack(anchor="w", pady=(3, 0))
+        self._inspector_find_video_row = tk.Frame(column)
+        self._inspector_find_video_row.pack(fill="x")
+        self.inspector_find_video_button = tk.Button(
+            self._inspector_find_video_row, text="Find video...",
+            command=self._inspector_browse_video)
 
-        qual_row = tk.Frame(video_frame)
-        qual_row.pack(fill="x", padx=5, pady=2)
-        tk.Label(qual_row, text="Quality:").pack(side="left")
-        self.inspector_quality_var = tk.StringVar(value="high")
-        ttk.Combobox(
-            qual_row, textvariable=self.inspector_quality_var,
-            values=["high", "medium", "low"],
-            width=8, state="readonly"
-        ).pack(side="left", padx=3)
-
-        # --- Spatial Overlays (collapsible) ---
-        _, overlay_frame = self._make_collapsible(scroll_frame,
-                                                    "Spatial Overlays")
-
+        # --- What to draw ---
+        heading("Show")
         self.inspector_show_positions_var = tk.BooleanVar(value=True)
         tk.Checkbutton(
-            overlay_frame, text="Fish positions",
+            column, text="Fish positions",
             variable=self.inspector_show_positions_var,
             command=self._inspector_on_overlay_change
-        ).pack(anchor="w", padx=5)
+        ).pack(anchor="w")
 
         self.inspector_show_nnd_var = tk.BooleanVar(value=False)
         tk.Checkbutton(
-            overlay_frame, text="NND lines",
+            column, text="Lines to nearest neighbour",
             variable=self.inspector_show_nnd_var,
             command=self._inspector_on_overlay_change
-        ).pack(anchor="w", padx=5)
+        ).pack(anchor="w")
 
-        self.inspector_show_hull_var = tk.BooleanVar(value=False)
-        tk.Checkbutton(
-            overlay_frame, text="Convex hull",
-            variable=self.inspector_show_hull_var,
-            command=self._inspector_on_overlay_change
-        ).pack(anchor="w", padx=5)
+        trail_row = tk.Frame(column)
+        trail_row.pack(fill="x", pady=(4, 0))
+        tk.Label(trail_row, text="Trail:").pack(side="left", anchor="s")
+        self.inspector_trail_var = tk.IntVar(value=0)
+        tk.Scale(
+            trail_row, from_=0, to=200, orient=tk.HORIZONTAL,
+            variable=self.inspector_trail_var,
+            command=lambda v: self._inspector_update_fast(),
+            showvalue=True
+        ).pack(side="left", padx=3, fill="x", expand=True)
+        tk.Label(trail_row, text="frames").pack(side="left", anchor="s")
 
-        iid_row = tk.Frame(overlay_frame)
-        iid_row.pack(fill="x", padx=5)
-        self.inspector_show_iid_var = tk.BooleanVar(value=False)
-        tk.Checkbutton(
-            iid_row, text="IID lines",
-            variable=self.inspector_show_iid_var,
-            command=self._inspector_on_overlay_change
-        ).pack(side="left")
-        tk.Label(iid_row, text="Focus:").pack(side="left", padx=(10, 2))
-        self.inspector_iid_focus_var = tk.StringVar(value="0")
-        self.inspector_iid_focus_combo = ttk.Combobox(
-            iid_row, textvariable=self.inspector_iid_focus_var,
-            state="readonly", width=4
-        )
-        self.inspector_iid_focus_combo.pack(side="left")
-        # Without this the selection changed nothing until some other event
-        # happened to trigger a redraw.
-        self.inspector_iid_focus_combo.bind(
-            "<<ComboboxSelected>>",
-            lambda e: self._inspector_on_overlay_change()
-        )
-
-        # --- Time Panel Mode (collapsible) ---
-        _, time_frame = self._make_collapsible(scroll_frame, "Time Panel")
-
+        # "none" or "nnd": a string because the renderer and the exporter
+        # both switch on which panel, if any, sits under the video.
         self.inspector_time_mode_var = tk.StringVar(value="none")
-        modes = [
-            ("None", "none"),
-            ("NND", "nnd"),
-            ("IID", "iid"),
-            ("Hull Area", "hull"),
-        ]
-        for text, val in modes:
-            tk.Radiobutton(
-                time_frame, text=text,
-                variable=self.inspector_time_mode_var, value=val,
-                command=self._inspector_rebuild_needed
-            ).pack(anchor="w", padx=5)
+        tk.Checkbutton(
+            column, text="Nearest-neighbour distance\nover time, under the video",
+            justify="left", variable=self.inspector_time_mode_var,
+            onvalue="nnd", offvalue="none",
+            command=self._inspector_rebuild_needed
+        ).pack(anchor="w", pady=(6, 0))
 
-        # --- Export (collapsible) ---
-        _, export_frame = self._make_collapsible(scroll_frame, "Export")
-
-        tk.Button(export_frame, text="Save Frame (PNG)...",
+        # --- Export ---
+        heading("Export")
+        tk.Button(column, text="Save frame (PNG)...",
                   command=self._inspector_save_frame,
-                  bg="lightgreen").pack(fill="x", padx=5, pady=2)
-        tk.Button(export_frame, text="Export Clip...",
+                  bg="lightgreen").pack(fill="x", pady=2)
+        tk.Button(column, text="Export clip...",
                   command=self._inspector_export_clip_dialog,
-                  bg="lightgreen").pack(fill="x", padx=5, pady=2)
-        tk.Label(export_frame,
-                 text="Exports what this tab is showing,\n"
-                      "at full video resolution.",
-                 font=("Arial", 8), fg="gray",
-                 justify="left").pack(anchor="w", padx=5, pady=(0, 4))
+                  bg="lightgreen").pack(fill="x", pady=2)
+        tk.Label(column,
+                 text="Exports what is shown, at full video resolution. "
+                      "A clip runs from Set In to Set Out, under the video.",
+                 font=("Arial", 8), fg="gray", wraplength=235,
+                 justify="left").pack(anchor="w", pady=(2, 0))
 
     # =========================================================================
     # DISPLAY AREA
@@ -404,9 +216,9 @@ class InspectorTabMixin:
         self.inspector_mark_label.pack(side="left", padx=10)
 
         # On the second row, so row one is buttons plus a scrubber that gets
-        # everything else. The readout is long - frame, time, NND, IID, hull.
+        # everything else.
         self.inspector_info_label = tk.Label(
-            mark_row, text="Frame: -- | Time: --", font=("Arial", 9),
+            mark_row, text="", font=("Arial", 9),
             bg="#ececec", anchor="e"
         )
         self.inspector_info_label.pack(side="right", padx=(8, 2))
@@ -433,7 +245,8 @@ class InspectorTabMixin:
 
         tk.Label(
             self.inspector_plot_frame,
-            text="Load files in Data tab, then select a file to inspect",
+            text="Load sessions on the Sessions & Units tab, then choose "
+                 "one here.",
             font=("Arial", 11), fg="gray"
         ).pack(expand=True)
 
@@ -453,7 +266,6 @@ class InspectorTabMixin:
         self._insp_cached_file = None
         self._insp_cached_overlays = None
         self._insp_cached_time_mode = None
-        self._insp_cached_iid_focus = None
         self._insp_video_bg_artist = None
         self._insp_cached_background = None
         self._insp_cached_width_bl = None
@@ -474,14 +286,6 @@ class InspectorTabMixin:
         self._insp_recapture_after_id = None
 
 
-    def _inspector_iid_focus_index(self, n_fish):
-        """The IID focus fish, clamped to a fish that exists."""
-        try:
-            focus = int(self.inspector_iid_focus_var.get())
-        except (ValueError, TypeError):
-            return 0
-        return focus if 0 <= focus < n_fish else 0
-
     def render_settings_from_vars(self) -> OverlaySettings:
         """Snapshot the overlay controls.
 
@@ -489,22 +293,17 @@ class InspectorTabMixin:
         and the exporter both go through here, so they cannot disagree about
         what is being drawn.
         """
-        def _int(var, default=0):
-            try:
-                return int(var.get())
-            except (ValueError, TypeError):
-                return default
+        try:
+            trail_length = int(self.inspector_trail_var.get())
+        except (ValueError, TypeError, tk.TclError):
+            trail_length = 0
 
         return OverlaySettings(
             show_positions=self.inspector_show_positions_var.get(),
             show_nnd=self.inspector_show_nnd_var.get(),
-            show_hull=self.inspector_show_hull_var.get(),
-            show_iid=self.inspector_show_iid_var.get(),
-            iid_focus=_int(self.inspector_iid_focus_var),
-            trail_length=_int(self.inspector_trail_var),
-            trail_opacity=float(self.inspector_trail_opacity_var.get()),
-            trail_width=float(self.inspector_trail_width_var.get()),
-            dot_radius=_int(self.inspector_dot_size_var, 6),
+            trail_length=trail_length,
+            trail_opacity=self.TRAIL_OPACITY,
+            dot_radius=self.DOT_RADIUS,
         )
 
     # =========================================================================
@@ -526,44 +325,21 @@ class InspectorTabMixin:
             return
 
         loaded = self.loaded_files[selected]
-        n_frames = loaded.n_frames
 
-        # Update frame slider range
-        step = int(self.inspector_step_var.get())
-        max_steps = max(0, (n_frames - 1) // step)
-        self.inspector_frame_slider.configure(to=max_steps)
+        # One slider position per frame.
+        self.inspector_frame_slider.configure(to=max(0, loaded.n_frames - 1))
         self.inspector_frame_var.set(0)
 
         # A range marked on one recording means nothing on another, and
         # silently carrying it over would export the wrong stretch.
         self._inspector_clear_marks()
 
-        # Update the focus-fish dropdown
-        fish_opts = [str(i) for i in range(loaded.n_fish)]
-        self.inspector_iid_focus_combo['values'] = fish_opts
-        if fish_opts:
-            self.inspector_iid_focus_combo.current(0)
-
-        # Try to auto-load the associated video
-        self._inspector_try_auto_load_video(selected)
+        self.inspector_video_var.set(
+            self._inspector_try_auto_load_video(selected))
 
         # Force rebuild
         self._insp_needs_rebuild = True
         self._update_inspector_info()
-        self._inspector_update_fast()
-
-    def _on_inspector_step_change(self, event=None):
-        """Recalculate slider range when step size changes."""
-        selected = self.inspector_file_var.get()
-        if not selected or selected not in self.loaded_files:
-            return
-        loaded = self.loaded_files[selected]
-        step = int(self.inspector_step_var.get())
-        max_steps = max(0, (loaded.n_frames - 1) // step)
-        self.inspector_frame_slider.configure(to=max_steps)
-        self.inspector_frame_var.set(0)
-        self._update_inspector_info()
-        self._insp_needs_rebuild = True
         self._inspector_update_fast()
 
     # =========================================================================
@@ -571,9 +347,8 @@ class InspectorTabMixin:
     # =========================================================================
 
     def _get_inspector_frame_idx(self):
-        """Get the actual frame index from the slider position."""
-        step = int(self.inspector_step_var.get())
-        return self.inspector_frame_var.get() * step
+        """The frame the slider is on."""
+        return self.inspector_frame_var.get()
 
     def _update_inspector_info(self):
         """Update the frame info label."""
@@ -587,21 +362,17 @@ class InspectorTabMixin:
         fps = loaded.calibration.frame_rate
         time_s = frame_idx / fps
 
-        info = f"Frame: {frame_idx} | Time: {time_s:.1f}s"
+        info = f"Frame {frame_idx} | {time_s:.1f} s"
 
-        # Add shoaling metrics if available (nearest sample)
+        # The nearest shoaling sample, when the session has been analysed.
         if loaded.shoaling_results:
             results = loaded.shoaling_results
-            diffs = np.abs(results.frame_indices - frame_idx)
-            nearest = int(np.argmin(diffs))
-            nnd = results.mean_nnd_per_sample[nearest]
-            iid = results.mean_iid_per_sample[nearest]
-            hull = results.convex_hull_area_per_sample[nearest]
-            info += f" | NND: {nnd:.2f} | IID: {iid:.2f} | Hull: {hull:.1f}"
+            nearest = int(np.argmin(np.abs(results.frame_indices - frame_idx)))
+            info += (f" | Nearest neighbour "
+                     f"{results.mean_nnd_per_sample[nearest]:.2f} "
+                     f"{loaded.calibration.unit_name}")
 
         self.inspector_info_label.config(text=info)
-        self.inspector_jump_frame_var.set(str(frame_idx))
-        self.inspector_jump_time_var.set(f"{time_s:.1f}")
 
     # =========================================================================
     # NAVIGATION
@@ -612,66 +383,22 @@ class InspectorTabMixin:
         self._update_inspector_info()
         self._inspector_update_fast()
 
-    def _inspector_jump_to_input(self):
-        """Jump to specified frame or time."""
+    def _inspector_step(self, frames: int):
+        """Move by `frames`, staying inside the recording."""
         selected = self.inspector_file_var.get()
         if not selected or selected not in self.loaded_files:
             return
-
-        loaded = self.loaded_files[selected]
-        fps = loaded.calibration.frame_rate
-        step = int(self.inspector_step_var.get())
-
-        frame_str = self.inspector_jump_frame_var.get().strip()
-        time_str = self.inspector_jump_time_var.get().strip()
-
-        target_frame = None
-        if frame_str:
-            try:
-                target_frame = int(frame_str)
-            except ValueError:
-                pass
-
-        if target_frame is None and time_str:
-            try:
-                target_frame = int(float(time_str) * fps)
-            except ValueError:
-                pass
-
-        if target_frame is not None:
-            max_step = int(self.inspector_frame_slider.cget('to'))
-            target_step = max(0, min(target_frame // step, max_step))
-            self.inspector_frame_var.set(target_step)
-            self._update_inspector_info()
-            self._inspector_update_fast()
+        last = self.loaded_files[selected].n_frames - 1
+        self.inspector_frame_var.set(
+            max(0, min(last, self._get_inspector_frame_idx() + frames)))
+        self._update_inspector_info()
+        self._inspector_update_fast()
 
     def _inspector_step_back(self):
-        """Step back by exactly 1 frame."""
-        selected = self.inspector_file_var.get()
-        if not selected or selected not in self.loaded_files:
-            return
-        loaded = self.loaded_files[selected]
-        step = int(self.inspector_step_var.get())
-        frame_idx = self._get_inspector_frame_idx()
-        target = max(0, frame_idx - 1)
-        target_step = target // step
-        self.inspector_frame_var.set(target_step)
-        self._update_inspector_info()
-        self._inspector_update_fast()
+        self._inspector_step(-1)
 
     def _inspector_step_forward(self):
-        """Step forward by exactly 1 frame."""
-        selected = self.inspector_file_var.get()
-        if not selected or selected not in self.loaded_files:
-            return
-        loaded = self.loaded_files[selected]
-        step = int(self.inspector_step_var.get())
-        frame_idx = self._get_inspector_frame_idx()
-        target = min(loaded.n_frames - 1, frame_idx + 1)
-        target_step = target // step
-        self.inspector_frame_var.set(target_step)
-        self._update_inspector_info()
-        self._inspector_update_fast()
+        self._inspector_step(1)
 
     # =========================================================================
     # PLAYBACK
@@ -689,19 +416,21 @@ class InspectorTabMixin:
         self.animation_running = True
         self.inspector_play_button.config(text="|| Pause", bg="salmon")
 
-        # Pre-cache video frames
-        selected = self.inspector_file_var.get()
-        if selected and selected in self.video_readers:
-            current_frame = self._get_inspector_frame_idx()
-            step = int(self.inspector_step_var.get())
-            reader = self.video_readers[selected]
-            n_frames = self.loaded_files[selected].n_frames
-            for i in range(50):
-                f = current_frame + i * step
-                if f < n_frames:
-                    reader.read_frame(f)
-
         self._inspector_animate_step()
+
+    def _inspector_playback_pace(self, fps: float):
+        """(frames to advance per tick, milliseconds per tick).
+
+        Drawing a frame takes about as long as a frame lasts, so playback
+        faster than real time shows every second, fourth or eighth frame at
+        an unchanged tick rather than trying to draw them all.
+        """
+        try:
+            speed = float(self.inspector_speed_var.get().replace('x', ''))
+        except ValueError:
+            speed = 1.0
+        stride = max(1, int(round(speed)))
+        return stride, max(16, int(stride / (fps * speed) * 1000))
 
     def _inspector_stop_playback(self):
         """Stop animation."""
@@ -789,19 +518,11 @@ class InspectorTabMixin:
 
         import time
 
-        # Calculate target interval before rendering
-        step = int(self.inspector_step_var.get())
         selected = self.inspector_file_var.get()
-        target_ms = 100
+        stride, target_ms = 1, 100
         if selected and selected in self.loaded_files:
-            fps = self.loaded_files[selected].calibration.frame_rate
-            real_time = step / fps
-            speed_str = self.inspector_speed_var.get()
-            try:
-                speed_mult = float(speed_str.replace('x', ''))
-            except ValueError:
-                speed_mult = 1.0
-            target_ms = max(16, int((real_time / speed_mult) * 1000))
+            stride, target_ms = self._inspector_playback_pace(
+                self.loaded_files[selected].calibration.frame_rate)
 
         t_start = time.perf_counter()
 
@@ -809,8 +530,8 @@ class InspectorTabMixin:
             current = self.inspector_frame_var.get()
             max_val = int(self.inspector_frame_slider.cget('to'))
 
-            if current < max_val:
-                self.inspector_frame_var.set(current + 1)
+            if current + stride <= max_val:
+                self.inspector_frame_var.set(current + stride)
             else:
                 self.inspector_frame_var.set(0)
 
@@ -856,15 +577,26 @@ class InspectorTabMixin:
     # VIDEO
     # =========================================================================
 
+    def _inspector_show_video_status(self, text: str, found: bool):
+        """Say which video is showing, and offer to find one only if none is."""
+        self.inspector_video_status.config(
+            text=text, fg="gray" if found else "#b35c00")
+        if found:
+            self.inspector_find_video_button.pack_forget()
+        else:
+            self.inspector_find_video_button.pack(anchor="w", pady=(3, 0))
+
     def _inspector_try_auto_load_video(self, selected: str) -> bool:
         """
         Try to load the video that was auto-detected at file-load time.
 
-        Returns True if a video is now ready in self.video_readers[selected],
-        False if nothing could be loaded (caller should prompt the user).
+        Returns True if a video is now ready in self.video_readers[selected].
+        Without one the inspector draws on idtracker.ai's background image.
         """
         if selected in self.video_readers:
-            return True   # already loaded
+            self._inspector_show_video_status(
+                self.video_readers[selected].video_path.name, True)
+            return True
 
         loaded = self.loaded_files.get(selected)
         if loaded is None:
@@ -872,48 +604,37 @@ class InspectorTabMixin:
 
         video_path = loaded.video_file_path
         if video_path is None or not video_path.exists():
-            self.inspector_video_status.config(
-                text="No video found — use Browse to load manually",
-                fg="gray"
-            )
+            self._inspector_show_video_status(
+                "The video for this session was not found, so the tracking "
+                "is drawn on a still background.", False)
             return False
 
         try:
             from ..video_utils import VideoFrameReader, CV2_AVAILABLE
             if not CV2_AVAILABLE:
-                self.inspector_video_status.config(
-                    text="Install opencv-python-headless for video support",
-                    fg="orange"
-                )
+                self._inspector_show_video_status(
+                    "OpenCV is missing, so the video cannot be shown. "
+                    "Run install.bat again.", True)
                 return False
 
-            reader = VideoFrameReader(video_path)
-            self.video_readers[selected] = reader
-            self.inspector_video_status.config(
-                text=f"Auto: {video_path.name} "
-                     f"({reader.total_frames} fr, "
-                     f"{reader.width}×{reader.height})",
-                fg="green"
-            )
-            self.inspector_video_var.set(True)
+            self.video_readers[selected] = VideoFrameReader(video_path)
+            self._inspector_show_video_status(video_path.name, True)
             return True
 
         except Exception as e:
-            self.inspector_video_status.config(
-                text=f"Auto-load failed: {e}",
-                fg="orange"
-            )
+            self._inspector_show_video_status(
+                f"{video_path.name} could not be opened: {e}", False)
             return False
 
     def _inspector_browse_video(self):
-        """Browse for a video file."""
+        """Choose the session's video by hand."""
         selected = self.inspector_file_var.get()
         if not selected or selected not in self.loaded_files:
-            messagebox.showwarning("No File", "Select a file first.")
+            messagebox.showwarning("No session", "Choose a session first.")
             return
 
         path = filedialog.askopenfilename(
-            title="Select Video File",
+            title=f"Video for {selected}",
             filetypes=[
                 ("Video files", "*.mp4 *.avi *.mov *.mkv *.MP4 *.AVI *.MOV"),
                 ("All files", "*.*")
@@ -923,55 +644,20 @@ class InspectorTabMixin:
             return
 
         try:
-            from ..video_utils import VideoFrameReader, CV2_AVAILABLE
-
-            if not CV2_AVAILABLE:
-                messagebox.showerror(
-                    "OpenCV Required",
-                    "OpenCV is required for video frame reading.\n\n"
-                    "Install with: pip install opencv-python-headless"
-                )
-                return
+            from ..video_utils import VideoFrameReader
 
             if selected in self.video_readers:
                 self.video_readers[selected].close()
 
-            reader = VideoFrameReader(Path(path))
-            self.video_readers[selected] = reader
+            self.video_readers[selected] = VideoFrameReader(Path(path))
             self.loaded_files[selected].video_file_path = Path(path)
-
-            self.inspector_video_status.config(
-                text=f"Loaded: {reader.total_frames} frames, "
-                     f"{reader.width}x{reader.height}",
-                fg="green"
-            )
-
-            self.inspector_video_var.set(True)
-            self._insp_needs_rebuild = True
-            self._inspector_update_fast()
-
-            messagebox.showinfo(
-                "Video Loaded",
-                f"Video loaded successfully!\n\n"
-                f"Resolution: {reader.width}x{reader.height}\n"
-                f"Frames: {reader.total_frames}\n"
-                f"FPS: {reader.fps:.1f}"
-            )
-
         except Exception as e:
             messagebox.showerror("Video Error",
                                  f"Could not open video:\n{e}")
+            return
 
-    def _inspector_on_video_toggle(self):
-        """Handle video toggle checkbox."""
-        if self.inspector_video_var.get():
-            selected = self.inspector_file_var.get()
-            if selected not in self.video_readers:
-                # Try auto-load before complaining
-                if not self._inspector_try_auto_load_video(selected):
-                    self.inspector_video_var.set(False)
-                    return
-
+        self._inspector_show_video_status(Path(path).name, True)
+        self.inspector_video_var.set(True)
         self._insp_needs_rebuild = True
         self._inspector_update_fast()
 
@@ -991,20 +677,14 @@ class InspectorTabMixin:
 
         time_mode = self.inspector_time_mode_var.get()
 
-        # Video toggle needs rebuild (changes background compositing source)
+        # A found video changes what the overlays are composited onto.
         video_on = self.inspector_video_var.get()
-
-        # The IID panel plots one fish, so switching focus has to redraw it -
-        # otherwise the trace keeps describing the previously selected fish.
-        iid_focus = self._inspector_iid_focus_index(loaded.n_fish)
 
         rebuild = (
             self._insp_needs_rebuild
             or self._insp_cached_file != selected
             or self._insp_cached_time_mode != time_mode
             or self._insp_cached_overlays != video_on
-            or (time_mode == 'iid'
-                and self._insp_cached_iid_focus != iid_focus)
         )
 
         if rebuild:
@@ -1018,7 +698,6 @@ class InspectorTabMixin:
             self._insp_cached_file = selected
             self._insp_cached_time_mode = time_mode
             self._insp_cached_overlays = video_on
-            self._insp_cached_iid_focus = iid_focus
 
         self._inspector_update_dynamic(
             selected, loaded, frame_idx, time_mode
@@ -1100,40 +779,28 @@ class InspectorTabMixin:
                              self._on_inspector_time_canvas_resize, add="+")
 
             # Populate the time axes
-            if time_mode in ('nnd', 'iid', 'hull') and loaded.shoaling_results:
+            if loaded.shoaling_results:
                 results = loaded.shoaling_results
                 time_min = results.timestamps / 60.0
                 ax_t = self._insp_ax_time
-                if time_mode == 'nnd':
-                    ax_t.plot(time_min, results.mean_nnd_per_sample,
-                              'b-', lw=1, alpha=0.7)
-                    ax_t.set_ylabel('NND (BL)', fontsize=8)
-                elif time_mode == 'iid':
-                    # The IID overlay draws one focus fish's distances, so the
-                    # panel plots that same fish. Plotting the all-pairs mean
-                    # here captioned the picture with a different quantity:
-                    # on a real six-fish session the two differed by a median
-                    # of 1.9 BL against a typical IID of 5.5.
-                    focus = self._inspector_iid_focus_index(loaded.n_fish)
-                    ax_t.plot(time_min,
-                              results.individual_iid_per_sample[:, focus],
-                              'g-', lw=1, alpha=0.7)
-                    ax_t.set_ylabel(f'Fish {focus} mean dist. '
-                                    f'({loaded.calibration.unit_name})',
-                                    fontsize=8)
-                else:
-                    ax_t.plot(time_min, results.convex_hull_area_per_sample,
-                              'r-', lw=1, alpha=0.7)
-                    ax_t.set_ylabel('Hull (BL\u00b2)', fontsize=8)
+                ax_t.plot(time_min, results.mean_nnd_per_sample,
+                          'b-', lw=1, alpha=0.7)
+                ax_t.set_ylabel('Nearest neighbour '
+                                f'({loaded.calibration.unit_name})', fontsize=8)
                 ax_t.set_xlabel('Time (min)', fontsize=8)
                 ax_t.set_xlim(time_min[0], time_min[-1])
                 ax_t.grid(True, alpha=0.3)
+                # Animated, so a full draw of the chart leaves it out. Without
+                # that, a chart cached while the cursor sat mid-recording kept
+                # a second, stationary cursor, on screen and in exported clips.
                 self._insp_time_marker = ax_t.axvline(
-                    x=0, color='red', lw=2, linestyle='--'
+                    x=0, color='red', lw=2, linestyle='--', animated=True
                 )
-            elif time_mode in ('nnd', 'iid', 'hull') and not loaded.shoaling_results:
+            else:
                 self._insp_ax_time.text(
-                    0.5, 0.5, "Run Shoaling Analysis first",
+                    0.5, 0.5,
+                    "No nearest-neighbour distances for this session yet.\n"
+                    "Press Run All Analysis on Sessions & Units.",
                     transform=self._insp_ax_time.transAxes,
                     ha='center', va='center', fontsize=10, color='gray'
                 )
@@ -1223,7 +890,8 @@ class InspectorTabMixin:
 
         display = compose_frame(display, loaded.trajectories, frame_idx,
                                 self.render_settings_from_vars(), scale,
-                                self._insp_fish_colors)
+                                self._insp_fish_colors,
+                                loaded.metadata.identity_labels)
 
         # --- Render video frame via PIL/ImageTk (fast direct pixel display) ---
         canvas_w = self._insp_video_canvas.winfo_width()
@@ -1282,15 +950,13 @@ class InspectorTabMixin:
         if self._insp_canvas is None:
             return
 
-        if time_mode in ('nnd', 'iid', 'hull') and self._insp_time_marker:
+        if self._insp_time_marker:
             current_min = time_s / 60.0
             self._insp_time_marker.set_xdata([current_min, current_min])
+            if self._insp_bg_cache is None:
+                # Dropped by a resize: draw the chart again at the new size.
+                self._inspector_recapture_time_background()
             if self._insp_bg_cache is not None:
-                try:
-                    self._insp_canvas.restore_region(self._insp_bg_cache)
-                    self._insp_ax_time.draw_artist(self._insp_time_marker)
-                    self._insp_canvas.blit(self._insp_fig.bbox)
-                except Exception:
-                    self._insp_canvas.draw_idle()
-            else:
-                self._insp_canvas.draw_idle()
+                self._insp_canvas.restore_region(self._insp_bg_cache)
+            self._insp_ax_time.draw_artist(self._insp_time_marker)
+            self._insp_canvas.blit(self._insp_fig.bbox)
