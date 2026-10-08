@@ -77,13 +77,21 @@ with the videos: they are the tracking results.
      session, to check that fish were not swapped and correct any that were.
      Save there (Ctrl+S) and the session is ticked as **Reviewed** and
      reloaded with the corrections.
-2. **Results** shows the headline metrics: total distance, typical speed,
-   peak speed and path straightness. Small dots are fish, large markers are
-   session means. Fish sharing a tank are not independent, so the session is
-   the unit to compare, and a group needs several sessions to be tested.
-3. **Individual Analysis**, **Bout Analysis**, **Shoaling Analysis** and
-   **Spatial Analysis** each show their results and have a CSV export button.
-4. **Video Inspector** plays the video with the tracking drawn on top, and
+2. **Results** shows the headline measures: total distance, typical speed,
+   peak speed, path straightness and time near the wall. Small dots are fish,
+   large markers are session means. Fish sharing a tank are not independent,
+   so the session is the unit to compare, and a group needs several sessions
+   to be tested. **Speed distributions** shows the same data in full, and
+   **What do these measures mean?** explains each one.
+   - Time near the wall uses the arena outline drawn in idtracker.ai's setup
+     window, so nothing needs redrawing.
+3. **Shoaling** shows how close the fish keep to each other: nearest-neighbour
+   and inter-individual distance, against what fish placed at random in the
+   tank would give, and how both change through the recording.
+4. **Spatial Analysis** has the position heatmaps, and arena drawing for
+   sessions without an outline. **Individual Analysis** and **Bout Analysis**
+   are older, more detailed views.
+5. **Video Inspector** plays the video with the tracking drawn on top, and
    exports frames and clips.
 
 Already have tracked sessions from before? Skip the Tracking tab and press

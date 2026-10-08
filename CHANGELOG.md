@@ -49,6 +49,18 @@ percentile) speed and path straightness as SuperPlots: fish as small dots,
 session means as large markers, and a group line at the mean of its sessions,
 because the tank is the experimental unit. One table, one export.
 
+**Results also shows** time near the wall, computed from the arena outline
+drawn in idtracker.ai's setup window and read against the level even use of
+the tank would give; a speed-distribution view (a cumulative curve per
+session, a ridge per fish); and a plain description of every measure.
+
+**Shoaling tab rebuilt, and run with everything else.** Nearest-neighbour and
+inter-individual distance as SuperPlots against what randomly placed fish
+would give, the same two through the recording, one table, one export. It no
+longer has its own run button, file list or parameters: it samples once a
+second and runs from "Run All Analysis". Convex hull area is still computed
+and exported but is no longer plotted.
+
 **Names, groups and review on the sessions table.** Rename a session, put
 several in a group, and open idtracker.ai's validator on one; a session saved
 from the validator is ticked as Reviewed and reloaded.

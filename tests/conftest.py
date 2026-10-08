@@ -128,6 +128,7 @@ def app(_gui_app):
     _gui_app._update_sessions_table()
     _gui_app._update_units_status()
     _gui_app._update_results()
+    _gui_app._update_shoaling()
     _gui_app._log_lines.clear()
     _gui_app._insp_needs_rebuild = True
     _gui_app._insp_fig = None

@@ -380,17 +380,16 @@ def test_shoaling_tab_labels_axes_with_the_files_own_unit(app, synthetic_npy):
         synthetic_npy,
         calibration=CalibrationSettings.from_physical_measurement(
             10.0, "cm", 30.0))
-    results = {loaded.nickname:
-               ShoalingCalculator(loaded, ShoalingParameters(30)).calculate()}
+    loaded.shoaling_results = ShoalingCalculator(
+        loaded, ShoalingParameters(30)).calculate()
     app.loaded_files[loaded.nickname] = loaded
 
-    app._display_shoaling_comparison(results)
-    app._plot_nnd_comparison(results)
-    app._plot_hull_comparison(results)
+    app._update_shoaling()
     app.root.update_idletasks()
 
+    assert app.shoaling_tree.heading("NND")["text"] == "Nearest neighbour (cm)"
     from fish_analyzer.gui.shoaling_tab import _unit
-    assert _unit(results) == "cm"
+    assert _unit({loaded.nickname: loaded.shoaling_results}) == "cm"
 
 
 def test_mixed_calibrations_are_labelled_as_such_rather_than_guessed():

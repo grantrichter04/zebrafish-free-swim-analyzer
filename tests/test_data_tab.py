@@ -278,7 +278,7 @@ def test_renaming_a_session_carries_everything_with_it(
     assert _rows(app)["ctrl 1"]["group"] == "ctrl", \
         "a group nobody chose is derived from the new name"
     assert list(app.analysis_files_listbox.get(0, "end")) == ["ctrl 1", "treated1"]
-    assert list(app.shoaling_files_listbox.get(0, "end")) == ["ctrl 1", "treated1"]
+    assert list(app.inspector_file_dropdown["values"]) == ["ctrl 1", "treated1"]
 
 
 def test_a_session_cannot_take_another_sessions_name(

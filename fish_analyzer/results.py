@@ -110,32 +110,35 @@ def results_table(loaded_files: Dict, file_groups: Optional[Dict[str, str]] = No
     return pd.DataFrame(rows, columns=columns)
 
 
-def session_means(table: pd.DataFrame) -> pd.DataFrame:
+def session_means(table: pd.DataFrame, columns: Optional[List[str]] = None
+                  ) -> pd.DataFrame:
     """One row per session: the mean of its fish. The experimental unit."""
-    columns = [m.column for m in METRICS]
+    columns = columns or [m.column for m in METRICS]
     return (table.groupby(["Group", "Session"], sort=False)[columns]
             .mean().reset_index())
 
 
-def superplot(ax, table: pd.DataFrame, metric: Metric,
-              session_colors: Dict[str, tuple]) -> None:
-    """Draw one metric: fish as small dots, sessions as large markers, and a
-    line per group at the mean of its session means."""
-    groups = list(dict.fromkeys(table["Group"]))
-    means = session_means(table)
+def draw_superplot(ax, table: pd.DataFrame, column: str, title: str, ylabel: str,
+                   session_colors: Dict[str, tuple],
+                   empty_message: str = "No data.") -> bool:
+    """Draw one column of a per-fish table as a SuperPlot: fish as small dots,
+    sessions as large markers, and a line per group at the mean of its
+    session means. Returns False if there was nothing to draw.
 
-    ax.set_title(metric.title, fontsize=11, fontweight="bold")
+    `table` needs Group and Session columns and one row per fish.
+    """
+    ax.set_title(title, fontsize=11, fontweight="bold")
     for side in ("top", "right"):
         ax.spines[side].set_visible(False)
-    if table[metric.column].isna().all():
-        # Only the wall measure can be missing wholesale: no arena was found.
+    if table[column].isna().all():
         ax.set_xticks([])
         ax.set_yticks([])
-        ax.text(0.5, 0.5, "No arena outline.\nDraw one on the\nSpatial Analysis tab.",
-                ha="center", va="center", transform=ax.transAxes,
-                fontsize=9, color="gray")
-        return
+        ax.text(0.5, 0.5, empty_message, ha="center", va="center",
+                transform=ax.transAxes, fontsize=9, color="gray")
+        return False
 
+    groups = list(dict.fromkeys(table["Group"]))
+    means = session_means(table, [column])
     for position, group in enumerate(groups):
         in_group = table[table["Group"] == group]
         sessions = list(dict.fromkeys(in_group["Session"]))
@@ -145,7 +148,7 @@ def superplot(ax, table: pd.DataFrame, metric: Metric,
         slot = 0.7 / max(1, len(sessions))
         for index, session in enumerate(sessions):
             centre = position - 0.35 + slot * (index + 0.5)
-            values = in_group.loc[in_group["Session"] == session, metric.column].to_numpy(float)
+            values = in_group.loc[in_group["Session"] == session, column].to_numpy(float)
             values = values[~np.isnan(values)]
             if len(values) == 0:
                 continue
@@ -156,7 +159,7 @@ def superplot(ax, table: pd.DataFrame, metric: Metric,
             ax.scatter([centre], [values.mean()], s=130, color=color,
                        edgecolors="black", linewidths=1.2, zorder=3)
 
-        group_means = means.loc[means["Group"] == group, metric.column].dropna()
+        group_means = means.loc[means["Group"] == group, column].dropna()
         if len(group_means):
             ax.hlines(group_means.mean(), position - 0.4, position + 0.4,
                       colors="black", linewidths=2, zorder=4)
@@ -166,21 +169,41 @@ def superplot(ax, table: pd.DataFrame, metric: Metric,
     ax.set_xticklabels(groups, rotation=25 if crowded else 0,
                        ha="right" if crowded else "center")
     ax.set_xlim(-0.6, len(groups) - 0.4)
+    ax.set_ylabel(ylabel)
+    ax.set_ylim(bottom=0)
+    ax.grid(True, axis="y", alpha=0.3)
+    return True
+
+
+def draw_reference_line(ax, value: float, text: str) -> None:
+    """A dashed level to read a panel against, labelled at its right end."""
+    ax.axhline(value, color="gray", linestyle="--", linewidth=1, zorder=1)
+    ax.text(ax.get_xlim()[1], value, f" {text} ", fontsize=8, color="gray",
+            va="bottom", ha="right")
+
+
+def shared_unit(table: pd.DataFrame) -> str:
     units = list(dict.fromkeys(table["Unit"]))
-    ax.set_ylabel(metric.axis_label(units[0] if len(units) == 1 else "mixed units"))
+    return units[0] if len(units) == 1 else "mixed units"
+
+
+def superplot(ax, table: pd.DataFrame, metric: Metric,
+              session_colors: Dict[str, tuple]) -> None:
+    """One of the headline metrics as a SuperPlot."""
+    drawn = draw_superplot(
+        ax, table, metric.column, metric.title,
+        metric.axis_label(shared_unit(table)), session_colors,
+        # Only the wall measure can be missing wholesale: no arena was found.
+        empty_message="No arena outline.\nDraw one on the\nSpatial Analysis tab.")
+    if not drawn:
+        return
     if metric.kind == "ratio":
         ax.set_ylim(0, 1)
     elif metric.kind == "percent":
         ax.set_ylim(0, 100)
         even_use = table[WALL_ZONE_SHARE].dropna()
         if len(even_use):
-            ax.axhline(even_use.mean(), color="gray", linestyle="--", linewidth=1,
-                       zorder=1)
-            ax.text(len(groups) - 0.42, even_use.mean(), " even use",
-                    fontsize=8, color="gray", va="bottom", ha="right")
-    else:
-        ax.set_ylim(bottom=0)
-    ax.grid(True, axis="y", alpha=0.3)
+            draw_reference_line(ax, even_use.mean(), "even use")
 
 
 # =============================================================================

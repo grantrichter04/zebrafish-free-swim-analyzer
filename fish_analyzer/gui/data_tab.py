@@ -23,6 +23,7 @@ from ..data_structures import CalibrationSettings
 from ..file_loading import TrajectoryFileLoader
 from ..processing import ProcessingParameters, process_and_analyze_file
 from .. import tracking
+from ..shoaling import ShoalingCalculator, ShoalingParameters
 from ..spatial import (SHAPELY_AVAILABLE, ThigmotaxisCalculator,
                        arena_in_units, idtrackerai_arena)
 from .measure_dialog import MeasureScaleDialog, load_frame_image
@@ -211,9 +212,8 @@ class DataTabMixin:
 
         tk.Label(
             frame, justify=tk.LEFT, font=("Arial", 9), fg="gray",
-            text="Runs the individual analysis (speed, distance, freezing, path "
-                 "straightness, laterality) and the bout analysis for every "
-                 "session. Shoaling and spatial analyses are run from their own tabs."
+            text="Analyses every session: activity, time near the wall and "
+                 "shoaling. The Results and Shoaling tabs fill in when it finishes."
         ).pack(anchor="w", padx=10, pady=(0, 8))
 
     # =========================================================================
@@ -259,7 +259,7 @@ class DataTabMixin:
         if cleared:
             # Clear the [#]=Analyzed markers in the spatial file list.
             self._update_spatial_files_list()
-            self._update_results()
+            self._refresh_result_tabs()
 
         return cleared
 
@@ -404,7 +404,7 @@ class DataTabMixin:
         self.loaded_files[nickname] = loaded_file
 
         self._sessions_changed()
-        self._update_shoaling_file_dropdown()
+        self._update_inspector_file_dropdown()
         return loaded_file
 
     def _sessions_changed(self):
@@ -543,15 +543,15 @@ class DataTabMixin:
             else:
                 self.file_groups.pop(nickname, None)
         self._update_sessions_table()
-        self._update_results()
+        self._refresh_result_tabs()
 
     def _refresh_session_lists(self):
         """Redraw every other tab's list of sessions."""
-        self._update_shoaling_file_dropdown()
+        self._update_inspector_file_dropdown()
         self._update_analysis_files_listbox()
         self._refresh_bout_file_list()
         self._update_spatial_files_list()
-        self._update_results()
+        self._refresh_result_tabs()
 
     @staticmethod
     def _session_folder_of(loaded_file) -> Path:
@@ -594,7 +594,7 @@ class DataTabMixin:
         del self.loaded_files[nickname]
         self._purge_file_state(nickname)
         self._sessions_changed()
-        self._update_shoaling_file_dropdown()
+        self._update_inspector_file_dropdown()
 
     # =========================================================================
     # UNITS
@@ -845,9 +845,10 @@ class DataTabMixin:
                         f"{nickname}: only {len(fish_list)} of "
                         f"{loaded_file.n_fish} fish analyzed"
                     )
-                problem = self._analyse_wall_time(nickname)
-                if problem:
-                    degraded.append(f"{nickname}: {problem}")
+                for problem in (self._analyse_wall_time(nickname),
+                                self._analyse_shoaling(nickname)):
+                    if problem:
+                        degraded.append(f"{nickname}: {problem}")
             except Exception as e:
                 # One bad file must not abandon the rest, and must not leave a
                 # previous run's results attached pretending to be current.
@@ -863,7 +864,10 @@ class DataTabMixin:
 
         if succeeded:
             self._update_analysis_visualizations()
-        self._update_results()
+        # The Video Inspector draws shoaling overlays from these results.
+        if hasattr(self, '_inspector_rebuild_needed'):
+            self._inspector_rebuild_needed()
+        self._refresh_result_tabs()
 
         self.set_status(
             f"Analysis complete: {len(succeeded)} of {total} file(s) processed"
@@ -871,6 +875,30 @@ class DataTabMixin:
         self._report_batch_outcome("Individual Analysis", total, succeeded,
                                    failed, degraded)
         return True
+
+    def _refresh_result_tabs(self):
+        """Redraw every tab that shows results."""
+        self._update_results()
+        self._update_shoaling()
+
+    def _analyse_shoaling(self, nickname: str) -> Optional[str]:
+        """Shoaling distances for one session. Returns a problem to report,
+        or None. A lone fish has no neighbours, so it is simply skipped."""
+        loaded_file = self.loaded_files[nickname]
+        loaded_file.shoaling_results = None
+        if loaded_file.n_fish < 2:
+            return None
+        # One sample a second, whatever the frame rate.
+        params = ShoalingParameters(sample_interval_frames=max(
+            1, int(round(loaded_file.metadata.frames_per_second))))
+        self.shoaling_params = params
+        try:
+            loaded_file.shoaling_results = ShoalingCalculator(
+                loaded_file, params).calculate()
+        except Exception as e:
+            print(f"[FAILED] shoaling for {nickname}: {e}")
+            return f"shoaling could not be computed ({e})"
+        return None
 
     def _analyse_wall_time(self, nickname: str) -> Optional[str]:
         """Time near the wall for one session. Returns a problem to report,
