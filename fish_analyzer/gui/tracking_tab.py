@@ -557,8 +557,16 @@ class TrackingTabMixin:
                 "Review tracking in idtracker.ai",
                 f"idtracker.ai's validator will open on:\n    {name}\n\n"
                 "It plays the video with each fish's identity drawn on it and "
-                "lists the frames it is least sure of. Use it to check that "
-                "fish were not swapped, and to correct the ones that were.\n\n"
+                "lists what it is unsure of. It is a spot check, not a list to "
+                "work through:\n\n"
+                "  - \"Miss id\" rows are frames where a fish was not located. "
+                "They need no action. The analysis treats them as unobserved; "
+                "the white line is only a suggestion and is not saved unless "
+                "you press Apply.\n"
+                "  - \"Jump\" rows are unusually fast steps. Most are real "
+                "darts. Sort by length and look at the largest few.\n"
+                "  - What matters is a label sitting on something that is not "
+                "a fish, or two fish trading labels for a long stretch.\n\n"
                 "Save in the validator (Ctrl+S) before closing it. That marks "
                 "the session as reviewed and keeps any corrections, which "
                 "replace the original tracking."):
