@@ -321,13 +321,32 @@ def test_render_settings_reflect_the_inspector_controls(app):
     """
     app.inspector_show_nnd_var.set(True)
     app.inspector_show_positions_var.set(False)
-    app.inspector_trail_var.set(45)
+    app.inspector_show_hull_var.set(True)
+    app.inspector_dot_size_var.set(7)
+    app.inspector_trail_seconds_var.set("1.5")
+    try:
+        settings = app.render_settings_from_vars()
 
-    settings = app.render_settings_from_vars()
+        assert settings.show_nnd is True
+        assert settings.show_positions is False
+        assert settings.show_hull is True and settings.show_iid is False
+        assert settings.dot_radius == 7
+        assert settings.trail_length == 45, "1.5 seconds at 30 frames a second"
 
-    assert settings.show_nnd is True
-    assert settings.show_positions is False
-    assert settings.trail_length == 45
+        zoomed = app.render_settings_from_vars(zoom=4.0)
+        assert zoomed.line_scale == 0.25 and zoomed.dot_radius == 2, \
+            "zoomed in, overlays are drawn finer so they stay the same size on screen"
+        assert settings.line_scale == 1.0, "an export is never thinned"
+
+        app.inspector_trail_seconds_var.set("a while")
+        assert app.render_settings_from_vars().trail_length == 0, \
+            "a trail length that is not a number is no trail, not a crash"
+    finally:
+        app.inspector_show_nnd_var.set(False)
+        app.inspector_show_positions_var.set(True)
+        app.inspector_show_hull_var.set(False)
+        app.inspector_dot_size_var.set(12)
+        app.inspector_trail_seconds_var.set("0")
 
 
 # ---------------------------------------------------------------------------
@@ -596,6 +615,116 @@ def test_the_time_cursor_is_left_out_of_the_cached_chart(
     finally:
         app.inspector_time_mode_var.set("none")
         app._inspector_rebuild_needed()
+
+
+# ---------------------------------------------------------------------------
+# Zoom, the plot under the video, and the fish the lines start from
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("zoom, centre, expected", [
+    (1.0, None, (0, 0, 1000, 800)),
+    (2.0, None, (250, 200, 500, 400)),
+    (4.0, (0, 0), (0, 0, 250, 200)),            # held inside the frame
+    (4.0, (990, 790), (750, 600, 250, 200)),
+    (0.5, None, (0, 0, 1000, 800)),             # never smaller than the frame
+])
+def test_zoom_view_stays_inside_the_frame(zoom, centre, expected):
+    from fish_analyzer.gui.inspector_tab import zoom_view
+    assert zoom_view(1000, 800, zoom, centre) == expected
+
+
+class _Wheel:
+    def __init__(self, x, y, delta):
+        self.x, self.y, self.delta = x, y, delta
+
+
+def test_scrolling_zooms_about_the_pointer_and_double_click_resets(app, synthetic_npy):
+    from fish_analyzer.file_loading import TrajectoryFileLoader
+    from fish_analyzer.gui.inspector_tab import zoom_view
+
+    loaded = TrajectoryFileLoader.load_file(synthetic_npy, "s1")
+    app.loaded_files["s1"] = loaded
+    app.inspector_file_var.set("s1")
+    app._on_inspector_file_selected()
+    width, height = loaded.metadata.video_width, loaded.metadata.video_height
+    try:
+        assert app._insp_zoom == 1.0
+        x0, y0, scale_fit, left, top = app._insp_view
+        # A point a quarter of the way across and down the frame.
+        pointer = (left + width * 0.25 * scale_fit, top + height * 0.25 * scale_fit)
+        before = app._inspector_frame_point(*pointer)
+
+        app._on_inspector_wheel(_Wheel(*pointer, 120))
+
+        assert app._insp_zoom == pytest.approx(1.25)
+        after = app._inspector_frame_point(*pointer)
+        assert after == pytest.approx(before, abs=2.0), \
+            "the spot under the pointer stays under the pointer"
+        x0, y0, view_w, view_h = zoom_view(width, height, app._insp_zoom,
+                                           app._insp_zoom_centre)
+        assert 0 <= x0 and x0 + view_w <= width and 0 <= y0 and y0 + view_h <= height
+
+        for _ in range(40):
+            app._on_inspector_wheel(_Wheel(*pointer, 120))
+        assert app._insp_zoom == app.MAX_ZOOM
+        for _ in range(40):
+            app._on_inspector_wheel(_Wheel(*pointer, -120))
+        assert app._insp_zoom == 1.0
+
+        app._on_inspector_wheel(_Wheel(*pointer, 120))
+        app._on_inspector_zoom_reset()
+        assert app._insp_zoom == 1.0 and app._insp_zoom_centre is None
+    finally:
+        app._on_inspector_zoom_reset()
+
+
+def test_the_list_under_the_video_chooses_what_is_plotted(app):
+    try:
+        for text, mode in app.TIME_PANELS:
+            app.inspector_time_panel_box.set(text)
+            app._inspector_on_time_panel_chosen()
+            assert app.inspector_time_mode_var.get() == mode
+    finally:
+        app.inspector_time_panel_box.current(0)
+        app._inspector_on_time_panel_chosen()
+
+
+def test_lines_to_all_others_start_from_the_fish_named_in_the_list(app, synthetic_npy):
+    """The list shows idtracker.ai's labels, which start at 1; the renderer
+    wants a row of the trajectories, which starts at 0."""
+    from fish_analyzer.file_loading import TrajectoryFileLoader
+
+    loaded = TrajectoryFileLoader.load_file(synthetic_npy, "s1")
+    app.loaded_files["s1"] = loaded
+    app.inspector_file_var.set("s1")
+    app._on_inspector_file_selected()
+
+    labels = [str(label) for label in loaded.metadata.identity_labels]
+    assert list(app.inspector_iid_focus_combo["values"]) == labels
+    app.inspector_iid_focus_var.set(labels[2])
+    assert app.render_settings_from_vars().iid_focus == 2
+    app.inspector_iid_focus_var.set("no such fish")
+    assert app.render_settings_from_vars().iid_focus == 0
+
+
+def test_outlines_are_refused_politely_when_the_session_did_not_save_them(
+        app, synthetic_npy, monkeypatch):
+    from fish_analyzer.file_loading import TrajectoryFileLoader
+    from fish_analyzer.gui import inspector_tab
+
+    told = []
+    monkeypatch.setattr(inspector_tab.messagebox, "showinfo",
+                        lambda title, text="", **k: told.append(title))
+    app.loaded_files["s1"] = TrajectoryFileLoader.load_file(synthetic_npy, "s1")
+    app.inspector_file_var.set("s1")
+    app._insp_outline_finders.clear()
+    app.inspector_show_outlines_var.set(True)
+
+    app._inspector_on_outlines_toggle()
+
+    assert told == ["No outlines for this session"]
+    assert app.inspector_show_outlines_var.get() is False
+    assert app._inspector_outlines_for("s1", np.zeros((10, 10, 3), np.uint8)) is None
 
 
 # ---------------------------------------------------------------------------

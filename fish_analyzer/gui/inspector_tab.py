@@ -3,9 +3,11 @@ fish_analyzer/gui/inspector_tab.py
 ===================================
 Video Inspector Tab - Unified frame-by-frame viewer with configurable overlays.
 
-Plays a session's video with the tracking drawn on it: fish positions, trails
-and lines to each fish's nearest neighbour, with nearest-neighbour distance
-over time underneath. Frames and clips are exported from here.
+Plays a session's video with the tracking drawn on it: fish positions, the
+outlines idtracker.ai segmented, trails and lines to each fish's nearest
+neighbour, with a shoaling measure over time underneath. The less used
+overlays sit under "More options". Scrolling on the video zooms it. Frames
+and clips are exported from here.
 """
 
 from typing import Dict, Any, Optional, List
@@ -18,6 +20,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import matplotlib.pyplot as plt
 
 from ..shoaling import ShoalingParameters, ShoalingCalculator
+from ..fish_outlines import OutlineFinder
 from ..overlay_render import OverlaySettings, compose_frame, fish_colors
 
 try:
@@ -31,6 +34,19 @@ try:
     _PIL_AVAILABLE = True
 except ImportError:
     _PIL_AVAILABLE = False
+
+
+def zoom_view(frame_w, frame_h, zoom, centre=None):
+    """The part of a frame shown at `zoom`: (x0, y0, width, height) in frame
+    pixels, the frame's own shape, kept inside the frame. `centre` is where
+    the view should be centred; the middle of the frame if None."""
+    zoom = max(1.0, float(zoom))
+    width = max(1, int(round(frame_w / zoom)))
+    height = max(1, int(round(frame_h / zoom)))
+    cx, cy = centre if centre is not None else (frame_w / 2.0, frame_h / 2.0)
+    x0 = int(round(min(max(cx - width / 2.0, 0), frame_w - width)))
+    y0 = int(round(min(max(cy - height / 2.0, 0), frame_h - height)))
+    return x0, y0, width, height
 
 
 class InspectorTabMixin:
@@ -65,10 +81,13 @@ class InspectorTabMixin:
     # CONTROLS
     # =========================================================================
 
-    #: How the overlays are drawn. Fixed: nobody needs to tune these to check
-    #: a recording, and three sliders for it buried the controls that matter.
-    DOT_RADIUS = 12
     TRAIL_OPACITY = 0.5
+    MAX_ZOOM = 12.0
+    #: What can be plotted under the video: (shown in the list, mode).
+    TIME_PANELS = (("Nothing", "none"),
+                   ("Nearest-neighbour distance", "nnd"),
+                   ("Inter-individual distance", "iid"),
+                   ("Area the shoal covers", "hull"))
 
     def _create_inspector_controls(self, parent):
         """The left column: which session, what to draw on it, and export."""
@@ -111,6 +130,13 @@ class InspectorTabMixin:
             command=self._inspector_on_overlay_change
         ).pack(anchor="w")
 
+        self.inspector_show_outlines_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(
+            column, text="Fish outlines, as idtracker.ai saw them",
+            variable=self.inspector_show_outlines_var,
+            command=self._inspector_on_outlines_toggle
+        ).pack(anchor="w")
+
         self.inspector_show_nnd_var = tk.BooleanVar(value=False)
         tk.Checkbutton(
             column, text="Lines to nearest neighbour",
@@ -120,25 +146,84 @@ class InspectorTabMixin:
 
         trail_row = tk.Frame(column)
         trail_row.pack(fill="x", pady=(4, 0))
-        tk.Label(trail_row, text="Trail:").pack(side="left", anchor="s")
-        self.inspector_trail_var = tk.IntVar(value=0)
-        tk.Scale(
-            trail_row, from_=0, to=200, orient=tk.HORIZONTAL,
-            variable=self.inspector_trail_var,
-            command=lambda v: self._inspector_update_fast(),
-            showvalue=True
-        ).pack(side="left", padx=3, fill="x", expand=True)
-        tk.Label(trail_row, text="frames").pack(side="left", anchor="s")
+        tk.Label(trail_row, text="Trail: the last").pack(side="left")
+        self.inspector_trail_seconds_var = tk.StringVar(value="0")
+        trail_box = tk.Spinbox(
+            trail_row, from_=0, to=3600, increment=0.5, width=6,
+            textvariable=self.inspector_trail_seconds_var,
+            command=self._inspector_update_fast)
+        trail_box.pack(side="left", padx=4)
+        for event in ("<Return>", "<FocusOut>"):
+            trail_box.bind(event, lambda e: self._inspector_update_fast())
+        tk.Label(trail_row, text="seconds").pack(side="left")
 
-        # "none" or "nnd": a string because the renderer and the exporter
-        # both switch on which panel, if any, sits under the video.
+        # A string because the renderer and the exporter both switch on which
+        # panel, if any, sits under the video.
         self.inspector_time_mode_var = tk.StringVar(value="none")
+        tk.Label(column, text="Under the video, plot:").pack(anchor="w", pady=(8, 0))
+        self.inspector_time_panel_box = ttk.Combobox(
+            column, state="readonly", values=[text for text, _ in self.TIME_PANELS])
+        self.inspector_time_panel_box.current(0)
+        self.inspector_time_panel_box.pack(fill="x")
+        self.inspector_time_panel_box.bind(
+            "<<ComboboxSelected>>", self._inspector_on_time_panel_chosen)
+
+        # --- Used less often, so out of the way until asked for ---
+        more_button = tk.Button(column, text="\u25B6 More options", relief="flat",
+                                anchor="w", font=("Arial", 9, "bold"))
+        more_button.pack(fill="x", pady=(10, 0))
+        more = tk.Frame(column)
+
+        def toggle_more():
+            if more.winfo_manager():
+                more.pack_forget()
+                more_button.config(text="\u25B6 More options")
+            else:
+                more.pack(fill="x", after=more_button)
+                more_button.config(text="\u25BC More options")
+
+        more_button.config(command=toggle_more)
+        self._inspector_more_frame = more
+
+        self.inspector_show_hull_var = tk.BooleanVar(value=False)
         tk.Checkbutton(
-            column, text="Nearest-neighbour distance\nover time, under the video",
-            justify="left", variable=self.inspector_time_mode_var,
-            onvalue="nnd", offvalue="none",
-            command=self._inspector_rebuild_needed
-        ).pack(anchor="w", pady=(6, 0))
+            more, text="Outline around the shoal",
+            variable=self.inspector_show_hull_var,
+            command=self._inspector_on_overlay_change
+        ).pack(anchor="w")
+
+        iid_row = tk.Frame(more)
+        iid_row.pack(fill="x")
+        self.inspector_show_iid_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(
+            iid_row, text="Lines to all others, from fish",
+            variable=self.inspector_show_iid_var,
+            command=self._inspector_on_overlay_change
+        ).pack(side="left")
+        self.inspector_iid_focus_var = tk.StringVar(value="")
+        self.inspector_iid_focus_combo = ttk.Combobox(
+            iid_row, textvariable=self.inspector_iid_focus_var,
+            state="readonly", width=4)
+        self.inspector_iid_focus_combo.pack(side="left")
+        self.inspector_iid_focus_combo.bind(
+            "<<ComboboxSelected>>", lambda e: self._inspector_on_overlay_change())
+
+        dot_row = tk.Frame(more)
+        dot_row.pack(fill="x", pady=(2, 0))
+        tk.Label(dot_row, text="Dot size:").pack(side="left", anchor="s")
+        self.inspector_dot_size_var = tk.IntVar(value=12)
+        tk.Scale(
+            dot_row, from_=3, to=24, orient=tk.HORIZONTAL,
+            variable=self.inspector_dot_size_var,
+            command=lambda v: self._inspector_update_fast(),
+            showvalue=False
+        ).pack(side="left", padx=3, fill="x", expand=True)
+
+        tk.Label(column,
+                 text="Scroll on the video to zoom, drag to move, "
+                      "double-click to see it all again.",
+                 font=("Arial", 8), fg="gray", wraplength=235,
+                 justify="left").pack(anchor="w", pady=(10, 0))
 
         # --- Export ---
         heading("Export")
@@ -279,6 +364,12 @@ class InspectorTabMixin:
         self._insp_title_item = None
         # Per-fish colours, recomputed only when the fish count changes.
         self._insp_fish_colors = None
+        # Zoom: how far in, and the frame pixel the view is centred on.
+        self._insp_zoom = 1.0
+        self._insp_zoom_centre = None
+        self._insp_view = None
+        # One OutlineFinder per session; None once it is known to be missing.
+        self._insp_outline_finders = {}
         # Export range. None means "not marked", not "frame 0".
         self.inspector_mark_in = None
         self.inspector_mark_out = None
@@ -286,25 +377,76 @@ class InspectorTabMixin:
         self._insp_recapture_after_id = None
 
 
-    def render_settings_from_vars(self) -> OverlaySettings:
+    def render_settings_from_vars(self, zoom: float = 1.0) -> OverlaySettings:
         """Snapshot the overlay controls.
 
         The single place tk state becomes an OverlaySettings - the live view
         and the exporter both go through here, so they cannot disagree about
-        what is being drawn.
+        what is being drawn. Only the live view passes its `zoom`, which
+        thins the overlays so they stay the same size on screen; an export
+        is always the whole frame.
         """
-        try:
-            trail_length = int(self.inspector_trail_var.get())
-        except (ValueError, TypeError, tk.TclError):
-            trail_length = 0
-
         return OverlaySettings(
             show_positions=self.inspector_show_positions_var.get(),
             show_nnd=self.inspector_show_nnd_var.get(),
-            trail_length=trail_length,
+            show_hull=self.inspector_show_hull_var.get(),
+            show_iid=self.inspector_show_iid_var.get(),
+            iid_focus=self._inspector_iid_focus_index(),
+            trail_length=self._inspector_trail_frames(),
             trail_opacity=self.TRAIL_OPACITY,
-            dot_radius=self.DOT_RADIUS,
+            dot_radius=max(2, int(round(self.inspector_dot_size_var.get() / zoom))),
+            line_scale=1.0 / zoom,
         )
+
+    def _inspector_trail_frames(self) -> int:
+        """The trail box, in frames of the session on show. Anything that is
+        not a number counts as no trail."""
+        try:
+            seconds = max(0.0, float(self.inspector_trail_seconds_var.get()))
+        except (ValueError, TypeError, tk.TclError):
+            return 0
+        loaded = self.loaded_files.get(self.inspector_file_var.get())
+        fps = loaded.calibration.frame_rate if loaded is not None else 30.0
+        return int(round(seconds * fps))
+
+    def _inspector_iid_focus_index(self) -> int:
+        """Which fish the lines-to-all-others start from, as a row of the
+        trajectories. The list shows idtracker.ai's labels."""
+        values = list(self.inspector_iid_focus_combo["values"])
+        chosen = self.inspector_iid_focus_var.get()
+        return values.index(chosen) if chosen in values else 0
+
+    def _inspector_on_time_panel_chosen(self, event=None):
+        chosen = self.inspector_time_panel_box.get()
+        self.inspector_time_mode_var.set(dict(self.TIME_PANELS).get(chosen, "none"))
+        self._inspector_rebuild_needed()
+
+    def _inspector_on_outlines_toggle(self):
+        """Say so, once, if this session cannot show outlines."""
+        selected = self.inspector_file_var.get()
+        if (self.inspector_show_outlines_var.get() and selected in self.loaded_files
+                and self._inspector_outline_finder(selected) is None):
+            self.inspector_show_outlines_var.set(False)
+            messagebox.showinfo(
+                "No outlines for this session",
+                "The outlines are found again from the thresholds and the "
+                "background idtracker.ai saved in the session folder, and "
+                f"those could not be read for '{selected}'.")
+            return
+        self._inspector_update_fast()
+
+    def _inspector_outline_finder(self, selected: str):
+        if selected not in self._insp_outline_finders:
+            session_folder = Path(self.loaded_files[selected].file_path).parent.parent
+            self._insp_outline_finders[selected] = OutlineFinder.for_session(session_folder)
+        return self._insp_outline_finders[selected]
+
+    def _inspector_outlines_for(self, selected: str, frame):
+        """The blob outlines in `frame`, or None when they are not shown."""
+        if not self.inspector_show_outlines_var.get():
+            return None
+        finder = self._inspector_outline_finder(selected)
+        return finder.find(frame) if finder is not None else None
 
     # =========================================================================
     # FILE SELECTION
@@ -333,6 +475,12 @@ class InspectorTabMixin:
         # A range marked on one recording means nothing on another, and
         # silently carrying it over would export the wrong stretch.
         self._inspector_clear_marks()
+
+        labels = [str(label) for label in loaded.metadata.identity_labels]
+        self.inspector_iid_focus_combo["values"] = labels
+        if labels:
+            self.inspector_iid_focus_combo.current(0)
+        self._insp_zoom, self._insp_zoom_centre = 1.0, None
 
         self.inspector_video_var.set(
             self._inspector_try_auto_load_video(selected))
@@ -559,6 +707,64 @@ class InspectorTabMixin:
         )
 
     # =========================================================================
+    # ZOOM
+    # =========================================================================
+
+    def _inspector_frame_point(self, canvas_x, canvas_y):
+        """The frame pixel under a canvas position, or None before a draw."""
+        if self._insp_view is None:
+            return None
+        x0, y0, scale_fit, left, top = self._insp_view
+        return x0 + (canvas_x - left) / scale_fit, y0 + (canvas_y - top) / scale_fit
+
+    def _inspector_frame_size(self):
+        loaded = self.loaded_files.get(self.inspector_file_var.get())
+        if loaded is None:
+            return None
+        return loaded.metadata.video_width, loaded.metadata.video_height
+
+    def _on_inspector_wheel(self, event):
+        """Zoom in or out, keeping the spot under the pointer where it is."""
+        size = self._inspector_frame_size()
+        under = self._inspector_frame_point(event.x, event.y)
+        if size is None or under is None:
+            return
+        old = self._insp_zoom
+        new = min(self.MAX_ZOOM, max(1.0, old * (1.25 if event.delta > 0 else 0.8)))
+        if new == old:
+            return
+        x0, y0, _, _ = zoom_view(*size, old, self._insp_zoom_centre)
+        # The pointer keeps its place in the view: same fraction across it.
+        fraction_x = (under[0] - x0) / (size[0] / old)
+        fraction_y = (under[1] - y0) / (size[1] / old)
+        self._insp_zoom = new
+        self._insp_zoom_centre = (
+            under[0] + (0.5 - fraction_x) * size[0] / new,
+            under[1] + (0.5 - fraction_y) * size[1] / new)
+        self._inspector_update_fast()
+
+    def _on_inspector_drag_start(self, event):
+        self._insp_drag_from = (event.x, event.y)
+
+    def _on_inspector_drag(self, event):
+        """Move the zoomed view with the mouse."""
+        size = self._inspector_frame_size()
+        if size is None or self._insp_view is None or self._insp_zoom <= 1.0:
+            return
+        start = getattr(self, "_insp_drag_from", None) or (event.x, event.y)
+        x0, y0, view_w, view_h = zoom_view(*size, self._insp_zoom, self._insp_zoom_centre)
+        scale_fit = self._insp_view[2]
+        self._insp_zoom_centre = (
+            x0 + view_w / 2.0 - (event.x - start[0]) / scale_fit,
+            y0 + view_h / 2.0 - (event.y - start[1]) / scale_fit)
+        self._insp_drag_from = (event.x, event.y)
+        self._inspector_update_fast()
+
+    def _on_inspector_zoom_reset(self, event=None):
+        self._insp_zoom, self._insp_zoom_centre = 1.0, None
+        self._inspector_update_fast()
+
+    # =========================================================================
     # OVERLAY / REBUILD TRIGGERS
     # =========================================================================
 
@@ -754,6 +960,10 @@ class InspectorTabMixin:
                                             highlightthickness=0)
         self._insp_video_canvas.pack(fill="both", expand=True)
         self._insp_video_canvas.bind("<Configure>", self._on_inspector_resize)
+        self._insp_video_canvas.bind("<MouseWheel>", self._on_inspector_wheel)
+        self._insp_video_canvas.bind("<ButtonPress-1>", self._on_inspector_drag_start)
+        self._insp_video_canvas.bind("<B1-Motion>", self._on_inspector_drag)
+        self._insp_video_canvas.bind("<Double-Button-1>", self._on_inspector_zoom_reset)
 
         # --- Time panel: small matplotlib figure below the video ---
         if show_time:
@@ -783,10 +993,15 @@ class InspectorTabMixin:
                 results = loaded.shoaling_results
                 time_min = results.timestamps / 60.0
                 ax_t = self._insp_ax_time
-                ax_t.plot(time_min, results.mean_nnd_per_sample,
-                          'b-', lw=1, alpha=0.7)
-                ax_t.set_ylabel('Nearest neighbour '
-                                f'({loaded.calibration.unit_name})', fontsize=8)
+                unit = loaded.calibration.unit_name
+                values, label = {
+                    "nnd": (results.mean_nnd_per_sample, f"Nearest neighbour ({unit})"),
+                    "iid": (results.mean_iid_per_sample, f"Inter-individual ({unit})"),
+                    "hull": (results.convex_hull_area_per_sample,
+                             f"Area covered ({unit}\u00b2)"),
+                }[time_mode]
+                ax_t.plot(time_min, values, 'b-', lw=1, alpha=0.7)
+                ax_t.set_ylabel(label, fontsize=8)
                 ax_t.set_xlabel('Time (min)', fontsize=8)
                 ax_t.set_xlim(time_min[0], time_min[-1])
                 ax_t.grid(True, alpha=0.3)
@@ -799,7 +1014,7 @@ class InspectorTabMixin:
             else:
                 self._insp_ax_time.text(
                     0.5, 0.5,
-                    "No nearest-neighbour distances for this session yet.\n"
+                    "No shoaling results for this session yet.\n"
                     "Press Run All Analysis on Sessions & Units.",
                     transform=self._insp_ax_time.transAxes,
                     ha='center', va='center', fontsize=10, color='gray'
@@ -889,9 +1104,16 @@ class InspectorTabMixin:
             self._insp_fish_colors = fish_colors(n_fish)
 
         display = compose_frame(display, loaded.trajectories, frame_idx,
-                                self.render_settings_from_vars(), scale,
-                                self._insp_fish_colors,
-                                loaded.metadata.identity_labels)
+                                self.render_settings_from_vars(self._insp_zoom),
+                                scale, self._insp_fish_colors,
+                                loaded.metadata.identity_labels,
+                                self._inspector_outlines_for(selected, display))
+
+        # --- Zoom: show only part of the frame, at the same canvas size ---
+        x0, y0, view_w, view_h = zoom_view(vid_w, vid_h, self._insp_zoom,
+                                           self._insp_zoom_centre)
+        if self._insp_zoom > 1.0:
+            display = display[y0:y0 + view_h, x0:x0 + view_w]
 
         # --- Render video frame via PIL/ImageTk (fast direct pixel display) ---
         canvas_w = self._insp_video_canvas.winfo_width()
@@ -910,6 +1132,11 @@ class InspectorTabMixin:
                                         interpolation=_cv2.INTER_LINEAR)
         else:
             display_small = display
+
+        # Where the view sits on the canvas, for turning a mouse position
+        # back into a frame pixel.
+        self._insp_view = (x0, y0, scale_fit, (canvas_w - new_w) / 2.0,
+                           (canvas_h - new_h) / 2.0)
 
         if _PIL_AVAILABLE:
             pil_img = _PIL_Image.fromarray(display_small)
@@ -934,6 +1161,8 @@ class InspectorTabMixin:
 
             # Frame/time label overlaid on the canvas
             title_text = f'Frame {frame_idx}  |  {time_s:.1f}s'
+            if self._insp_zoom > 1.0:
+                title_text += f'  |  zoom {self._insp_zoom:.1f}x'
             if self._insp_title_item is None:
                 self._insp_title_item = self._insp_video_canvas.create_text(
                     cx, 14, text=title_text,

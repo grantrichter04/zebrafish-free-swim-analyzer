@@ -153,3 +153,49 @@ def test_dots_carry_the_identity_labels_and_count_from_one_without_them():
 
     assert np.array_equal(default, one)
     assert not np.array_equal(one, seven)
+
+
+def test_hull_is_drawn_for_three_tracked_fish_and_not_for_two():
+    traj = np.full((1, 3, 2), np.nan)
+    traj[0, 0] = (20.0, 20.0)
+    traj[0, 1] = (80.0, 20.0)
+    traj[0, 2] = (50.0, 80.0)
+    out = compose_frame(blank(), traj, 0, OverlaySettings(show_hull=True), 1.0)
+    assert out[40, 50].sum() > 0, "hull interior not tinted"
+
+    two = compose_frame(blank(), two_fish_at((20.0, 20.0), (60.0, 60.0)), 0,
+                        OverlaySettings(show_hull=True), 1.0)
+    assert two.sum() == 0
+
+
+def test_lines_to_all_others_radiate_from_the_focus_fish():
+    traj = np.full((1, 3, 2), np.nan)
+    traj[0, 0] = (10.0, 50.0)
+    traj[0, 1] = (90.0, 50.0)
+    traj[0, 2] = (50.0, 10.0)
+
+    out = compose_frame(blank(), traj, 0,
+                        OverlaySettings(show_iid=True, iid_focus=0), 1.0)
+    assert out[50, 50].sum() > 0, "no line from fish 0 to fish 1"
+
+
+def test_a_neighbour_line_can_be_read_on_a_white_tank_and_on_a_dark_one():
+    """It was white, then yellow, and the tank is lit from below."""
+    fish = two_fish_at((20.0, 50.0), (80.0, 50.0))
+    settings = OverlaySettings(show_nnd=True)
+
+    white = np.full((100, 100, 3), 255, dtype=np.uint8)
+    on_white = compose_frame(white, fish, 0, settings, 1.0)[:, 35].astype(int)
+    assert (on_white.sum(axis=1) < 765 * 0.45).any(), \
+        "something much darker than the tank where the line crosses"
+
+    on_black = compose_frame(blank(), fish, 0, settings, 1.0)[:, 35].astype(int)
+    assert (on_black.sum(axis=1) > 765 * 0.8).any(), "and a white edge on a dark video"
+
+
+def test_outlines_passed_in_are_drawn():
+    square = np.array([[[30, 30]], [[70, 30]], [[70, 70]], [[30, 70]]], dtype=np.int32)
+    out = compose_frame(blank(), one_fish_at(50, 50), 0, OverlaySettings(), 1.0,
+                        outlines=[square])
+    assert out[30, 50].sum() > 0, "the outline's edge"
+    assert out[50, 50].sum() == 0, "an outline, not a filled shape"

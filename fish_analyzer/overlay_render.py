@@ -33,10 +33,17 @@ class OverlaySettings:
     """
     show_positions: bool = False
     show_nnd: bool = False
+    show_hull: bool = False
+    show_iid: bool = False
+    iid_focus: int = 0
     trail_length: int = 0
     trail_opacity: float = 0.6
     trail_width: float = 1.0
     dot_radius: int = 6
+    #: Multiplies every line width and label size. The inspector sets it to
+    #: 1 / zoom, so overlays stay the size they were instead of growing
+    #: with the picture and hiding the fish being looked at.
+    line_scale: float = 1.0
 
 
 def fish_colors(n_fish: int) -> np.ndarray:
@@ -54,7 +61,7 @@ def rgb_uint8(rgba) -> tuple:
 
 
 def compose_frame(base, trajectories, frame_idx, settings, scale, colors=None,
-                  labels=None):
+                  labels=None, outlines=None):
     """Draw the overlays for one frame onto a copy of `base`.
 
     Parameters
@@ -74,6 +81,8 @@ def compose_frame(base, trajectories, frame_idx, settings, scale, colors=None,
     labels : sequence of str, optional
         What to write on each fish's dot: idtracker.ai's identity labels, so a
         fish has the same number here as in the results. Defaults to 1, 2, ...
+    outlines : list of contours, optional
+        Blob outlines to draw, from fish_outlines.OutlineFinder.find().
 
     Returns
     -------
@@ -91,7 +100,7 @@ def compose_frame(base, trajectories, frame_idx, settings, scale, colors=None,
 
     if CV2_AVAILABLE:
         _draw_cv2(display, trajectories, positions, frame_idx, n_fish,
-                  colors, settings, scale, labels)
+                  colors, settings, scale, labels, outlines)
     else:
         _draw_numpy(display, positions, n_fish, colors, settings)
     return display
@@ -119,14 +128,21 @@ def _draw_numpy(display, positions, n_fish, colors, settings):
 
 
 def _draw_cv2(display, trajectories, positions, frame_idx, n_fish, colors,
-              settings, scale, labels):
+              settings, scale, labels, outlines=None):
     """Draw every enabled overlay directly onto the array.
 
-    Order matters: trails go underneath, dots and labels on top.
+    Order matters: trails and the hull go underneath, dots and labels on top.
     """
+    if outlines:
+        cv2.drawContours(display, outlines, -1, OUTLINE_COLOR,
+                         _width(settings, 2), lineType=cv2.LINE_AA)
     _draw_trails(display, trajectories, frame_idx, n_fish, colors, settings)
     if settings.show_nnd:
-        _draw_nnd(display, positions, scale)
+        _draw_nnd(display, positions, scale, settings)
+    if settings.show_hull:
+        _draw_hull(display, positions, settings)
+    if settings.show_iid:
+        _draw_iid(display, positions, n_fish, settings, scale)
     _draw_positions(display, positions, n_fish, colors, settings, labels)
 
 
@@ -141,7 +157,7 @@ def _draw_trails(display, trajectories, frame_idx, n_fish, colors, settings):
         return
     start = max(0, frame_idx - settings.trail_length)
     end = frame_idx + 1
-    thickness = max(1, int(settings.trail_width * 2))
+    thickness = _width(settings, settings.trail_width * 2)
 
     overlay = display.copy()
     drew = False
@@ -160,25 +176,79 @@ def _draw_trails(display, trajectories, frame_idx, n_fish, colors, settings):
         cv2.addWeighted(overlay, alpha, display, 1 - alpha, 0, display)
 
 
-def _label(display, text, at, color):
-    """Distance label: black outline first so it reads over any background."""
-    cv2.putText(display, text, at, cv2.FONT_HERSHEY_SIMPLEX, 0.5,
-                (0, 0, 0), 3, cv2.LINE_AA)
-    cv2.putText(display, text, at, cv2.FONT_HERSHEY_SIMPLEX, 0.5,
-                color, 1, cv2.LINE_AA)
+#: Blob outlines: a colour no fish dot uses, strong on a pale or a dark tank.
+OUTLINE_COLOR = (255, 70, 0)
 
 
-def _draw_nnd(display, positions, scale):
-    """White line from each fish to its nearest neighbour, labelled."""
+def _width(settings, pixels) -> int:
+    """A line width in frame pixels, after the settings' line_scale."""
+    return max(1, int(round(pixels * settings.line_scale)))
+
+
+def _line(display, start, end, color, settings):
+    """A line that reads over any background: a dark, saturated middle with a
+    white edge. The tank is lit from below, so it is the pale colours - white,
+    then yellow - that vanished; the white edge is for a dark video."""
+    inner = _width(settings, 3)
+    cv2.line(display, start, end, (255, 255, 255), inner + _width(settings, 4),
+             lineType=cv2.LINE_AA)
+    cv2.line(display, start, end, color, inner, lineType=cv2.LINE_AA)
+
+
+def _label(display, text, at, color, settings):
+    """Distance label: a white halo first so it reads over any background."""
+    size = max(0.35, 0.7 * settings.line_scale)
+    cv2.putText(display, text, at, cv2.FONT_HERSHEY_SIMPLEX, size,
+                (255, 255, 255), _width(settings, 5), cv2.LINE_AA)
+    cv2.putText(display, text, at, cv2.FONT_HERSHEY_SIMPLEX, size,
+                color, _width(settings, 2), cv2.LINE_AA)
+
+
+NND_COLOR = (0, 60, 200)        # deep blue
+IID_COLOR = (150, 0, 150)       # deep purple
+
+
+def _draw_nnd(display, positions, scale, settings):
+    """A line from each fish to its nearest neighbour, labelled."""
     nnd, nn_idx = nearest_neighbour_distances(positions)
     for i, j in enumerate(nn_idx):
         if j < 0:
             continue
         p1 = (int(positions[i, 0]), int(positions[i, 1]))
         p2 = (int(positions[j, 0]), int(positions[j, 1]))
-        cv2.line(display, p1, p2, (255, 255, 255), 2, lineType=cv2.LINE_AA)
+        _line(display, p1, p2, NND_COLOR, settings)
         mid = ((p1[0] + p2[0]) // 2, (p1[1] + p2[1]) // 2)
-        _label(display, f'{nnd[i] * scale:.1f}', mid, (255, 255, 255))
+        _label(display, f'{nnd[i] * scale:.1f}', mid, NND_COLOR, settings)
+
+
+def _draw_hull(display, positions, settings):
+    """Tinted convex hull of every tracked fish."""
+    valid = positions[~np.isnan(positions[:, 0])]
+    if len(valid) < 3:
+        return
+    hull = cv2.convexHull(valid.astype(np.float32).astype(np.int32))
+    overlay = display.copy()
+    cv2.fillPoly(overlay, [hull], (100, 200, 100))
+    cv2.addWeighted(overlay, 0.2, display, 0.8, 0, display)
+    cv2.polylines(display, [hull], True, (0, 150, 0), _width(settings, 2),
+                  lineType=cv2.LINE_AA)
+
+
+def _draw_iid(display, positions, n_fish, settings, scale):
+    """Lines from one focus fish to every other tracked fish, labelled."""
+    focus = settings.iid_focus
+    if focus >= n_fish or np.isnan(positions[focus, 0]):
+        return
+    pf = (int(positions[focus, 0]), int(positions[focus, 1]))
+    for j in range(n_fish):
+        if j == focus or np.isnan(positions[j, 0]):
+            continue
+        pj = (int(positions[j, 0]), int(positions[j, 1]))
+        _line(display, pf, pj, IID_COLOR, settings)
+        d = np.hypot(positions[focus, 0] - positions[j, 0],
+                     positions[focus, 1] - positions[j, 1]) * scale
+        mid = ((pf[0] + pj[0]) // 2, (pf[1] + pj[1]) // 2)
+        _label(display, f'{d:.1f}', mid, IID_COLOR, settings)
 
 
 def _draw_positions(display, positions, n_fish, colors, settings, labels):
@@ -191,7 +261,8 @@ def _draw_positions(display, positions, n_fish, colors, settings, labels):
         px, py = int(positions[i, 0]), int(positions[i, 1])
         color = rgb_uint8(colors[i])
         cv2.circle(display, (px, py), r, color, -1, lineType=cv2.LINE_AA)
-        cv2.circle(display, (px, py), r, (0, 0, 0), 2, lineType=cv2.LINE_AA)
+        cv2.circle(display, (px, py), r, (0, 0, 0), _width(settings, 2),
+                   lineType=cv2.LINE_AA)
         font_scale = max(0.3, r / 20.0)
         text = str(labels[i])
         (tw, th), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX,

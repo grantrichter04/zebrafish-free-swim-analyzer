@@ -77,21 +77,21 @@ with the videos: they are the tracking results.
      session, to check that fish were not swapped and correct any that were.
      Save there (Ctrl+S) and the session is ticked as **Reviewed** and
      reloaded with the corrections.
-2. **Results** shows the headline measures: total distance, typical speed,
-   peak speed, path straightness and time near the wall. Small dots are fish,
+2. **Results** shows the headline measures: total distance, median speed,
+   99th percentile speed, path straightness and time near the wall. Small dots are fish,
    large markers are session means. Fish sharing a tank are not independent,
    so the session is the unit to compare, and a group needs several sessions
-   to be tested. **Speed distributions** shows the same data in full,
-   **Swim paths** and **Where they swim** show where each session's fish went
-   and where they spent their time, and **What do these measures mean?**
-   explains each measure.
+   to be tested. **Minute by minute** shows each measure on every minute of
+   the recording by itself, unsmoothed; **Speed distributions** shows the
+   speeds in full; **Where they swim** shows where each session's fish spent
+   their time; and **What do these measures mean?** explains each measure.
    - Time near the wall uses the tank outline drawn in idtracker.ai's setup
      window, so nothing needs redrawing. If a session has none, or it is
      wrong, **Tank outline...** on **Sessions & Units** draws one on a video
      frame.
 3. **Shoaling** shows how close the fish keep to each other: nearest-neighbour
-   and inter-individual distance, against what fish placed at random in the
-   tank would give, and how both change through the recording.
+   distance, inter-individual distance and the area the shoal covers, against
+   what fish placed at random in the tank would give, and minute by minute.
 4. **Video Inspector** plays the video with the tracking drawn on top, and
    exports frames and clips.
 
@@ -114,7 +114,7 @@ folder containing several and loads them all.
 |---|---|
 | Individual | Speed, distance, freezing, path straightness, turning bias |
 | Shoaling | Nearest neighbour distance (NND), inter-individual distance (IID), convex hull area |
-| Position | Time near the walls, swim paths, where the fish spend their time |
+| Position | Time near the walls, where the fish spend their time |
 
 All distances and areas are in the unit you chose; the `Unit` and
 `PixelsPerUnit` columns in each export say which and at what scale, so results
@@ -145,7 +145,10 @@ measured tracking noise rather than behaviour. See
 ## Exporting figures and clips
 
 The Video Inspector draws the tracking on the video: fish positions, numbered
-as in the results, trails, and lines to each fish's nearest neighbour.
+as in the results, the outlines idtracker.ai segmented, trails, and lines to
+each fish's nearest neighbour. "More options" adds an outline around the shoal
+and lines from one fish to all the others. Scroll on the video to zoom, drag to
+move, double-click to see the whole frame again.
 
 - **Save frame (PNG)** writes the current frame with its overlays at full video
   resolution.
@@ -154,8 +157,8 @@ as in the results, trails, and lines to each fish's nearest neighbour.
   beside the frame slider. With neither set, the whole recording is exported,
   and the dialog says so first.
 
-Both export what the tab is showing, including nearest-neighbour distance over
-time when that is ticked. If the session has not been analysed yet, the export
+Both export what the tab is showing, at the whole frame whatever the zoom,
+including the plot under the video. If the session has not been analysed yet, the export
 refuses rather than writing a clip with a "run the analysis first" message in
 it.
 

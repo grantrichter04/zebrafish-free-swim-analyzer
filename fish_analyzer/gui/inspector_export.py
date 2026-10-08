@@ -117,7 +117,8 @@ class InspectorExportMixin:
         composed = compose_frame(base, loaded.trajectories, frame_idx,
                                  self.render_settings_from_vars(),
                                  loaded.calibration.scale_factor,
-                                 labels=loaded.metadata.identity_labels)
+                                 labels=loaded.metadata.identity_labels,
+                                 outlines=self._inspector_outlines_for(selected, base))
         return composed, loaded, frame_idx
 
     def _inspector_save_frame(self):
@@ -169,9 +170,10 @@ class InspectorExportMixin:
 
         if time_mode != 'none' and not loaded.shoaling_results:
             return False, (
-                "Nearest-neighbour distance over time is ticked, but "
+                "A shoaling measure is plotted under the video, but "
                 f"'{selected}' has no shoaling results.\n\n"
-                "Press Run All Analysis on Sessions & Units first, or untick it."
+                "Press Run All Analysis on Sessions & Units first, or set "
+                "\"Under the video, plot\" to Nothing."
             )
 
         return True, ""
@@ -384,7 +386,8 @@ class InspectorExportMixin:
                                          cursor["frame"], settings,
                                          loaded.calibration.scale_factor,
                                          colors,
-                                         loaded.metadata.identity_labels)
+                                         loaded.metadata.identity_labels,
+                                         self._inspector_outlines_for(selected, base))
 
                 if strip is None:
                     frame_out = composed

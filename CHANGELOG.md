@@ -44,8 +44,8 @@ through idtracker.ai:
 - The freeze threshold is converted when the unit changes, so it keeps the
   same physical speed.
 
-**Results tab.** Total distance, typical (median) speed, peak (99th
-percentile) speed and path straightness as SuperPlots: fish as small dots,
+**Results tab.** Total distance, median speed, 99th percentile speed and path
+straightness as SuperPlots: fish as small dots,
 session means as large markers, and a group line at the mean of its sessions,
 because the tank is the experimental unit. One table, one export.
 
@@ -54,12 +54,16 @@ drawn in idtracker.ai's setup window and read against the level even use of
 the tank would give; a speed-distribution view (a cumulative curve per
 session, a ridge per fish); and a plain description of every measure.
 
+**Minute by minute.** Results and Shoaling each have a view that works every
+measure out again on each minute of the recording by itself: a thin line per
+fish and a thick one per session. Nothing is smoothed, so a fish that stops
+for three minutes shows as exactly that.
+
 **Shoaling tab rebuilt, and run with everything else.** Nearest-neighbour and
 inter-individual distance as SuperPlots against what randomly placed fish
-would give, the same two through the recording, one table, one export. It no
-longer has its own run button, file list or parameters: it samples once a
-second and runs from "Run All Analysis". Convex hull area is still computed
-and exported but is no longer plotted.
+would give, with the area the shoal covers (convex hull) beside them, one
+table, one export. It no longer has its own run button, file list or
+parameters: it samples once a second and runs from "Run All Analysis".
 
 **Names, groups and review on the sessions table.** Rename a session, put
 several in a group, and open idtracker.ai's validator on one; a session saved
@@ -69,16 +73,26 @@ from the validator is ticked as Reviewed and reloaded.
 speed by about 1% and path straightness by about 1%; the metrics it mattered
 for were withdrawn in 2.1.0.
 
-**Video Inspector slimmed down.** The left column is now three short groups:
-the session, what to show (fish positions, lines to the nearest neighbour,
-trail length, nearest-neighbour distance over time) and export. The video
-loads with the session, and "Find video..." appears only when it is not
-found. Fish are numbered as in Results and Shoaling. The scrubber and the
-step buttons move one frame at a time, and playback faster than 1x skips
-frames. Removed: the convex-hull and inter-individual-distance overlays and
-their time panels, the drawing-style sliders, the step-size and jump-to
-boxes, and the video quality setting. Fixed: a second, stationary cursor
-could appear on the time panel and in exported clips.
+**Video Inspector reorganised.** The left column is three short groups: the
+session, what to show, and export. The everyday choices are in view: fish
+positions, lines to the nearest neighbour, a trail of any length in seconds,
+and which shoaling measure to plot under the video. The less used ones (an
+outline around the shoal, lines from one fish to all the others, dot size)
+are under "More options". The video loads with the session, and "Find
+video..." appears only when it is not found. Fish are numbered as in Results
+and Shoaling. The scrubber and the step buttons move one frame at a time, and
+playback faster than 1x skips frames.
+
+New in the inspector: "Fish outlines, as idtracker.ai saw them" redraws the
+blobs idtracker.ai segmented, from the thresholds, background and region of
+interest saved in the session folder. Scrolling on the video zooms about the
+pointer, dragging moves the view and a double-click resets it; exports are
+always the whole frame. Distance lines are dark with a white edge, so they
+can be read on a brightly lit tank.
+
+Removed from the inspector: the trail opacity and width sliders, the
+step-size and jump-to boxes, and the video quality setting. Fixed: a second,
+stationary cursor could appear on the time panel and in exported clips.
 
 **Spatial Analysis folded into Results.** "Where they swim" on Results is the
 position heatmap: one map per session, square cells of one size and one
@@ -89,10 +103,8 @@ The tab is gone, and with it the custom region of interest, the wall-time
 time series, the per-fish heatmap grid, the border-width, sampling and
 smoothing settings, and the separate thigmotaxis export button.
 
-**Individual Analysis removed.** Results replaces it, and gained its one view
-that had no counterpart: "Swim paths", every fish's path in each session with
-the tank outline. Its two CSV export buttons went with it; the Results export
-is the one per-fish file.
+**Individual Analysis removed.** Results replaces it. Its two CSV export
+buttons went with it; the Results export is the one per-fish file.
 
 **Bout Analysis removed.** The bout model was built for larval dart-and-glide
 swimming and does not fit adults, which swim continuously. The tab, the
