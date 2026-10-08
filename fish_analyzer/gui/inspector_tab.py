@@ -13,6 +13,7 @@ and clips are exported from here.
 from typing import Dict, Any, Optional, List
 from pathlib import Path
 import numpy as np
+import pandas as pd
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 from matplotlib.figure import Figure
@@ -207,6 +208,19 @@ class InspectorTabMixin:
         self.inspector_iid_focus_combo.pack(side="left")
         self.inspector_iid_focus_combo.bind(
             "<<ComboboxSelected>>", lambda e: self._inspector_on_overlay_change())
+
+        smooth_row = tk.Frame(more)
+        smooth_row.pack(fill="x", pady=(2, 0))
+        tk.Label(smooth_row, text="Smooth the plot over").pack(side="left")
+        self.inspector_smooth_seconds_var = tk.StringVar(value="0")
+        smooth_box = tk.Spinbox(
+            smooth_row, from_=0, to=600, increment=5, width=5,
+            textvariable=self.inspector_smooth_seconds_var,
+            command=self._inspector_rebuild_needed)
+        smooth_box.pack(side="left", padx=4)
+        for event in ("<Return>", "<FocusOut>"):
+            smooth_box.bind(event, self._inspector_rebuild_needed)
+        tk.Label(smooth_row, text="s").pack(side="left")
 
         dot_row = tk.Frame(more)
         dot_row.pack(fill="x", pady=(2, 0))
@@ -408,6 +422,21 @@ class InspectorTabMixin:
         loaded = self.loaded_files.get(self.inspector_file_var.get())
         fps = loaded.calibration.frame_rate if loaded is not None else 30.0
         return int(round(seconds * fps))
+
+    def _inspector_smooth_seconds(self) -> float:
+        """The smoothing box; anything that is not a number is no smoothing."""
+        try:
+            return max(0.0, float(self.inspector_smooth_seconds_var.get()))
+        except (ValueError, TypeError, tk.TclError):
+            return 0.0
+
+    def _inspector_smooth_samples(self, timestamps) -> int:
+        """How many samples of the plot the smoothing box covers; 1 = none."""
+        seconds = self._inspector_smooth_seconds()
+        if seconds <= 0 or len(timestamps) < 2:
+            return 1
+        step = float(np.median(np.diff(timestamps)))
+        return max(1, int(round(seconds / step))) if step > 0 else 1
 
     def _inspector_iid_focus_index(self) -> int:
         """Which fish the lines-to-all-others start from, as a row of the
@@ -1000,6 +1029,14 @@ class InspectorTabMixin:
                     "hull": (results.convex_hull_area_per_sample,
                              f"Area covered ({unit}\u00b2)"),
                 }[time_mode]
+                # Raw unless the reader asked for smoothing, and then the
+                # axis says how much.
+                window = self._inspector_smooth_samples(results.timestamps)
+                if window > 1:
+                    values = (pd.Series(np.asarray(values, dtype=float))
+                              .rolling(window, center=True, min_periods=1).mean()
+                              .to_numpy())
+                    label += f"\n{self._inspector_smooth_seconds():g} s running mean"
                 ax_t.plot(time_min, values, 'b-', lw=1, alpha=0.7)
                 ax_t.set_ylabel(label, fontsize=8)
                 ax_t.set_xlabel('Time (min)', fontsize=8)

@@ -56,8 +56,10 @@ session, a ridge per fish); and a plain description of every measure.
 
 **Minute by minute.** Results and Shoaling each have a view that works every
 measure out again on each minute of the recording by itself: a thin line per
-fish and a thick one per session. Nothing is smoothed, so a fish that stops
-for three minutes shows as exactly that.
+fish and a thick one per session. Nothing is smoothed unless the reader picks
+a Smoothing (a 3 or 5 minute running mean), and a smoothed plot says so along
+its top. The plot under the video in the Video Inspector has the same choice,
+in seconds, under "More options".
 
 **Shoaling tab rebuilt, and run with everything else.** Nearest-neighbour and
 inter-individual distance as SuperPlots against what randomly placed fish

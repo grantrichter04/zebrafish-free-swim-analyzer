@@ -292,6 +292,17 @@ def test_minute_lines_are_a_line_per_fish_and_a_mean_per_session():
     assert len(ax.lines) == 3 + 2, "three fish and two session means"
     assert ax.get_xlabel() == "Minute of the recording"
 
+    smoothed = Figure().add_subplot(111)
+    spiky = pd.DataFrame({"Session": ["a"] * 5, "Fish": ["1"] * 5,
+                          "Minute": [1, 2, 3, 4, 5],
+                          "Value": [0.0, 0.0, 9.0, 0.0, 0.0]})
+    results.draw_minute_lines(smoothed, spiky, "Value", "t", "u", {"a": (1, 0, 0)},
+                              smooth_minutes=3)
+    assert list(smoothed.lines[-1].get_ydata()) == [0.0, 3.0, 3.0, 3.0, 0.0], \
+        "a 3-minute mean spreads one minute's spike over its neighbours"
+    assert results.smoothing_note(1) == "", "an unsmoothed plot says nothing"
+    assert "3 minutes" in results.smoothing_note(3), "a smoothed one says how much"
+
     empty = Figure().add_subplot(111)
     table["Value"] = np.nan
     assert not results.draw_minute_lines(empty, table, "Value", "t", "u", {}, "nothing")
@@ -312,14 +323,25 @@ def test_results_tab_switches_to_minute_by_minute(
     drawn = []
     real = results.minute_plot
     monkeypatch.setattr(results, "minute_plot",
-                        lambda ax, table, metric, colors: (
-                            drawn.append(metric.column), real(ax, table, metric, colors))[1])
+                        lambda ax, table, metric, colors, smooth: (
+                            drawn.append((metric.column, smooth)),
+                            real(ax, table, metric, colors, smooth))[1])
+    assert str(app.results_smoothing_box.cget("state")) == "disabled", \
+        "nothing to smooth in the group comparison"
 
     app.results_view.set("minutes")
     app._draw_results_plot()
 
-    assert drawn == [m.column for m in results.METRICS]
+    assert drawn == [(m.column, 1) for m in results.METRICS], "unsmoothed until asked"
     assert app.results_plot_frame.winfo_children(), "a figure was embedded"
+    assert str(app.results_smoothing_box.cget("state")) == "readonly"
+
+    drawn.clear()
+    app.results_smoothing_box.set("3 minutes")
+    app._draw_results_plot()
+    assert {smooth for _, smooth in drawn} == {3}
+
+    app.results_smoothing_box.current(0)
     app.results_view.set("comparison")
     app._draw_results_plot()
 

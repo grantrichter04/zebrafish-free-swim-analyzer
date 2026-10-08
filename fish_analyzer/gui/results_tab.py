@@ -63,6 +63,17 @@ class ResultsTabMixin:
             tk.Radiobutton(view_row, text=text, value=value,
                            variable=self.results_view,
                            command=self._draw_results_plot).pack(side="left", padx=8)
+
+        # Smoothing is the reader's choice: off until picked, and only the
+        # minute-by-minute view has anything to smooth.
+        tk.Label(view_row, text="Smoothing:").pack(side="left", padx=(18, 3))
+        self.results_smoothing_box = ttk.Combobox(
+            view_row, state="disabled", width=10,
+            values=[text for text, _ in results.SMOOTHING_CHOICES])
+        self.results_smoothing_box.current(0)
+        self.results_smoothing_box.pack(side="left")
+        self.results_smoothing_box.bind(
+            "<<ComboboxSelected>>", lambda e: self._draw_results_plot())
         tk.Button(view_row, text="What do these measures mean?",
                   command=self._explain_measures).pack(side="right")
 
@@ -128,6 +139,8 @@ class ResultsTabMixin:
         """Draw whichever view is selected, from the current results."""
         for child in self.results_plot_frame.winfo_children():
             child.destroy()
+        self.results_smoothing_box.config(
+            state="readonly" if self.results_view.get() == "minutes" else "disabled")
         table = self._results_table
         if table is None or table.empty:
             return
@@ -165,12 +178,14 @@ class ResultsTabMixin:
                 label=f"% of time in each {cell:.2g} {unit} square")
         else:
             by_minute = self.results_view.get() == "minutes"
+            smooth = dict(results.SMOOTHING_CHOICES).get(
+                self.results_smoothing_box.get(), 1) if by_minute else 1
             if by_minute:
                 minutes = results.minute_table(self.loaded_files, self.file_groups)
             axes = figure.subplots(1, len(results.METRICS))
             for ax, metric in zip(axes, results.METRICS):
                 if by_minute:
-                    results.minute_plot(ax, minutes, metric, session_colors)
+                    results.minute_plot(ax, minutes, metric, session_colors, smooth)
                 else:
                     results.superplot(ax, table, metric, session_colors)
             figure.legend(
@@ -180,7 +195,9 @@ class ResultsTabMixin:
                          for name in sessions],
                 loc="lower center", ncol=min(len(sessions), 6), frameon=False,
                 fontsize=9, title="Sessions")
-            figure.tight_layout(rect=(0, 0.13, 1, 1))
+            figure.suptitle(results.smoothing_note(smooth), fontsize=9,
+                            color="#b35c00")
+            figure.tight_layout(rect=(0, 0.13, 1, 0.95 if smooth > 1 else 1))
         embed_figure_with_toolbar(figure, self.results_plot_frame)
 
     def _explain_measures(self):

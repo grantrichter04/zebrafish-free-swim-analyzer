@@ -399,10 +399,23 @@ def plot_position_density(ax, name: str, loaded, density: np.ndarray,
 #
 # One number for a whole recording hides when things happened: a fish that
 # sat still for three minutes, a tank that slowed down as it settled. Here
-# every measure is worked out again on each minute by itself. Nothing is
-# smoothed, so a point is exactly what happened in that minute and no more.
+# every measure is worked out again on each minute by itself. By default
+# nothing is smoothed, so a point is exactly what happened in that minute and
+# no more. Smoothing is the reader's choice, never ours: it is off until
+# chosen, and a plot that has it says so on its face.
 
 BIN_SECONDS = 60.0
+
+#: What the "Smoothing" list offers: (shown in the list, minutes averaged).
+SMOOTHING_CHOICES = (("None", 1), ("3 minutes", 3), ("5 minutes", 5))
+
+
+def smoothing_note(minutes: int) -> str:
+    """What to print on a smoothed plot, or "" for an unsmoothed one."""
+    if minutes <= 1:
+        return ""
+    return (f"Smoothed: each point is the mean of the {minutes} minutes centred "
+            "on it (fewer at the two ends).")
 
 
 def bin_count(duration_s: float) -> int:
@@ -472,10 +485,14 @@ def _nanmean(values) -> float:
 
 def draw_minute_lines(ax, table: pd.DataFrame, column: str, title: str,
                       ylabel: str, session_colors: Dict[str, tuple],
-                      empty_message: str = "No data.") -> bool:
+                      empty_message: str = "No data.",
+                      smooth_minutes: int = 1) -> bool:
     """One column of a per-fish, per-minute table: a thin line per fish and a
     thick one for each session's mean. Returns False if there was nothing to
-    draw. `table` needs Session, Fish and Minute columns."""
+    draw. `table` needs Session, Fish and Minute columns.
+
+    With `smooth_minutes` above 1 every line is a running mean over that many
+    minutes, centred, using what there is at the two ends."""
     ax.set_title(title, fontsize=11, fontweight="bold")
     for side in ("top", "right"):
         ax.spines[side].set_visible(False)
@@ -488,6 +505,8 @@ def draw_minute_lines(ax, table: pd.DataFrame, column: str, title: str,
     for session in dict.fromkeys(table["Session"]):
         fish = (table[table["Session"] == session]
                 .pivot(index="Minute", columns="Fish", values=column))
+        if smooth_minutes > 1:
+            fish = fish.rolling(smooth_minutes, center=True, min_periods=1).mean()
         color = session_colors[session]
         ax.plot(fish.index, fish.to_numpy(), color=color, linewidth=0.7, alpha=0.35)
         ax.plot(fish.index, fish.mean(axis=1), color=color, linewidth=2.4,
@@ -505,12 +524,12 @@ def draw_minute_lines(ax, table: pd.DataFrame, column: str, title: str,
 
 
 def minute_plot(ax, table: pd.DataFrame, metric: Metric,
-                session_colors: Dict[str, tuple]) -> None:
+                session_colors: Dict[str, tuple], smooth_minutes: int = 1) -> None:
     """One of the headline metrics, minute by minute."""
     title = "Distance in each minute" if metric.column == "Distance" else metric.title
     drawn = draw_minute_lines(
         ax, table, metric.column, title, metric.axis_label(shared_unit(table)),
-        session_colors, empty_message=NO_OUTLINE)
+        session_colors, empty_message=NO_OUTLINE, smooth_minutes=smooth_minutes)
     if not drawn:
         return
     if metric.kind == "ratio":
@@ -522,6 +541,9 @@ def minute_plot(ax, table: pd.DataFrame, metric: Metric,
 MINUTE_MEANING = (
     "\"Minute by minute\" works each measure out again on every minute of the "
     "recording by itself. Thin lines are fish, the thick line is their "
-    "session's mean. Nothing is smoothed: a point is what happened in that "
-    "minute. Look here before trusting a single number for the whole "
+    "session's mean. A point is what happened in that minute and nothing "
+    "else, unless you choose a Smoothing: then each point is the mean of "
+    "the 3 or 5 minutes around it, which steadies a jumpy line and also "
+    "spreads a short event over its neighbours. A smoothed plot says so "
+    "along its top. Look here before trusting a single number for the whole "
     "recording; one fish that stops for a few minutes moves its tank's mean.")

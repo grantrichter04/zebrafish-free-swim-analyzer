@@ -689,6 +689,41 @@ def test_the_list_under_the_video_chooses_what_is_plotted(app):
         app._inspector_on_time_panel_chosen()
 
 
+def test_the_plot_under_the_video_is_raw_until_smoothing_is_asked_for(
+        app, tmp_path, synthetic_npy, monkeypatch):
+    from fish_analyzer.gui import data_tab
+    import shutil
+    monkeypatch.setattr(data_tab.messagebox, "showinfo", lambda *a, **k: None)
+    monkeypatch.setattr(app, "_report_batch_outcome", lambda *a, **k: None)
+    target = tmp_path / "session_s1" / "trajectories"
+    target.mkdir(parents=True)
+    shutil.copy(synthetic_npy, target / "trajectories.npy")
+    app._add_path(tmp_path / "session_s1")
+    app._run_analysis()
+    app.inspector_file_var.set("s1")
+    app._on_inspector_file_selected()
+    shoal = app.loaded_files["s1"].shoaling_results
+    try:
+        app.inspector_time_mode_var.set("nnd")
+        app._inspector_rebuild_needed()
+        raw = app._insp_ax_time.lines[0].get_ydata()
+        assert np.allclose(raw, shoal.mean_nnd_per_sample), "exactly the measured values"
+        assert "running mean" not in app._insp_ax_time.get_ylabel()
+
+        app.inspector_smooth_seconds_var.set("3")
+        app._inspector_rebuild_needed()
+        assert app._inspector_smooth_samples(shoal.timestamps) == 3
+        assert "3 s running mean" in app._insp_ax_time.get_ylabel(), \
+            "a smoothed plot says so on its axis"
+
+        app.inspector_smooth_seconds_var.set("lots")
+        assert app._inspector_smooth_samples(shoal.timestamps) == 1
+    finally:
+        app.inspector_smooth_seconds_var.set("0")
+        app.inspector_time_mode_var.set("none")
+        app._inspector_rebuild_needed()
+
+
 def test_lines_to_all_others_start_from_the_fish_named_in_the_list(app, synthetic_npy):
     """The list shows idtracker.ai's labels, which start at 1; the renderer
     wants a row of the trajectories, which starts at 0."""

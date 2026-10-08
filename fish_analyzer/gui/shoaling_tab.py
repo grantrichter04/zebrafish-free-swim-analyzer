@@ -80,6 +80,17 @@ class ShoalingTabMixin:
             tk.Radiobutton(view_row, text=text, value=value,
                            variable=self.shoaling_view,
                            command=self._draw_shoaling_plot).pack(side="left", padx=8)
+
+        # Smoothing is the reader's choice: off until picked, and only the
+        # minute-by-minute view has anything to smooth.
+        tk.Label(view_row, text="Smoothing:").pack(side="left", padx=(18, 3))
+        self.shoaling_smoothing_box = ttk.Combobox(
+            view_row, state="disabled", width=10,
+            values=[text for text, _ in results.SMOOTHING_CHOICES])
+        self.shoaling_smoothing_box.current(0)
+        self.shoaling_smoothing_box.pack(side="left")
+        self.shoaling_smoothing_box.bind(
+            "<<ComboboxSelected>>", lambda e: self._draw_shoaling_plot())
         tk.Button(view_row, text="What do these measures mean?",
                   command=self._explain_shoaling).pack(side="right")
 
@@ -142,6 +153,8 @@ class ShoalingTabMixin:
         """Draw whichever view is selected, from the current results."""
         for child in self.shoaling_plot_frame.winfo_children():
             child.destroy()
+        self.shoaling_smoothing_box.config(
+            state="readonly" if self.shoaling_view.get() == "time" else "disabled")
         table = self._shoaling_table
         if table is None or table.empty:
             return
@@ -154,6 +167,8 @@ class ShoalingTabMixin:
         axes = figure.subplots(1, len(shoal_summary.MEASURES))
 
         by_minute = self.shoaling_view.get() == "time"
+        smooth = dict(results.SMOOTHING_CHOICES).get(
+            self.shoaling_smoothing_box.get(), 1) if by_minute else 1
         if by_minute:
             minutes = shoal_summary.minute_table(self.loaded_files, self.file_groups)
         for ax, (column, title, _) in zip(axes, shoal_summary.MEASURES):
@@ -163,7 +178,8 @@ class ShoalingTabMixin:
             few = "Needs at least\nthree fish."
             if by_minute:
                 results.draw_minute_lines(ax, minutes, column, title, label,
-                                          session_colors, empty_message=few)
+                                          session_colors, empty_message=few,
+                                          smooth_minutes=smooth)
             elif not results.draw_superplot(ax, shown, column, title, label,
                                             session_colors, empty_message=few):
                 continue
@@ -179,7 +195,8 @@ class ShoalingTabMixin:
                      for name in sessions],
             loc="lower center", ncol=min(len(sessions), 6), frameon=False,
             fontsize=9, title="Sessions")
-        figure.tight_layout(rect=(0, 0.13, 1, 1))
+        figure.suptitle(results.smoothing_note(smooth), fontsize=9, color="#b35c00")
+        figure.tight_layout(rect=(0, 0.13, 1, 0.95 if smooth > 1 else 1))
         embed_figure_with_toolbar(figure, self.shoaling_plot_frame)
 
     def _explain_shoaling(self):
