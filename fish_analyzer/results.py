@@ -319,3 +319,38 @@ def plot_fish_speed_ridges(ax, samples: List[SpeedSample],
     ax.tick_params(axis="y", length=0)
     for side in ("top", "right", "left"):
         ax.spines[side].set_visible(False)
+
+
+# =============================================================================
+# SWIM PATHS
+# =============================================================================
+#
+# The picture behind the numbers: where each fish went. A fish that circled
+# the wall, one that sat in a corner and one that crossed the tank freely can
+# share a total distance and look nothing alike here.
+
+def path_grid(n_sessions: int) -> tuple:
+    """(rows, columns) for one panel per session in a wide, short figure."""
+    columns = min(n_sessions, int(np.ceil(np.sqrt(3 * n_sessions))))
+    return int(np.ceil(n_sessions / columns)), columns
+
+
+def plot_swim_paths(ax, name: str, loaded, fish_colors, arena=None) -> None:
+    """Every fish's path in one session, one colour per fish, drawn the way
+    the video shows it. `arena`, when given, is outlined as the tank."""
+    scale = loaded.calibration.scale_factor
+    for fish, color in zip(loaded.processed_data, fish_colors):
+        ax.plot(fish.trajectory["x"].to_numpy(), fish.trajectory["y"].to_numpy(),
+                color=color, linewidth=0.6, alpha=0.7,
+                label=str(fish.identity_label))
+    if arena is not None:
+        outline = np.vstack([arena.vertices_bl, arena.vertices_bl[:1]])
+        ax.plot(outline[:, 0], outline[:, 1], color="black", linewidth=1.2)
+    ax.set_xlim(0, loaded.metadata.video_width * scale)
+    ax.set_ylim(0, loaded.metadata.video_height * scale)
+    ax.set_aspect("equal")
+    ax.set_title(name, fontsize=11, fontweight="bold")
+    ax.set_xlabel(loaded.calibration.unit_name)
+    ax.tick_params(labelsize=8)
+    for side in ("top", "right"):
+        ax.spines[side].set_visible(False)

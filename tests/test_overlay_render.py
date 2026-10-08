@@ -49,7 +49,7 @@ def test_fish_dot_uses_the_tab10_colour_in_rgb_order():
     The frame is RGB (video_utils converts BGR2RGB on read and PIL expects
     RGB), so fish 0 must be drawn tab10 blue (31, 119, 180). Before the fix it
     was drawn (180, 119, 31) - orange - which did not match the colour the
-    Individual Analysis plots use for the same fish.
+    plots use for the same fish.
     """
     settings = OverlaySettings(show_positions=True, dot_radius=20)
     out = compose_frame(blank(), one_fish_at(50, 50), 0, settings, 1.0)
@@ -67,7 +67,7 @@ def test_untracked_fish_draws_nothing_and_does_not_raise():
 
 
 def test_fish_colors_matches_the_app_wide_convention():
-    """Same sampling as analysis_tab.py:924, so per-fish colours agree."""
+    """Same sampling as the plots, so per-fish colours agree."""
     import matplotlib.pyplot as plt
 
     expected = plt.cm.tab10(np.linspace(0, 1, 6))

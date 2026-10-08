@@ -104,7 +104,6 @@ def test_gui_constructs(app):
         "Tracking",
         "Sessions & Units",
         "Results",
-        "Individual Analysis",
         "Shoaling",
         "Spatial Analysis",
         "Video Inspector",
@@ -114,7 +113,7 @@ def test_gui_constructs(app):
     # would be caught rather than merely counted.
     for attr in ("tracking_videos_tree",     # TrackingTabMixin
                  "sessions_tree",            # DataTabMixin
-                 "speed_dist_collapse_var",  # AnalysisTabMixin
+                 "results_tree",             # ResultsTabMixin
                  "inspector_frame_slider",   # InspectorTabMixin
                  "inspector_mark_label"):    # InspectorExportMixin
         assert hasattr(app, attr), f"{attr} missing - a tab did not build"

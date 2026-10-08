@@ -23,7 +23,7 @@ class ResultsTabMixin:
 
     Expects the following attributes from base class:
     - self.notebook: ttk.Notebook
-    - self.loaded_files, self.file_groups
+    - self.loaded_files, self.file_groups, self.file_arena_definitions
     """
 
     RESULT_COLUMNS = (
@@ -57,7 +57,8 @@ class ResultsTabMixin:
         tk.Label(view_row, text="Show:", font=("Arial", 10, "bold")).pack(side="left")
         self.results_view = tk.StringVar(value="comparison")
         for value, text in (("comparison", "Group comparison"),
-                            ("distributions", "Speed distributions")):
+                            ("distributions", "Speed distributions"),
+                            ("paths", "Swim paths")):
             tk.Radiobutton(view_row, text=text, value=value,
                            variable=self.results_view,
                            command=self._draw_results_plot).pack(side="left", padx=8)
@@ -143,6 +144,18 @@ class ResultsTabMixin:
             results.plot_session_speed_ecdf(left, samples, session_colors)
             results.plot_fish_speed_ridges(right, samples, session_colors)
             figure.tight_layout()
+        elif self.results_view.get() == "paths":
+            rows, columns = results.path_grid(len(sessions))
+            for index, name in enumerate(sessions):
+                loaded = self.loaded_files[name]
+                ax = figure.add_subplot(rows, columns, index + 1)
+                results.plot_swim_paths(
+                    ax, name, loaded, fish_colors(len(loaded.processed_data)),
+                    self.file_arena_definitions.get(name))
+            handles, labels = ax.get_legend_handles_labels()
+            figure.legend(handles, labels, loc="center right", frameon=False,
+                          fontsize=9, title="Fish")
+            figure.tight_layout(rect=(0, 0, 0.93, 1))
         else:
             axes = figure.subplots(1, len(results.METRICS))
             for ax, metric in zip(axes, results.METRICS):

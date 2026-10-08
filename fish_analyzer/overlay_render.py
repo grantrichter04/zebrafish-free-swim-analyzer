@@ -45,8 +45,8 @@ class OverlaySettings:
 def fish_colors(n_fish: int) -> np.ndarray:
     """Per-fish RGBA colours, matching the convention used across the app.
 
-    analysis_tab.py, shoaling_tab.py and spatial_tab.py all sample
-    tab10 this way, so a fish keeps one colour between the video and the plots.
+    Every tab samples tab10 this way, so a fish keeps one colour between the
+    video and the plots.
     """
     return plt.cm.tab10(np.linspace(0, 1, max(1, n_fish)))
 

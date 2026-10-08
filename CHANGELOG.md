@@ -67,8 +67,12 @@ from the validator is ticked as Reviewed and reloaded.
 
 **Position smoothing removed.** The Savitzky-Golay option changed distance and
 speed by about 1% and path straightness by about 1%; the metrics it mattered
-for were withdrawn in 2.1.0. Plot smoothing on the Individual and Shoaling
-tabs is unchanged and does not affect exported numbers.
+for were withdrawn in 2.1.0.
+
+**Individual Analysis removed.** Results replaces it, and gained its one view
+that had no counterpart: "Swim paths", every fish's path in each session with
+the tank outline. Its two CSV export buttons went with it; the Results export
+is the one per-fish file.
 
 **Bout Analysis removed.** The bout model was built for larval dart-and-glide
 swimming and does not fit adults, which swim continuously. The tab, the

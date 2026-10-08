@@ -22,7 +22,7 @@ import numpy as np
 from ..data_structures import CalibrationSettings
 from ..file_loading import TrajectoryFileLoader
 from ..processing import ProcessingParameters, process_and_analyze_file
-from .. import tracking
+from .. import results, tracking
 from ..shoaling import ShoalingCalculator, ShoalingParameters
 from ..spatial import (SHAPELY_AVAILABLE, ThigmotaxisCalculator,
                        arena_in_units, idtrackerai_arena)
@@ -426,7 +426,7 @@ class DataTabMixin:
     def _group_of(self, nickname: str) -> str:
         """The group a session is exported under: the one set here, or
         failing that its name without a trailing number."""
-        return self.file_groups.get(nickname) or self._auto_detect_group(nickname)
+        return self.file_groups.get(nickname) or results.default_group(nickname)
 
     def _update_sessions_table(self):
         tree = self.sessions_tree
@@ -541,7 +541,6 @@ class DataTabMixin:
     def _refresh_session_lists(self):
         """Redraw every other tab's list of sessions."""
         self._update_inspector_file_dropdown()
-        self._update_analysis_files_listbox()
         self._update_spatial_files_list()
         self._refresh_result_tabs()
 
@@ -842,13 +841,6 @@ class DataTabMixin:
                 print(f"[FAILED] {nickname}: {e}")
                 traceback.print_exc()
 
-        # Update file lists and auto-select all
-        self._update_analysis_files_listbox()
-        for i in range(self.analysis_files_listbox.size()):
-            self.analysis_files_listbox.selection_set(i)
-
-        if succeeded:
-            self._update_analysis_visualizations()
         # The Video Inspector draws shoaling overlays from these results.
         if hasattr(self, '_inspector_rebuild_needed'):
             self._inspector_rebuild_needed()
@@ -857,7 +849,7 @@ class DataTabMixin:
         self.set_status(
             f"Analysis complete: {len(succeeded)} of {total} file(s) processed"
         )
-        self._report_batch_outcome("Individual Analysis", total, succeeded,
+        self._report_batch_outcome("Analysis", total, succeeded,
                                    failed, degraded)
         return True
 

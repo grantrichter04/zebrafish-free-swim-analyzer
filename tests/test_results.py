@@ -207,6 +207,70 @@ def test_results_tab_switches_to_speed_distributions(
     app._draw_results_plot()
 
 
+# --- swim paths --------------------------------------------------------------------
+
+def test_swim_paths_draw_one_line_per_fish_and_the_tank_outline(two_groups):
+    from fish_analyzer.overlay_render import fish_colors
+    from fish_analyzer.spatial import arena_in_units
+
+    loaded = two_groups["control_1"]
+    arena = arena_in_units([[100, 200], [900, 200], [900, 800], [100, 800]], loaded)
+    ax = Figure().add_subplot(111)
+
+    results.plot_swim_paths(ax, "control_1", loaded, fish_colors(3), arena)
+
+    paths, outline = ax.lines[:-1], ax.lines[-1]
+    assert [line.get_label() for line in paths] == [
+        str(fish.identity_label) for fish in loaded.processed_data]
+    first = loaded.processed_data[0].trajectory
+    assert np.array_equal(paths[0].get_xdata(), first["x"].to_numpy(), equal_nan=True)
+    assert outline.get_xydata()[0].tolist() == outline.get_xydata()[-1].tolist(), \
+        "the outline is closed"
+    scale = loaded.calibration.scale_factor
+    assert ax.get_xlim() == (0, loaded.metadata.video_width * scale), \
+        "the whole frame, so sessions can be compared by eye"
+    assert ax.get_title() == "control_1"
+
+
+def test_swim_paths_need_no_tank_outline(two_groups):
+    from fish_analyzer.overlay_render import fish_colors
+
+    ax = Figure().add_subplot(111)
+    results.plot_swim_paths(ax, "control_1", two_groups["control_1"], fish_colors(3))
+    assert len(ax.lines) == 3
+
+
+@pytest.mark.parametrize("sessions, grid", [(1, (1, 1)), (2, (1, 2)), (4, (1, 4)),
+                                            (6, (2, 5)), (12, (2, 6))])
+def test_path_panels_fill_a_wide_figure(sessions, grid):
+    assert results.path_grid(sessions) == grid
+    assert grid[0] * grid[1] >= sessions
+
+
+def test_results_tab_switches_to_swim_paths(app, tmp_path, synthetic_npy, monkeypatch):
+    from fish_analyzer.gui import data_tab
+    for name in ("showinfo", "showerror"):
+        monkeypatch.setattr(data_tab.messagebox, name, lambda *a, **k: None)
+    monkeypatch.setattr(app, "_report_batch_outcome", lambda *a, **k: None)
+    target = tmp_path / "session_control_1" / "trajectories"
+    target.mkdir(parents=True)
+    shutil.copy(synthetic_npy, target / "trajectories.npy")
+    app._add_path(tmp_path / "session_control_1")
+    app._run_analysis()
+    drawn = []
+    real = results.plot_swim_paths
+    monkeypatch.setattr(results, "plot_swim_paths",
+                        lambda ax, name, *rest: (drawn.append(name), real(ax, name, *rest)))
+
+    app.results_view.set("paths")
+    app._draw_results_plot()
+
+    assert drawn == ["control_1"]
+    assert app.results_plot_frame.winfo_children(), "a figure was embedded"
+    app.results_view.set("comparison")
+    app._draw_results_plot()
+
+
 # --- time near the wall -----------------------------------------------------------
 
 def _session_with_arena(tmp_path, source_npy, name, roi_list):

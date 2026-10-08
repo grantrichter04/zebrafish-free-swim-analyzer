@@ -179,7 +179,6 @@ class GUIBase:
         self._create_tracking_tab()
         self._create_data_tab()
         self._create_results_tab()
-        self._create_analysis_tab()
         self._create_shoaling_tab()
         self._create_spatial_tab()
         self._create_inspector_tab()

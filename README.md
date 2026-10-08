@@ -89,8 +89,7 @@ with the videos: they are the tracking results.
    and inter-individual distance, against what fish placed at random in the
    tank would give, and how both change through the recording.
 4. **Spatial Analysis** has the position heatmaps, and arena drawing for
-   sessions without an outline. **Individual Analysis** is an older, more
-   detailed view.
+   sessions without an outline.
 5. **Video Inspector** plays the video with the tracking drawn on top, and
    exports frames and clips.
 
