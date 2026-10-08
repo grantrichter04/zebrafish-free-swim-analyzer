@@ -258,7 +258,9 @@ def test_renaming_a_session_carries_everything_with_it(
     app._add_path(tmp_path)
     old = "control1_long_camera_name"
     loaded = app.loaded_files[old]
-    loaded.processed_data = ["results"]
+    from fish_analyzer import process_and_analyze_file
+    analysed = process_and_analyze_file(loaded)
+    loaded.processed_data = analysed
     app.bout_results[old] = ["bouts"]
     app.file_arena_definitions[old] = "arena"
     monkeypatch.setattr(data_tab.simpledialog, "askstring", lambda *a, **k: " ctrl 1 ")
@@ -268,11 +270,14 @@ def test_renaming_a_session_carries_everything_with_it(
 
     assert list(app.loaded_files) == ["ctrl 1", "treated1"], "order is kept"
     assert app.loaded_files["ctrl 1"] is loaded and loaded.nickname == "ctrl 1"
-    assert loaded.processed_data == ["results"], "nothing is recomputed or lost"
+    assert loaded.processed_data is analysed, "nothing is recomputed or lost"
+    assert {app.results_tree.item(i, "values")[1]
+            for i in app.results_tree.get_children()} == {"ctrl 1"}, \
+        "the Results tab follows the new name"
     assert app.bout_results == {"ctrl 1": ["bouts"]}
     assert app.file_arena_definitions == {"ctrl 1": "arena"}
-    assert _rows(app)["ctrl 1"]["group"] == "control1_long_camera_name", \
-        "it stays in the group it was shown in"
+    assert _rows(app)["ctrl 1"]["group"] == "ctrl", \
+        "a group nobody chose is derived from the new name"
     assert list(app.analysis_files_listbox.get(0, "end")) == ["ctrl 1", "treated1"]
     assert list(app.shoaling_files_listbox.get(0, "end")) == ["ctrl 1", "treated1"]
 
@@ -304,3 +309,15 @@ def test_several_sessions_can_be_put_in_one_group(
 
     assert app.file_groups == {"tank3": "treated", "tank7": "treated"}
     assert {r["group"] for r in _rows(app).values()} == {"treated"}
+
+
+def test_a_chosen_group_survives_a_rename(
+        app, quiet, tmp_path, synthetic_npy, monkeypatch):
+    app._add_path(_make_session(tmp_path, synthetic_npy, "tank3"))
+    app.file_groups["tank3"] = "wild type"
+    monkeypatch.setattr(data_tab.simpledialog, "askstring", lambda *a, **k: "wt_a")
+    app.sessions_tree.selection_set("tank3")
+
+    app._rename_session()
+
+    assert _rows(app)["wt_a"]["group"] == "wild type"

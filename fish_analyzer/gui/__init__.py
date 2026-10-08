@@ -20,6 +20,7 @@ The EnhancedFishAnalyzer class combines all mixins to provide the complete GUI.
 from .base import GUIBase
 from .tracking_tab import TrackingTabMixin
 from .data_tab import DataTabMixin
+from .results_tab import ResultsTabMixin
 from .analysis_tab import AnalysisTabMixin
 from .bout_tab import BoutTabMixin
 from .shoaling_tab import ShoalingTabMixin
@@ -29,7 +30,8 @@ from .inspector_export import InspectorExportMixin
 from .utils import smooth_time_series
 
 
-class EnhancedFishAnalyzer(GUIBase, TrackingTabMixin, DataTabMixin, AnalysisTabMixin,
+class EnhancedFishAnalyzer(GUIBase, TrackingTabMixin, DataTabMixin,
+                           ResultsTabMixin, AnalysisTabMixin,
                            BoutTabMixin, ShoalingTabMixin, SpatialTabMixin,
                            InspectorTabMixin, InspectorExportMixin):
     """
@@ -38,7 +40,8 @@ class EnhancedFishAnalyzer(GUIBase, TrackingTabMixin, DataTabMixin, AnalysisTabM
     This class combines:
     - GUIBase: Window creation, shared state management
     - TrackingTabMixin: Videos, idtracker.ai setups, tracking
-    - DataTabMixin: File loading, calibration, processing parameters
+    - DataTabMixin: Sessions, units, running the analysis
+    - ResultsTabMixin: The headline metrics as SuperPlots
     - AnalysisTabMixin: Individual trajectory visualization
     - BoutTabMixin: Swim bout detection and laterality analysis
     - ShoalingTabMixin: Group behavior analysis

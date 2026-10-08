@@ -103,6 +103,7 @@ def test_gui_constructs(app):
     assert tabs == [
         "Tracking",
         "Sessions & Units",
+        "Results",
         "Individual Analysis",
         "Bout Analysis",
         "Shoaling Analysis",

@@ -178,6 +178,7 @@ class GUIBase:
         # Create each tab (methods provided by mixins)
         self._create_tracking_tab()
         self._create_data_tab()
+        self._create_results_tab()
         self._create_analysis_tab()
         self._create_bout_tab()
         self._create_shoaling_tab()

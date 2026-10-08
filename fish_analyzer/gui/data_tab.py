@@ -257,6 +257,7 @@ class DataTabMixin:
         if cleared:
             # Clear the [#]=Analyzed markers in the spatial file list.
             self._update_spatial_files_list()
+            self._update_results()
 
         return cleared
 
@@ -505,9 +506,11 @@ class DataTabMixin:
                       self.file_roi_definitions, self.video_readers):
             if old in keyed:
                 keyed[new] = keyed.pop(old)
-        # The group was either chosen, or derived from the old name. Either
-        # way the session stays in the group it was shown in.
-        self.file_groups[new] = self.file_groups.pop(old, None) or self._auto_detect_group(old)
+        # A group that was chosen stays. One that was only ever derived from
+        # the name is derived again, so "control1" lands in "control" and not
+        # in a group named after the camera's original file name.
+        if old in self.file_groups:
+            self.file_groups[new] = self.file_groups.pop(old)
 
         if self.current_arena_file == old:
             self.current_arena_file = new
@@ -539,6 +542,7 @@ class DataTabMixin:
             else:
                 self.file_groups.pop(nickname, None)
         self._update_sessions_table()
+        self._update_results()
 
     def _refresh_session_lists(self):
         """Redraw every other tab's list of sessions."""
@@ -546,6 +550,7 @@ class DataTabMixin:
         self._update_analysis_files_listbox()
         self._refresh_bout_file_list()
         self._update_spatial_files_list()
+        self._update_results()
 
     def _show_file_details(self):
         """Show detailed information about the selected session."""
@@ -764,7 +769,7 @@ class DataTabMixin:
                 self._run_bout_analysis()
             except Exception as e:
                 print(f"Auto bout analysis skipped: {e}")
-        self.notebook.select(self.analysis_tab_frame)
+        self.notebook.select(self.results_tab_frame)
 
     def _run_analysis(self) -> bool:
         """Run individual trajectory analysis on all loaded files.
@@ -826,6 +831,7 @@ class DataTabMixin:
 
         if succeeded:
             self._update_analysis_visualizations()
+        self._update_results()
 
         self.set_status(
             f"Analysis complete: {len(succeeded)} of {total} file(s) processed"

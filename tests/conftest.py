@@ -127,6 +127,7 @@ def app(_gui_app):
     _gui_app._fill_shared_body_length()
     _gui_app._update_sessions_table()
     _gui_app._update_units_status()
+    _gui_app._update_results()
     _gui_app._log_lines.clear()
     _gui_app._insp_needs_rebuild = True
     _gui_app._insp_fig = None
