@@ -13,8 +13,8 @@ A frame in which idtracker.ai did not locate the fish is unobserved, not
 of *observed* time, and ObservedDuration_s / LongestGap_s are exported so a
 reader can see how much of the recording each number actually rests on.
 Episodes cut short by a gap are reported as censored rather than counted, so
-FreezeEpisodes_Complete + FreezeEpisodes_Censored, and Bout_Count +
-Bout_Censored, together describe what was seen. See fish_analyzer/segments.py.
+FreezeEpisodes_Complete + FreezeEpisodes_Censored together describe what was
+seen. See fish_analyzer/segments.py.
 
 WITHDRAWN COLUMNS (Audit B, 2026-08-01):
 MeanAngularVelocity_deg_s, ErraticMovementCount, ErraticMovements_per_min,
@@ -33,7 +33,6 @@ import numpy as np
 
 def export_combined_summary_csv(
     loaded_files: Dict,
-    bout_results: Dict,
     file_groups: Dict,
     output_path: Path,
 ) -> int:
@@ -44,15 +43,11 @@ def export_combined_summary_csv(
     -------
     Group, File, FishID, Label, Unit
     — Trajectory metrics (all from individual analysis)
-    — Bout summary stats (median/IQR per fish; NaN if bout analysis not run)
-    — Bout_Analyzed flag so the user knows which fish have bout data
 
     Parameters
     ----------
     loaded_files : dict
         nickname -> LoadedTrajectoryFile (must have processed_data)
-    bout_results : dict
-        nickname -> List[BoutResults] (may be empty or missing keys)
     file_groups : dict
         nickname -> group label (auto-detected externally if absent)
     output_path : Path
@@ -76,11 +71,6 @@ def export_combined_summary_csv(
 
         unit = loaded_file.calibration.unit_name
         group = file_groups.get(nickname) or _auto_group(nickname)
-
-        # Index bout results for this file by fish_id for fast lookup
-        fish_bout_map = {}
-        for br in bout_results.get(nickname, []):
-            fish_bout_map[br.fish_id] = br
 
         for fish in loaded_file.processed_data:
             m = fish.metrics
@@ -112,63 +102,6 @@ def export_combined_summary_csv(
                 'RightTurns_CW':               m.get('n_right_turns', 0),
                 'LeftTurns_CCW':               m.get('n_left_turns', 0),
             }
-
-            # ---- bout summary metrics ----
-            br = fish_bout_map.get(fish.fish_id)
-            if br is not None:
-                s = br.summary
-                iqr_dur = s.get('bout_duration_iqr_ms', (nan, nan))
-                iqr_ibi = s.get('ibi_iqr_ms', (nan, nan))
-                iqr_spd = s.get('bout_peak_speed_iqr', (nan, nan))
-                row.update({
-                    'Bout_Analyzed':             True,
-                    'Bout_Count':                s.get('bout_count', 0),
-                    'Bout_Censored':             s.get('bout_censored', 0),
-                    'Bout_Rate_per_min':         round(s.get('bout_rate_per_min', nan), 3),
-                    'Bout_Duration_Median_ms':   round(s.get('bout_duration_median_ms', nan), 2),
-                    'Bout_Duration_Q1_ms':       round(iqr_dur[0] if not _isnan(iqr_dur[0]) else nan, 2),
-                    'Bout_Duration_Q3_ms':       round(iqr_dur[1] if not _isnan(iqr_dur[1]) else nan, 2),
-                    'IBI_N':                     s.get('ibi_n', 0),
-                    'IBI_Median_ms':             round(s.get('ibi_median_ms', nan), 2),
-                    'IBI_Q1_ms':                 round(iqr_ibi[0] if not _isnan(iqr_ibi[0]) else nan, 2),
-                    'IBI_Q3_ms':                 round(iqr_ibi[1] if not _isnan(iqr_ibi[1]) else nan, 2),
-                    'Bout_PeakSpeed_Median':     round(s.get('bout_peak_speed_median', nan), 4),
-                    'Bout_PeakSpeed_Q1':         round(iqr_spd[0] if not _isnan(iqr_spd[0]) else nan, 4),
-                    'Bout_PeakSpeed_Q3':         round(iqr_spd[1] if not _isnan(iqr_spd[1]) else nan, 4),
-                    'Bout_Displacement_Median':  round(s.get('bout_displacement_median', nan), 4),
-                    'Bout_Distance_Median':      round(s.get('bout_distance_median', nan), 4),
-                    'Bout_MeanAbsTurnAngle_deg': round(s.get('bout_heading_change_mean_abs_deg', nan), 2),
-                    'Bout_LateralityIndex':      round(s.get('bout_laterality_index', nan), 4),
-                    'Bout_N_Left':               s.get('bout_n_left', 0),
-                    'Bout_N_Right':              s.get('bout_n_right', 0),
-                    'Bout_N_Straight':           s.get('bout_n_straight', 0),
-                    'Bout_N_TurnUnmeasurable':   s.get('bout_n_heading_unmeasurable', 0),
-                })
-            else:
-                row.update({
-                    'Bout_Analyzed':             False,
-                    'Bout_Count':                nan,
-                    'Bout_Censored':             nan,
-                    'Bout_Rate_per_min':         nan,
-                    'Bout_Duration_Median_ms':   nan,
-                    'Bout_Duration_Q1_ms':       nan,
-                    'Bout_Duration_Q3_ms':       nan,
-                    'IBI_N':                     nan,
-                    'IBI_Median_ms':             nan,
-                    'IBI_Q1_ms':                 nan,
-                    'IBI_Q3_ms':                 nan,
-                    'Bout_PeakSpeed_Median':     nan,
-                    'Bout_PeakSpeed_Q1':         nan,
-                    'Bout_PeakSpeed_Q3':         nan,
-                    'Bout_Displacement_Median':  nan,
-                    'Bout_Distance_Median':      nan,
-                    'Bout_MeanAbsTurnAngle_deg': nan,
-                    'Bout_LateralityIndex':      nan,
-                    'Bout_N_Left':               nan,
-                    'Bout_N_Right':              nan,
-                    'Bout_N_Straight':           nan,
-                    'Bout_N_TurnUnmeasurable':   nan,
-                })
 
             rows.append(row)
 
@@ -204,14 +137,6 @@ def _label_for(loaded_file, fish_idx: int) -> str:
         return loaded_file.metadata.identity_labels[fish_idx]
     except Exception:
         return str(fish_idx)
-
-
-def _isnan(v) -> bool:
-    """Safe nan check for values that may not be float."""
-    try:
-        return v != v  # NaN != NaN
-    except Exception:
-        return False
 
 
 def export_individual_metrics_csv(

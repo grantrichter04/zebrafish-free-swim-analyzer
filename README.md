@@ -89,8 +89,8 @@ with the videos: they are the tracking results.
    and inter-individual distance, against what fish placed at random in the
    tank would give, and how both change through the recording.
 4. **Spatial Analysis** has the position heatmaps, and arena drawing for
-   sessions without an outline. **Individual Analysis** and **Bout Analysis**
-   are older, more detailed views.
+   sessions without an outline. **Individual Analysis** is an older, more
+   detailed view.
 5. **Video Inspector** plays the video with the tracking drawn on top, and
    exports frames and clips.
 
@@ -112,7 +112,6 @@ folder containing several and loads them all.
 | Analysis | Metrics |
 |---|---|
 | Individual | Speed, distance, freezing, path straightness, turning bias |
-| Bout | Swim bouts, their duration and speed, inter-bout intervals, laterality |
 | Shoaling | Nearest neighbour distance (NND), inter-individual distance (IID), convex hull area |
 | Spatial | Thigmotaxis (time near the walls), position heatmaps |
 
@@ -121,7 +120,7 @@ All distances and areas are in the unit you chose; the `Unit` and
 can be converted later.
 
 Frames where idtracker.ai lost a fish are treated as *unobserved*, not as the
-fish being still. Freezes and bouts are counted within stretches of continuous
+fish being still. Freezes are counted within stretches of continuous
 tracking and never across a gap; one cut short by lost tracking is reported as
 *censored* rather than counted, and rates are per unit of observed time.
 
@@ -157,8 +156,8 @@ lines, trails) on the video frames.
   and the dialog says so first.
 
 Both export what the tab is showing, including the time-series panel when the
-Time Panel is set to NND, IID, Hull or Bout. If that panel needs shoaling or
-bout results that have not been run, the export refuses rather than writing a
+Time Panel is set to NND, IID or Hull. If that panel needs shoaling results
+that have not been run, the export refuses rather than writing a
 clip with a "run the analysis first" message in it.
 
 In an exported clip the time panel covers only the exported range. A very short
@@ -166,8 +165,7 @@ clip therefore shows few samples: at the default shoaling interval of 30 frames
 that is one per second, so lower the interval for a denser trace.
 
 Expect roughly 28 ms per frame at 1288×964 with a time panel, about 8 seconds
-for a 10-second clip. The Bout panel is about three times slower; the dialog
-warns you first.
+for a 10-second clip.
 
 The source video is found automatically when it sits beside the session folder,
 which is where the Tracking tab leaves it. Otherwise attach it with
@@ -247,7 +245,6 @@ fish_analyzer/
 ├── file_loading.py              # load idtracker.ai session folders
 ├── processing.py                # individual metrics
 ├── segments.py                  # tracking-gap boundaries, shared by episode metrics
-├── bout_analysis.py             # swim bouts and laterality
 ├── shoaling.py                  # NND, IID, convex hull
 ├── spatial.py                   # thigmotaxis and heatmaps
 ├── export.py                    # CSV exports

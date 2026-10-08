@@ -105,7 +105,6 @@ def test_gui_constructs(app):
         "Sessions & Units",
         "Results",
         "Individual Analysis",
-        "Bout Analysis",
         "Shoaling",
         "Spatial Analysis",
         "Video Inspector",

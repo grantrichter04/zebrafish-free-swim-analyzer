@@ -74,20 +74,6 @@ def jittered_straight_line(n=600, step_px=2.0, jitter_px=0.1, seed=7):
     return traj
 
 
-def discrete_bouts(n_bouts=10, bout_frames=5, pause_frames=25, step_px=6.0,
-                   x0=100.0, y0=500.0):
-    """Exactly ``n_bouts`` straight darts separated by exact pauses."""
-    xs, ys = [x0], [y0]
-    for _ in range(n_bouts):
-        for _ in range(bout_frames):
-            xs.append(xs[-1] + step_px)
-            ys.append(y0)
-        for _ in range(pause_frames):
-            xs.append(xs[-1])
-            ys.append(y0)
-    return np.stack([np.array(xs), np.array(ys)], axis=1)[:, None, :]
-
-
 def single_swim_event(n=200, accel_frames=10, plateau_frames=60,
                       peak_step_px=5.0, x0=100.0, y0=500.0):
     """One swim event: ramp up, hold, ramp down. A single burst by any reading.

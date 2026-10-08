@@ -260,7 +260,6 @@ def test_renaming_a_session_carries_everything_with_it(
     from fish_analyzer import process_and_analyze_file
     analysed = process_and_analyze_file(loaded)
     loaded.processed_data = analysed
-    app.bout_results[old] = ["bouts"]
     app.file_arena_definitions[old] = "arena"
     monkeypatch.setattr(data_tab.simpledialog, "askstring", lambda *a, **k: " ctrl 1 ")
     app.sessions_tree.selection_set(old)
@@ -273,7 +272,6 @@ def test_renaming_a_session_carries_everything_with_it(
     assert {app.results_tree.item(i, "values")[1]
             for i in app.results_tree.get_children()} == {"ctrl 1"}, \
         "the Results tab follows the new name"
-    assert app.bout_results == {"ctrl 1": ["bouts"]}
     assert app.file_arena_definitions == {"ctrl 1": "arena"}
     assert _rows(app)["ctrl 1"]["group"] == "ctrl", \
         "a group nobody chose is derived from the new name"

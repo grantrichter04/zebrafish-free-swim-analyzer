@@ -165,25 +165,6 @@ def test_time_strip_moves_the_cursor_without_redrawing():
     assert strip.height == early.shape[0]
 
 
-def test_scrolling_strip_moves_its_window_with_time():
-    """The Bout panel scrolls, so its strip must differ between timepoints."""
-    from matplotlib.figure import Figure
-    from matplotlib.backends.backend_agg import FigureCanvasAgg
-    from fish_analyzer.media_export import ScrollingStrip
-
-    fig = Figure(figsize=(4, 1), dpi=50)
-    FigureCanvasAgg(fig)
-    ax = fig.add_subplot(111)
-    ax.plot(np.linspace(0, 100, 500), np.sin(np.linspace(0, 100, 500)))
-
-    strip = ScrollingStrip(fig, ax, window_s=10.0, total_s=100.0)
-    early = strip.at(5.0).copy()
-    late = strip.at(80.0).copy()
-
-    assert not np.array_equal(early, late), "window did not scroll"
-    assert early.shape == late.shape
-
-
 class RecordingSink:
     """Captures what the loop writes, so tests need no encoder."""
 
@@ -338,18 +319,6 @@ def test_time_strip_scales_to_the_video_width():
     assert scaled.height == scaled.at(5.0).shape[0]
 
 
-def test_scrolling_strip_scales_to_the_video_width():
-    from fish_analyzer.media_export import ScrollingStrip
-
-    fig, ax = _one_inch_figure()
-    strip = ScrollingStrip(fig, ax, window_s=2.0, total_s=10.0,
-                           target_width=1288)
-
-    out = strip.at(5.0)
-    assert out.shape[1] == 1288
-    assert out.shape[0] == strip.height
-
-
 def test_scaled_strip_keeps_the_cursor_inside_the_image():
     from fish_analyzer.media_export import TimeStrip
 
@@ -418,11 +387,3 @@ def test_cursor_without_the_conversion_would_pin_to_the_edge():
     assert middle == late, "expected both to clamp to the same edge column"
 
 
-def test_scrolling_strip_stays_in_seconds():
-    """The bout panel's own axis is in seconds, so it needs no conversion."""
-    from fish_analyzer.media_export import ScrollingStrip
-
-    fig, ax = _minutes_axis_figure(total_minutes=600.0)
-    strip = ScrollingStrip(fig, ax, window_s=10.0, total_s=600.0)
-
-    assert not np.array_equal(strip.at(100.0), strip.at(400.0))

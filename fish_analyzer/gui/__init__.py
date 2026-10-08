@@ -8,7 +8,6 @@ This package splits the GUI into logical components:
 - tracking_tab.py: Running idtracker.ai on a folder of videos
 - data_tab.py: File loading and calibration
 - analysis_tab.py: Individual trajectory analysis
-- bout_tab.py: Bout detection and laterality analysis
 - shoaling_tab.py: Group behavior analysis
 - spatial_tab.py: Thigmotaxis and heatmap analysis
 - inspector_tab.py: Unified video inspector with overlay controls
@@ -22,7 +21,6 @@ from .tracking_tab import TrackingTabMixin
 from .data_tab import DataTabMixin
 from .results_tab import ResultsTabMixin
 from .analysis_tab import AnalysisTabMixin
-from .bout_tab import BoutTabMixin
 from .shoaling_tab import ShoalingTabMixin
 from .spatial_tab import SpatialTabMixin
 from .inspector_tab import InspectorTabMixin
@@ -32,7 +30,7 @@ from .utils import smooth_time_series
 
 class EnhancedFishAnalyzer(GUIBase, TrackingTabMixin, DataTabMixin,
                            ResultsTabMixin, AnalysisTabMixin,
-                           BoutTabMixin, ShoalingTabMixin, SpatialTabMixin,
+                           ShoalingTabMixin, SpatialTabMixin,
                            InspectorTabMixin, InspectorExportMixin):
     """
     Main application class - orchestrates the entire GUI.
@@ -43,7 +41,6 @@ class EnhancedFishAnalyzer(GUIBase, TrackingTabMixin, DataTabMixin,
     - DataTabMixin: Sessions, units, running the analysis
     - ResultsTabMixin: The headline metrics as SuperPlots
     - AnalysisTabMixin: Individual trajectory visualization
-    - BoutTabMixin: Swim bout detection and laterality analysis
     - ShoalingTabMixin: Group behavior analysis
     - SpatialTabMixin: Thigmotaxis, heatmaps
     - InspectorTabMixin: Unified video inspector with overlays

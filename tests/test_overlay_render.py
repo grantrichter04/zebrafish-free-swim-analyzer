@@ -167,8 +167,3 @@ def test_iid_lines_radiate_from_the_focus_fish():
     assert out[50, 50].sum() > 0, "no line from fish 0 to fish 1"
 
 
-def test_bout_ring_is_drawn_around_the_selected_fish():
-    settings = OverlaySettings(show_bout_ring=True, bout_fish=0, dot_radius=10)
-    out = compose_frame(blank(), one_fish_at(50, 50), 0, settings, 1.0)
-    # ring radius is 1.8 * dot_radius = 18
-    assert out[50, 68].sum() > 0 or out[50, 67].sum() > 0

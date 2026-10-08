@@ -1104,7 +1104,7 @@ class AnalysisTabMixin:
             messagebox.showerror("Export Error", f"Failed to export:\n{e}")
 
     def _export_combined_summary(self):
-        """Export combined per-fish summary: trajectory metrics + bout summary + Group."""
+        """Export combined per-fish summary: trajectory metrics + Group."""
         analyzed = {k: v for k, v in self.loaded_files.items() if v.processed_data}
         if not analyzed:
             messagebox.showwarning("No Data",
@@ -1112,30 +1112,15 @@ class AnalysisTabMixin:
                                    "Run 'Run Individual Trajectory Analysis' first.")
             return
 
-        bout_results = getattr(self, 'bout_results', {})
-        if not bout_results:
-            if not messagebox.askyesno(
-                "Bout Data Missing",
-                "Bout analysis has not been run.\n\n"
-                "The Bout_* columns will be empty (NaN).\n\n"
-                "Export trajectory metrics only?"
-            ):
-                return
-
         output_path = ask_csv_save_path("Export Combined Summary CSV", "combined_summary.csv")
         if not output_path:
             return
 
         try:
             n_rows = export_combined_summary_csv(
-                analyzed, bout_results, self.file_groups, output_path
+                analyzed, self.file_groups, output_path
             )
-            has_bouts = bool(bout_results)
-            msg = (
-                f"Exported {n_rows} fish rows to:\n{output_path}\n\n"
-                f"Columns: trajectory metrics"
-                + (" + bout summary stats." if has_bouts else " only (no bout data).")
-            )
+            msg = f"Exported {n_rows} fish rows to:\n{output_path}"
             self.set_status(f"Exported combined summary: {n_rows} fish")
             messagebox.showinfo("Export Complete", msg)
         except Exception as e:

@@ -158,8 +158,7 @@ class TimeStrip:
     """The time panel rasterised once, with the cursor stamped per frame.
 
     Valid only while the axes are fixed for the whole session, which is true of
-    the NND, IID and Hull panels (xlim is set once at rebuild) and false of the
-    Bout panel, which scrolls its xlim every frame - use ScrollingStrip there.
+    the NND, IID and Hull panels (xlim is set once at rebuild).
 
     Rendering the figure per frame costs 50-100 ms; this costs a memcpy and a
     line, which is the same trick the live view uses when it blits.
@@ -216,64 +215,6 @@ class TimeStrip:
         cv2.line(self._buffer, (x, 0), (x, self._buffer.shape[0]),
                  self.color, self.width)
         return self._buffer
-
-
-class ScrollingStrip:
-    """Time panel re-rendered per frame, for panels whose axes move.
-
-    The Bout panel resets xlim to a window around the current frame on every
-    update, so a strip rasterised once cannot represent it - cropping a
-    pre-rendered image would drag the y-axis out of frame. This costs a full
-    matplotlib draw per frame, which is why the export dialog warns first.
-    """
-
-    def __init__(self, figure, axes, window_s, total_s, target_width=None,
-                 color=(255, 60, 60), width=2):
-        self._figure = figure
-        self._axes = axes
-        self._window_s = window_s
-        self._total_s = total_s
-        self._target_width = target_width
-        self.color = color
-        self.width = width
-
-        figure.canvas.draw()
-        raster = np.asarray(figure.canvas.buffer_rgba())
-        self._scale = 1.0
-        if target_width is not None and target_width != raster.shape[1]:
-            self._scale = target_width / raster.shape[1]
-        self._height = max(1, int(round(raster.shape[0] * self._scale)))
-
-    @property
-    def height(self):
-        return self._height
-
-    def at(self, t):
-        """Redraw the panel with its window centred on `t`."""
-        start = max(0.0, t - self._window_s / 2)
-        end = start + self._window_s
-        if end > self._total_s:
-            end = self._total_s
-            start = max(0.0, end - self._window_s)
-
-        self._axes.set_xlim(start, end)
-        self._figure.canvas.draw()
-        strip = np.asarray(self._figure.canvas.buffer_rgba())[:, :, :3].copy()
-
-        x_at_start = self._axes.transData.transform((start, 0.0))[0]
-        x_at_end = self._axes.transData.transform((end, 0.0))[0]
-        px_per_s = (x_at_end - x_at_start) / max(1e-9, end - start)
-
-        if self._scale != 1.0:
-            strip = cv2.resize(strip, (self._target_width, self._height),
-                               interpolation=cv2.INTER_AREA)
-            x_at_start *= self._scale
-            px_per_s *= self._scale
-
-        x = cursor_x(t - start, x_at_start, px_per_s)
-        x = max(0, min(strip.shape[1] - 1, x))
-        cv2.line(strip, (x, 0), (x, strip.shape[0]), self.color, self.width)
-        return strip
 
 
 @dataclass

@@ -26,7 +26,6 @@ REPO = Path(__file__).resolve().parent.parent
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
-from fish_analyzer.bout_analysis import BoutParameters, analyze_bouts_for_file
 from fish_analyzer.data_structures import CalibrationSettings
 from fish_analyzer.export import export_combined_summary_csv
 from fish_analyzer.file_loading import TrajectoryFileLoader
@@ -86,7 +85,6 @@ def verify_session(session: Path, report: Report) -> dict:
     loaded = TrajectoryFileLoader.load_from_session_folder(session)
     fish_list = process_and_analyze_file(loaded, params)
     loaded.processed_data = fish_list
-    bouts = analyze_bouts_for_file(loaded, BoutParameters())
 
     print(f"\n{loaded.nickname}")
     print(f"  {loaded.n_frames} frames, {loaded.n_fish} fish, "
@@ -115,24 +113,6 @@ def verify_session(session: Path, report: Report) -> dict:
                  f"{min(tops):.1f}–{max(tops):.1f} BL/s "
                  f"(raw max would be {min(raws):.0f}–{max(raws):.0f})")
 
-    # --- B4: no exported inter-bout interval may span a tracking gap ---
-    spanning = 0
-    for result in bouts:
-        untracked = np.isnan(loaded.trajectories[:, result.fish_id, 0])
-        spanning += sum(
-            1 for cur, nxt in zip(result.bouts, result.bouts[1:])
-            if cur.segment_index == nxt.segment_index
-            and untracked[cur.end_frame:nxt.start_frame + 1].any()
-        )
-    report.check(spanning == 0, "B4 no IBI spans a tracking gap",
-                 f"{spanning} offending intervals")
-
-    # --- B8: unmeasurable turns must not be counted as straight ---
-    straight = sum(b.summary["bout_n_straight"] for b in bouts)
-    unmeasurable = sum(b.summary["bout_n_heading_unmeasurable"] for b in bouts)
-    report.check(True, "B8 turn measurability reported",
-                 f"{straight} straight, {unmeasurable} unmeasurable")
-
     # --- B7: group metrics must follow the calibration ---
     nnd_bl = ShoalingCalculator(loaded, ShoalingParameters(30)).calculate().mean_nnd
     in_cm = TrajectoryFileLoader.load_from_session_folder(
@@ -145,15 +125,14 @@ def verify_session(session: Path, report: Report) -> dict:
                  f"cm/BL ratio {nnd_cm / nnd_bl:.3f}, "
                  f"body length / px-per-cm {expected:.3f}")
 
-    return {"loaded": loaded, "bouts": bouts}
+    return {"loaded": loaded}
 
 
 def verify_export(sessions: dict, report: Report, tmp: Path):
     """The exported CSV is the artefact that leaves the building."""
     files = {n: d["loaded"] for n, d in sessions.items()}
-    bout_map = {n: d["bouts"] for n, d in sessions.items()}
     out = tmp / "combined_summary.csv"
-    n_rows = export_combined_summary_csv(files, bout_map, {}, out)
+    n_rows = export_combined_summary_csv(files, {}, out)
 
     lines = out.read_text(encoding="utf-8").splitlines()
     header = lines[0].split(",")
@@ -174,7 +153,7 @@ def verify_export(sessions: dict, report: Report, tmp: Path):
                  "no fish failed or was excluded", f"statuses: {statuses}")
 
     for column in ("Unit", "ObservedDuration_s", "LongestGap_s", "Status",
-                   "FreezeEpisodes_Censored", "Bout_Censored", "IBI_N"):
+                   "FreezeEpisodes_Censored"):
         report.check(column in header, f"{column} is exported")
 
 

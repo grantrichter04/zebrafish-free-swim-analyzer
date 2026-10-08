@@ -17,13 +17,11 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from synthetic_tracks import (  # noqa: E402
-    BODY_LENGTH_PX, FPS, VIDEO_SIZE, circler, discrete_bouts,
+    BODY_LENGTH_PX, FPS, VIDEO_SIZE, circler,
     jittered_straight_line, make_file, single_swim_event, stationary,
     straight_line, three_fish_fixed_geometry, with_dropout,
     with_scattered_dropout)
 
-from fish_analyzer.bout_analysis import (  # noqa: E402
-    BoutDetector, BoutParameters, analyze_bouts_for_file)
 from fish_analyzer.data_structures import CalibrationSettings  # noqa: E402
 from fish_analyzer.processing import (  # noqa: E402
     ProcessingParameters, process_and_analyze_file)
@@ -39,11 +37,6 @@ def metrics_for(traj, params=None, **kwargs):
     fish = process_and_analyze_file(
         loaded, params or ProcessingParameters.default_for_fish())
     return fish[0].metrics
-
-
-def bout_summary_for(traj, **kwargs):
-    loaded = make_file(traj, **kwargs)
-    return analyze_bouts_for_file(loaded, BoutParameters())[0]
 
 
 # =============================================================================
@@ -155,18 +148,6 @@ def test_counter_clockwise_on_screen_reads_as_a_left_turn():
     assert m["n_right_turns"] == 0
 
 
-def test_bout_laterality_agrees_in_sign_with_trajectory_laterality():
-    """The combined CSV carries both LateralityIndex and Bout_LateralityIndex.
-    If they disagreed in sign the two columns would contradict each other."""
-    traj = circler(n=600, omega=OMEGA, clockwise_on_screen=True)
-    assert metrics_for(traj)["laterality_index"] > 0
-    assert bout_summary_for(traj).summary["bout_laterality_index"] > 0
-
-    traj = circler(n=600, omega=OMEGA, clockwise_on_screen=False)
-    assert metrics_for(traj)["laterality_index"] < 0
-    assert bout_summary_for(traj).summary["bout_laterality_index"] < 0
-
-
 def test_laterality_index_is_unbiased_under_symmetric_jitter():
     """Turn *counts* stay balanced under noise even though the turn *rate*
     does not — which is why laterality survives and angular velocity does not."""
@@ -228,7 +209,7 @@ def test_noise_dominated_columns_are_not_exported(exporter, tmp_path):
 
     out = tmp_path / "metrics.csv"
     if exporter == "combined":
-        assert export_combined_summary_csv({"f": loaded}, {}, {}, out) == 1
+        assert export_combined_summary_csv({"f": loaded}, {}, out) == 1
     else:
         assert export_individual_metrics_csv({"f": loaded}, out) == 1
 
@@ -320,103 +301,6 @@ def test_observed_duration_excludes_tracking_gaps():
 # =============================================================================
 # Bursting
 # =============================================================================
-
-# =============================================================================
-# Bout detection
-# =============================================================================
-
-def test_bout_count_duration_and_interval_on_engineered_bouts():
-    """10 darts of 5 frames separated by 25-frame pauses."""
-    s = bout_summary_for(discrete_bouts(
-        n_bouts=10, bout_frames=5, pause_frames=25, step_px=6.0)).summary
-    assert s["bout_count"] == 10
-    assert s["bout_duration_median_ms"] == pytest.approx(5 / FPS * 1000)
-    assert s["ibi_median_ms"] == pytest.approx(25 / FPS * 1000)
-
-
-def test_bout_displacement_and_distance_on_a_straight_dart():
-    """5 steps of 6 px is 0.6 BL, and a straight dart has distance == displacement."""
-    result = bout_summary_for(discrete_bouts(
-        n_bouts=10, bout_frames=5, pause_frames=25, step_px=6.0))
-    expected = 5 * 6.0 / BODY_LENGTH_PX
-    for bout in result.bouts:
-        assert bout.displacement == pytest.approx(expected)
-        assert bout.distance == pytest.approx(expected)
-
-
-def test_a_bout_running_to_the_end_of_the_array_keeps_its_displacement():
-    """_compute_bout_metrics clamps x_end to len(x) - 1; check the terminal
-    bout does not silently collapse to zero displacement."""
-    n = 50
-    x = np.concatenate([np.full(25, 100.0), 100.0 + np.arange(1, 26) * 6.0])
-    y = np.full(n, 500.0)
-    xs = x / BODY_LENGTH_PX
-    ys = (VIDEO_SIZE - y) / BODY_LENGTH_PX
-    speed = np.hypot(np.diff(xs), np.diff(ys)) * FPS
-    bouts = BoutDetector(BoutParameters(), FPS).detect_bouts(xs, ys, speed)
-    assert len(bouts) == 1
-    assert bouts[0].displacement == pytest.approx(25 * 6.0 / BODY_LENGTH_PX)
-    assert bouts[0].distance == pytest.approx(25 * 6.0 / BODY_LENGTH_PX)
-
-
-def test_straight_darts_are_classified_straight():
-    s = bout_summary_for(discrete_bouts(
-        n_bouts=10, bout_frames=5, pause_frames=25, step_px=6.0)).summary
-    assert s["bout_n_straight"] == 10
-    assert s["bout_laterality_index"] == pytest.approx(0.0)
-
-
-def test_a_tracking_gap_does_not_become_an_inter_bout_interval():
-    """B4: a gap zeroed the speed, so it read as a pause and was exported as an
-    inter-bout interval — 18-86% of them on the real sessions.
-
-    The two fragments either side of the gap are now censored and no interval
-    is reported between them, because there was no pause to measure.
-    """
-    traj = straight_line(n=600, step_px=2.0)
-    clean = bout_summary_for(traj)
-    assert clean.summary["bout_count"] == 1
-    assert clean.summary["ibi_n"] == 0
-
-    gapped = bout_summary_for(with_dropout(traj, 200, 230))
-    assert gapped.summary["ibi_n"] == 0
-    assert np.isnan(gapped.summary["ibi_median_ms"])
-    assert gapped.summary["bout_censored"] == 2
-    assert gapped.summary["bout_count"] == 0
-
-
-def test_intervals_between_real_bouts_are_still_measured():
-    """The gap fix must not throw away genuine inter-bout intervals."""
-    s = bout_summary_for(discrete_bouts(
-        n_bouts=10, bout_frames=5, pause_frames=25, step_px=6.0)).summary
-    assert s["ibi_n"] == 9
-    assert s["ibi_median_ms"] == pytest.approx(25 / FPS * 1000)
-
-
-def test_bout_rate_is_per_observed_second_not_per_wall_clock_second():
-    """A worse-tracked recording must not read as a less active fish."""
-    traj = discrete_bouts(n_bouts=10, bout_frames=5, pause_frames=25, step_px=6.0)
-    n = traj.shape[0]
-    full = bout_summary_for(traj).summary
-    # Blank a stretch that contains no bout onset, so the same bouts survive.
-    halved = bout_summary_for(with_dropout(traj, n - 20, n)).summary
-    assert halved["bout_rate_per_min"] >= full["bout_rate_per_min"]
-
-
-def test_an_unmeasurable_heading_change_is_not_reported_as_straight():
-    """B8: five guard paths returned a literal 0.0, which landed inside the
-    +/-5 degree 'straight' dead zone — 77% of everything counted as straight on
-    real data was a guard return. They return NaN now.
-
-    A 1-frame bout at index 0 has no room for a look-back window, but the fish
-    demonstrably turns 90 degrees immediately afterwards."""
-    x = np.array([0., 6., 6., 6., 6., 6., 6., 6.]) / BODY_LENGTH_PX
-    y = np.array([0., 0., 6., 12., 18., 24., 30., 36.]) / BODY_LENGTH_PX
-    speed = np.hypot(np.diff(x), np.diff(y)) * FPS
-    bout = BoutDetector(BoutParameters(), FPS)._compute_bout_metrics(
-        x, y, speed, 0, 1)
-    assert not (bout.heading_change_deg == 0.0)
-
 
 # =============================================================================
 # Shoaling — NND, IID, convex hull
@@ -591,30 +475,6 @@ def test_a_failed_direction_calculation_is_distinguishable_from_a_real_zero():
     assert not all(failed[k] == 0 for k in ("n_right_turns", "n_left_turns"))
 
 
-def test_unmeasurable_turns_are_counted_separately_from_straight_ones():
-    """B8: n_straight used to absorb every guard return. The three categories
-    must now partition the measurable bouts, with the rest counted apart."""
-    s = bout_summary_for(discrete_bouts(
-        n_bouts=10, bout_frames=5, pause_frames=25, step_px=6.0)).summary
-    counted = s["bout_n_left"] + s["bout_n_right"] + s["bout_n_straight"]
-    assert counted + s["bout_n_heading_unmeasurable"] == s["bout_count"]
-
-
-def test_a_bout_whose_turn_cannot_be_measured_is_not_called_straight():
-    x = np.array([0., 6., 6., 6., 6., 6., 6., 6.]) / BODY_LENGTH_PX
-    y = np.array([0., 0., 6., 12., 18., 24., 30., 36.]) / BODY_LENGTH_PX
-    speed = np.hypot(np.diff(x), np.diff(y)) * FPS
-    detector = BoutDetector(BoutParameters(), FPS)
-    bout = detector._compute_bout_metrics(x, y, speed, 0, 1)
-    assert np.isnan(bout.heading_change_deg)
-
-    bout.censored = False
-    s = detector.compute_summary([bout], observed_duration_s=1.0)
-    assert s["bout_n_straight"] == 0
-    assert s["bout_n_heading_unmeasurable"] == 1
-    assert np.isnan(s["bout_heading_change_mean_abs_deg"])
-
-
 def test_out_of_arena_share_is_exported(tmp_path):
     """B9: a reader seeing 0% border must be able to find out that half the
     recording fell outside the polygon entirely."""
@@ -658,7 +518,7 @@ def test_a_fish_excluded_by_the_quality_gate_still_appears_in_the_csv(tmp_path):
     assert len(loaded.processed_data) == 1
 
     out = tmp_path / "combined.csv"
-    assert export_combined_summary_csv({"f": loaded}, {}, {}, out) == 2
+    assert export_combined_summary_csv({"f": loaded}, {}, out) == 2
 
     lines = out.read_text(encoding="utf-8").splitlines()
     fields = [dict(zip(lines[0].split(","), r.split(","))) for r in lines[1:]]
@@ -679,7 +539,7 @@ def test_status_names_which_calculation_failed(tmp_path):
 
     loaded.processed_data[0].failed_metrics.append("turning")
     out = tmp_path / "combined.csv"
-    export_combined_summary_csv({"f": loaded}, {}, {}, out)
+    export_combined_summary_csv({"f": loaded}, {}, out)
     assert "partial: turning" in out.read_text(encoding="utf-8")
 
 

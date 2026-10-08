@@ -108,7 +108,7 @@ def app(_gui_app):
     """The shared app, with per-test state cleared so tests stay independent."""
     from fish_analyzer.processing import ProcessingParameters
 
-    for mapping in (_gui_app.loaded_files, _gui_app.bout_results,
+    for mapping in (_gui_app.loaded_files,
                     _gui_app.file_arena_definitions,
                     _gui_app.file_roi_definitions, _gui_app.file_groups,
                     _gui_app.video_readers):

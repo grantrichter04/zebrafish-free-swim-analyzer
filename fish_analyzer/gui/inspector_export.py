@@ -25,7 +25,7 @@ class InspectorExportMixin:
     """Mixin providing the Video Inspector's export controls.
 
     Expects from the host class:
-        - self.loaded_files, self.bout_results, self.video_readers
+        - self.loaded_files, self.video_readers
         - self.inspector_* control variables
         - self._insp_fig, self._insp_ax_time, self._insp_cached_background
         - self.render_settings_from_vars(), self._get_inspector_frame_idx(),
@@ -173,13 +173,6 @@ class InspectorExportMixin:
                 "Run Shoaling Analysis first, or set the Time Panel to 'None'."
             )
 
-        if time_mode == 'bout' and not self.bout_results.get(selected):
-            return False, (
-                "The Time Panel is set to Bout Speed + Heading, but no bout "
-                f"results exist for '{selected}'.\n\n"
-                "Run Bout Analysis first, or set the Time Panel to 'None'."
-            )
-
         return True, ""
 
     def _inspector_export_clip_dialog(self):
@@ -195,13 +188,9 @@ class InspectorExportMixin:
         fps = loaded.calibration.frame_rate
         n_frames = end - start + 1
 
-        time_mode = self.inspector_time_mode_var.get()
         # Measured at 28 ms/frame exporting 1288x964 + strip with positions,
-        # NND, hull and trails on. Bout redraws matplotlib every frame instead
-        # of stamping a cursor onto a strip rasterised once, so it is roughly
-        # three times slower.
-        per_frame_ms = 90 if time_mode == 'bout' else 28
-        estimate_s = n_frames * per_frame_ms / 1000.0
+        # NND, hull and trails on.
+        estimate_s = n_frames * 28 / 1000.0
 
         marked = (self.inspector_mark_in is not None
                   or self.inspector_mark_out is not None)
@@ -211,10 +200,6 @@ class InspectorExportMixin:
             f"{n_frames} frames, {n_frames / fps:.1f} s of video\n"
             f"Estimated time: {estimate_s:.0f} s\n\n"
         )
-        if time_mode == 'bout':
-            message += ("The Bout panel has to be redrawn for every frame, "
-                        "which is around four times slower than the other "
-                        "panels.\n\n")
         message += "Continue?"
 
         if not messagebox.askyesno("Export Clip", message):
@@ -249,13 +234,12 @@ class InspectorExportMixin:
 
         The NND, IID and Hull panels are plotted against minutes
         (_inspector_rebuild_figure divides timestamps by 60, and the live
-        cursor does the same), while the export loop counts seconds. The Bout
-        panel's window is already in seconds.
+        cursor does the same), while the export loop counts seconds.
 
         A wrong value here does not raise: the cursor is clamped to an edge and
         silently never moves.
         """
-        return 1.0 if time_mode == 'bout' else 1.0 / 60.0
+        return 1.0 / 60.0
 
     def _inspector_build_time_strip(self, loaded, time_mode, frame_w,
                                     start, end):
@@ -268,26 +252,17 @@ class InspectorExportMixin:
 
         This keeps the cheap path: the axis is fixed for the duration of the
         clip, so the strip is still rasterised once and only the cursor is
-        stamped per frame. Bout mode is the exception, as its window scrolls by
-        design.
+        stamped per frame.
 
         The axis is left narrowed on return; the caller rebuilds the figure
         when the export finishes.
         """
-        from ..media_export import ScrollingStrip, TimeStrip
+        from ..media_export import TimeStrip
 
         if time_mode == 'none' or self._insp_fig is None:
             return None
 
         fps = loaded.calibration.frame_rate
-
-        if time_mode == 'bout':
-            return ScrollingStrip(
-                self._insp_fig, self._insp_ax_time,
-                window_s=float(self.inspector_bout_window_var.get()),
-                total_s=loaded.n_frames / fps,
-                target_width=frame_w,
-            )
 
         time_scale = self._inspector_time_scale_for(time_mode)
         self._insp_ax_time.set_xlim(start / fps * time_scale,
@@ -369,9 +344,9 @@ class InspectorExportMixin:
             # scheduled callback that has already run.
             self._insp_export_after_id = None
             source.close()
-            # ScrollingStrip leaves the live axes on the last exported window,
-            # and both strips force a draw on the shared canvas. Rebuild so
-            # the tab is not left showing export state.
+            # The strip narrows the live axes to the exported range and
+            # forces a draw on the shared canvas. Rebuild so the tab is not
+            # left showing export state.
             self._insp_needs_rebuild = True
             try:
                 self._inspector_update_fast()

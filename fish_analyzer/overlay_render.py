@@ -36,8 +36,6 @@ class OverlaySettings:
     show_hull: bool = False
     show_iid: bool = False
     iid_focus: int = 0
-    show_bout_ring: bool = False
-    bout_fish: int = 0
     trail_length: int = 0
     trail_opacity: float = 0.6
     trail_width: float = 1.0
@@ -47,7 +45,7 @@ class OverlaySettings:
 def fish_colors(n_fish: int) -> np.ndarray:
     """Per-fish RGBA colours, matching the convention used across the app.
 
-    analysis_tab.py, bout_tab.py, shoaling_tab.py and spatial_tab.py all sample
+    analysis_tab.py, shoaling_tab.py and spatial_tab.py all sample
     tab10 this way, so a fish keeps one colour between the video and the plots.
     """
     return plt.cm.tab10(np.linspace(0, 1, max(1, n_fish)))
@@ -131,8 +129,6 @@ def _draw_cv2(display, trajectories, positions, frame_idx, n_fish, colors,
     if settings.show_iid:
         _draw_iid(display, positions, n_fish, settings, scale)
     _draw_positions(display, positions, n_fish, colors, settings)
-    if settings.show_bout_ring:
-        _draw_bout_ring(display, positions, n_fish, settings)
 
 
 def _draw_trails(display, trajectories, frame_idx, n_fish, colors, settings):
@@ -213,16 +209,6 @@ def _draw_iid(display, positions, n_fish, settings, scale):
                      positions[focus, 1] - positions[j, 1]) * scale
         mid = ((pf[0] + pj[0]) // 2, (pf[1] + pj[1]) // 2)
         _label(display, f'{d:.1f}', mid, (255, 100, 255))
-
-
-def _draw_bout_ring(display, positions, n_fish, settings):
-    """Highlight ring around the fish selected for bout inspection."""
-    fish = settings.bout_fish
-    if fish >= n_fish or np.isnan(positions[fish, 0]):
-        return
-    px, py = int(positions[fish, 0]), int(positions[fish, 1])
-    cv2.circle(display, (px, py), int(settings.dot_radius * 1.8),
-               (0, 255, 255), 3, lineType=cv2.LINE_AA)
 
 
 def _draw_positions(display, positions, n_fish, colors, settings):

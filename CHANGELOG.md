@@ -70,6 +70,11 @@ speed by about 1% and path straightness by about 1%; the metrics it mattered
 for were withdrawn in 2.1.0. Plot smoothing on the Individual and Shoaling
 tabs is unchanged and does not affect exported numbers.
 
+**Bout Analysis removed.** The bout model was built for larval dart-and-glide
+swimming and does not fit adults, which swim continuously. The tab, the
+`Bout_*` and `IBI_*` export columns, and the Video Inspector's bout overlay,
+bout time panel and fish zoom are gone.
+
 **Repository layout.** The audit trail moved to `docs/audit/`, the standalone
 scripts to `extras/`, and `run_analyzer.py` was removed in favour of the
 shortcut and `python -m fish_analyzer`.

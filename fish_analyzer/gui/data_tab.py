@@ -248,11 +248,6 @@ class DataTabMixin:
             for slot in self._RESULT_SLOTS:
                 setattr(loaded_file, slot, None)
 
-            # Bout results are keyed by nickname on the GUI, not on the file.
-            if nickname in self.bout_results:
-                del self.bout_results[nickname]
-                had_results = True
-
             if had_results:
                 cleared.append(nickname)
 
@@ -268,9 +263,8 @@ class DataTabMixin:
 
         These side dictionaries are keyed by nickname rather than held on the
         LoadedTrajectoryFile, so removing or replacing a file used to leave
-        them behind: the stale bout results were still exported, the stale
-        video reader was still displayed, and its cv2.VideoCapture was never
-        released. Call this whenever a nickname stops referring to the session
+        them behind: the stale video reader was still displayed, and its
+        cv2.VideoCapture was never released. Call this whenever a nickname stops referring to the session
         it originally referred to.
         """
         reader = self.video_readers.pop(nickname, None)
@@ -284,7 +278,6 @@ class DataTabMixin:
         self.file_arena_definitions.pop(nickname, None)
         self.file_roi_definitions.pop(nickname, None)
         self.file_groups.pop(nickname, None)
-        self.bout_results.pop(nickname, None)
 
         # The spatial tab holds the arena currently being edited by value, not
         # by lookup, so it has to be dropped too.
@@ -503,7 +496,7 @@ class DataTabMixin:
             for name, loaded in self.loaded_files.items()}
         self.loaded_files[new].nickname = new
 
-        for keyed in (self.bout_results, self.file_arena_definitions,
+        for keyed in (self.file_arena_definitions,
                       self.file_roi_definitions, self.video_readers):
             if old in keyed:
                 keyed[new] = keyed.pop(old)
@@ -549,7 +542,6 @@ class DataTabMixin:
         """Redraw every other tab's list of sessions."""
         self._update_inspector_file_dropdown()
         self._update_analysis_files_listbox()
-        self._refresh_bout_file_list()
         self._update_spatial_files_list()
         self._refresh_result_tabs()
 
@@ -788,16 +780,9 @@ class DataTabMixin:
     # =========================================================================
 
     def _run_analysis_and_switch_tab(self):
-        """Run individual trajectory analysis + bout analysis, then switch tab."""
+        """Analyse every session, then show the Results tab."""
         if not self._run_analysis():
             return
-        # Auto-run bout analysis if bout tab methods are available
-        if hasattr(self, '_refresh_bout_file_list') and hasattr(self, '_run_bout_analysis'):
-            try:
-                self._refresh_bout_file_list()
-                self._run_bout_analysis()
-            except Exception as e:
-                print(f"Auto bout analysis skipped: {e}")
         self.notebook.select(self.results_tab_frame)
 
     def _run_analysis(self) -> bool:

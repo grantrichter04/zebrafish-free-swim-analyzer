@@ -55,14 +55,12 @@ def test_calibration_change_invalidates_cached_results(app, synthetic_npy):
     loaded.processed_data = ["stale"]
     loaded.shoaling_results = "stale"
     loaded.thigmotaxis_results = "stale"
-    app.bout_results[nick] = ["stale"]
 
     cleared = app._invalidate_results_for([nick])
 
     assert loaded.processed_data is None
     assert loaded.shoaling_results is None
     assert loaded.thigmotaxis_results is None
-    assert nick not in app.bout_results
     assert cleared == [nick]
     # The user has to be told, or they just see their results vanish.
     assert "discarded" in app._invalidation_notice(cleared).lower()
@@ -80,9 +78,7 @@ def test_invalidation_notice_is_empty_when_nothing_was_cached(app):
 def test_purge_file_state_clears_every_side_dictionary(app):
     """Per-file state keyed by nickname must not outlive the file.
 
-    Stale bout results were still written to the exported CSV — with a
-    hardcoded 30 fps fallback, so every timestamp for that file was wrong on a
-    recording at any other frame rate.
+    A stale video reader was still displayed, and its capture never released.
     """
     nick = "gone"
 
@@ -97,14 +93,13 @@ def test_purge_file_state_clears_every_side_dictionary(app):
     app.file_arena_definitions[nick] = "arena"
     app.file_roi_definitions[nick] = "roi"
     app.file_groups[nick] = "group"
-    app.bout_results[nick] = ["bout"]
     app.video_readers[nick] = reader
     app.current_arena_file = nick
 
     app._purge_file_state(nick)
 
     for mapping in (app.file_arena_definitions, app.file_roi_definitions,
-                    app.file_groups, app.bout_results, app.video_readers):
+                    app.file_groups, app.video_readers):
         assert nick not in mapping
 
     assert reader.closed, "the cv2 capture must be released, not just dropped"
@@ -189,7 +184,7 @@ def test_progress_helper_restores_the_button_on_exception(app):
     """A crash mid-batch must not leave the button permanently disabled."""
     import gc
 
-    button = app.run_bout_button
+    button = app.run_analysis_button
     with pytest.raises(RuntimeError):
         for _ in app._with_progress(["a"], "Testing", button=button):
             raise RuntimeError("boom")
@@ -529,19 +524,6 @@ def test_export_refuses_when_the_time_panel_needs_missing_shoaling(
     assert "Shoaling" in reason
 
 
-def test_export_refuses_when_the_bout_panel_has_no_results(app, synthetic_npy):
-    from fish_analyzer.file_loading import TrajectoryFileLoader
-
-    app.loaded_files["s1"] = TrajectoryFileLoader.load_file(synthetic_npy, "s1")
-    app.inspector_file_var.set("s1")
-    app.inspector_time_mode_var.set("bout")
-
-    ok, reason = app._inspector_can_export()
-
-    assert ok is False
-    assert "Bout" in reason
-
-
 def test_export_is_allowed_when_the_time_panel_is_off(app, synthetic_npy):
     from fish_analyzer.file_loading import TrajectoryFileLoader
 
@@ -605,10 +587,6 @@ def test_export_converts_seconds_to_the_panel_time_units(app):
     assert app._inspector_time_scale_for("nnd") == pytest.approx(1.0 / 60.0)
     assert app._inspector_time_scale_for("iid") == pytest.approx(1.0 / 60.0)
     assert app._inspector_time_scale_for("hull") == pytest.approx(1.0 / 60.0)
-
-
-def test_bout_panel_is_already_in_seconds(app):
-    assert app._inspector_time_scale_for("bout") == pytest.approx(1.0)
 
 
 def test_export_strip_covers_only_the_exported_segment(app, synthetic_npy):
@@ -683,7 +661,7 @@ def test_export_strip_cursor_sweeps_the_whole_clip(app, synthetic_npy):
 def test_iid_focus_change_forces_a_panel_rebuild(app, synthetic_npy):
     """The IID panel plots one fish, so switching focus has to redraw it.
 
-    Only bout_fish was in the rebuild condition, so the trace kept describing
+    Focus was not in the rebuild condition, so the trace kept describing
     whichever fish was selected when the panel was first built.
     """
     from fish_analyzer.file_loading import TrajectoryFileLoader

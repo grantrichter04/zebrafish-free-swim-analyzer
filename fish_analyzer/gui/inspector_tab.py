@@ -3,11 +3,9 @@ fish_analyzer/gui/inspector_tab.py
 ===================================
 Video Inspector Tab - Unified frame-by-frame viewer with configurable overlays.
 
-Consolidates the shoaling Frame View and bout Bout Viewer into a single
-interactive inspector with overlay checkboxes for:
+An interactive inspector with overlay checkboxes for:
 - Fish positions and trails
 - Shoaling overlays (NND lines, convex hull, IID lines)
-- Bout speed trace + heading change panel
 - Video frame overlay
 """
 
@@ -312,56 +310,6 @@ class InspectorTabMixin:
             lambda e: self._inspector_on_overlay_change()
         )
 
-        # --- Bout Overlay (collapsible) ---
-        _, bout_frame = self._make_collapsible(scroll_frame, "Bout Overlay")
-
-        self.inspector_show_bouts_var = tk.BooleanVar(value=False)
-        tk.Checkbutton(
-            bout_frame, text="Highlight bout fish + show traces",
-            variable=self.inspector_show_bouts_var,
-            command=self._inspector_on_bout_toggle
-        ).pack(anchor="w", padx=5)
-
-        self.bout_overlay_status = tk.Label(bout_frame, text="Run Bout Analysis first",
-                                             font=("Arial", 8), fg="gray")
-        self.bout_overlay_status.pack(anchor="w", padx=5)
-
-        fish_row = tk.Frame(bout_frame)
-        fish_row.pack(fill="x", padx=5, pady=2)
-        tk.Label(fish_row, text="Fish:").pack(side="left")
-        self.inspector_bout_fish_var = tk.StringVar()
-        self.inspector_bout_fish_combo = ttk.Combobox(
-            fish_row, textvariable=self.inspector_bout_fish_var,
-            state="readonly", width=5
-        )
-        self.inspector_bout_fish_combo.pack(side="left", padx=3)
-        self.inspector_bout_fish_combo.bind(
-            "<<ComboboxSelected>>",
-            lambda e: self._inspector_rebuild_needed()
-        )
-
-        window_row = tk.Frame(bout_frame)
-        window_row.pack(fill="x", padx=5, pady=2)
-        tk.Label(window_row, text="Window:").pack(side="left")
-        self.inspector_bout_window_var = tk.IntVar(value=10)
-        tk.Scale(
-            window_row, from_=2, to=60, orient=tk.HORIZONTAL,
-            variable=self.inspector_bout_window_var,
-            length=100, showvalue=True
-        ).pack(side="left", padx=3)
-        tk.Label(window_row, text="sec").pack(side="left")
-
-        turn_row = tk.Frame(bout_frame)
-        turn_row.pack(fill="x", padx=5, pady=2)
-        tk.Label(turn_row, text="Turn threshold:").pack(side="left")
-        self.inspector_straight_threshold_var = tk.IntVar(value=15)
-        tk.Spinbox(
-            turn_row, from_=1, to=90, width=4,
-            textvariable=self.inspector_straight_threshold_var,
-            command=self._inspector_rebuild_needed
-        ).pack(side="left", padx=3)
-        tk.Label(turn_row, text="° (below = straight)").pack(side="left")
-
         # --- Time Panel Mode (collapsible) ---
         _, time_frame = self._make_collapsible(scroll_frame, "Time Panel")
 
@@ -371,7 +319,6 @@ class InspectorTabMixin:
             ("NND", "nnd"),
             ("IID", "iid"),
             ("Hull Area", "hull"),
-            ("Bout Speed + Heading", "bout"),
         ]
         for text, val in modes:
             tk.Radiobutton(
@@ -502,13 +449,10 @@ class InspectorTabMixin:
         self._insp_ax_time = None
         self._insp_ax_time2 = None
         self._insp_time_marker = None
-        self._insp_bout_cursor_speed = None
-        self._insp_bout_cursor_heading = None
         self._insp_dynamic_artists = []
         self._insp_cached_file = None
         self._insp_cached_overlays = None
         self._insp_cached_time_mode = None
-        self._insp_cached_bout_fish = None
         self._insp_cached_iid_focus = None
         self._insp_video_bg_artist = None
         self._insp_cached_background = None
@@ -516,16 +460,11 @@ class InspectorTabMixin:
         self._insp_cached_height_bl = None
         self._insp_bg_cache = None
         self._insp_composite_artist = None
-        self._insp_ax_zoom = None
-        self._insp_zoom_artist = None
         # PIL/ImageTk video display (replaces matplotlib imshow for speed)
         self._insp_video_canvas = None
         self._insp_video_photo = None
         self._insp_video_canvas_item = None
         self._insp_title_item = None
-        self._insp_zoom_canvas = None
-        self._insp_zoom_photo = None
-        self._insp_zoom_canvas_item = None
         # Per-fish colours, recomputed only when the fish count changes.
         self._insp_fish_colors = None
         # Export range. None means "not marked", not "frame 0".
@@ -562,8 +501,6 @@ class InspectorTabMixin:
             show_hull=self.inspector_show_hull_var.get(),
             show_iid=self.inspector_show_iid_var.get(),
             iid_focus=_int(self.inspector_iid_focus_var),
-            show_bout_ring=self.inspector_show_bouts_var.get(),
-            bout_fish=_int(self.inspector_bout_fish_var),
             trail_length=_int(self.inspector_trail_var),
             trail_opacity=float(self.inspector_trail_opacity_var.get()),
             trail_width=float(self.inspector_trail_width_var.get()),
@@ -601,13 +538,11 @@ class InspectorTabMixin:
         # silently carrying it over would export the wrong stretch.
         self._inspector_clear_marks()
 
-        # Update fish dropdowns
+        # Update the focus-fish dropdown
         fish_opts = [str(i) for i in range(loaded.n_fish)]
         self.inspector_iid_focus_combo['values'] = fish_opts
-        self.inspector_bout_fish_combo['values'] = fish_opts
         if fish_opts:
             self.inspector_iid_focus_combo.current(0)
-            self.inspector_bout_fish_combo.current(0)
 
         # Try to auto-load the associated video
         self._inspector_try_auto_load_video(selected)
@@ -912,23 +847,6 @@ class InspectorTabMixin:
         """
         self._inspector_update_fast()
 
-    def _inspector_on_bout_toggle(self):
-        """Called when bout overlay checkbox is toggled."""
-        if self.inspector_show_bouts_var.get():
-            # Auto-switch time panel to bout mode
-            self.inspector_time_mode_var.set("bout")
-            # Check if bout data exists
-            selected = self.inspector_file_var.get()
-            bout_results = getattr(self, 'bout_results', {})
-            if selected and selected in bout_results:
-                self.bout_overlay_status.config(
-                    text=f"Bout data available", fg="green")
-            else:
-                self.bout_overlay_status.config(
-                    text="No bout data — run Bout Analysis first", fg="red")
-        self._insp_needs_rebuild = True
-        self._inspector_update_fast()
-
     def _inspector_rebuild_needed(self, event=None):
         """Force a figure rebuild on next update."""
         self._insp_needs_rebuild = True
@@ -1072,7 +990,6 @@ class InspectorTabMixin:
         frame_idx = min(frame_idx, loaded.n_frames - 1)
 
         time_mode = self.inspector_time_mode_var.get()
-        bout_fish = self.inspector_bout_fish_var.get()
 
         # Video toggle needs rebuild (changes background compositing source)
         video_on = self.inspector_video_var.get()
@@ -1086,8 +1003,6 @@ class InspectorTabMixin:
             or self._insp_cached_file != selected
             or self._insp_cached_time_mode != time_mode
             or self._insp_cached_overlays != video_on
-            or (time_mode == 'bout'
-                and self._insp_cached_bout_fish != bout_fish)
             or (time_mode == 'iid'
                 and self._insp_cached_iid_focus != iid_focus)
         )
@@ -1103,7 +1018,6 @@ class InspectorTabMixin:
             self._insp_cached_file = selected
             self._insp_cached_time_mode = time_mode
             self._insp_cached_overlays = video_on
-            self._insp_cached_bout_fish = bout_fish
             self._insp_cached_iid_focus = iid_focus
 
         self._inspector_update_dynamic(
@@ -1134,25 +1048,17 @@ class InspectorTabMixin:
         self._insp_video_photo = None
         self._insp_video_canvas_item = None
         self._insp_title_item = None
-        self._insp_zoom_canvas = None
-        self._insp_zoom_photo = None
-        self._insp_zoom_canvas_item = None
         self._insp_fig = None
         self._insp_canvas = None
         self._insp_ax_main = None
         self._insp_ax_time = None
         self._insp_ax_time2 = None
-        self._insp_ax_zoom = None
         self._insp_composite_artist = None
-        self._insp_zoom_artist = None
         self._insp_bg_cache = None
         self._insp_time_marker = None
-        self._insp_bout_cursor_speed = None
-        self._insp_bout_cursor_heading = None
         self._insp_dynamic_artists = []
 
         show_time = time_mode != "none"
-        show_bout = time_mode == "bout"
 
         vid_h = loaded.metadata.video_height
         vid_w = loaded.metadata.video_width
@@ -1160,51 +1066,23 @@ class InspectorTabMixin:
         self._insp_cached_width_bl = vid_w * pixels_to_bl
         self._insp_cached_height_bl = vid_h * pixels_to_bl
 
-        # --- Layout: in bout mode add a zoom column on the right ---
-        if show_bout:
-            # Pack zoom_col FIRST so pack's space allocation gives it room
-            # before main_col's expand=True consumes everything.
-            zoom_col = tk.Frame(self.inspector_plot_frame, bg="black",
-                                width=260)
-            zoom_col.pack(side="right", fill="y")
-            zoom_col.pack_propagate(False)
-
-            tk.Label(zoom_col, text="Fish Zoom", font=("Arial", 10, "bold"),
-                     bg="black", fg="white").pack(side="top")
-            self._insp_zoom_canvas = tk.Canvas(zoom_col, bg="black",
-                                               highlightthickness=0)
-            self._insp_zoom_canvas.pack(fill="both", expand=True)
-
-            main_col = tk.Frame(self.inspector_plot_frame, bg="black")
-            main_col.pack(side="left", fill="both", expand=True)
-
-            video_parent = main_col
-        else:
-            video_parent = self.inspector_plot_frame
-
         # Always its own container, below the transport bar.
         time_parent = self.inspector_time_frame
 
         # --- Video canvas (PIL/ImageTk — replaces matplotlib imshow) ---
-        self._insp_video_canvas = tk.Canvas(video_parent, bg="black",
+        self._insp_video_canvas = tk.Canvas(self.inspector_plot_frame,
+                                            bg="black",
                                             highlightthickness=0)
         self._insp_video_canvas.pack(fill="both", expand=True)
         self._insp_video_canvas.bind("<Configure>", self._on_inspector_resize)
 
         # --- Time panel: small matplotlib figure below the video ---
         if show_time:
-            time_fig_h = 3.2 if show_bout else 2.0
-            self._insp_fig = Figure(figsize=(10, time_fig_h), dpi=100)
+            self._insp_fig = Figure(figsize=(10, 2.0), dpi=100)
             self._insp_fig.patch.set_facecolor('#f5f5f5')
-            # bout mode needs extra top margin for the 2-line title
-            if show_bout:
-                self._insp_ax_time = self._insp_fig.add_axes(
-                    [0.08, 0.18, 0.82, 0.58]
-                )
-            else:
-                self._insp_ax_time = self._insp_fig.add_axes(
-                    [0.08, 0.22, 0.88, 0.68]
-                )
+            self._insp_ax_time = self._insp_fig.add_axes(
+                [0.08, 0.22, 0.88, 0.68]
+            )
             self._insp_ax_time2 = None
 
             self._insp_canvas = FigureCanvasTkAgg(
@@ -1259,8 +1137,6 @@ class InspectorTabMixin:
                     transform=self._insp_ax_time.transAxes,
                     ha='center', va='center', fontsize=10, color='gray'
                 )
-            elif time_mode == 'bout':
-                self._inspector_build_bout_panels(selected, loaded)
 
             # Draw static chart content and cache background for blitting
             self._insp_canvas.draw()
@@ -1288,188 +1164,6 @@ class InspectorTabMixin:
                 self._insp_cached_background = bg
             except Exception:
                 pass
-
-    def _inspector_build_bout_panels(self, selected, loaded):
-        """Build the bout speed trace + heading panels (full recording)."""
-        ax_speed = self._insp_ax_time
-        ax_heading = self._insp_ax_time2
-
-        if ax_speed is None:
-            return
-
-        # Check for bout results
-        bout_results = getattr(self, 'bout_results', {})
-        if selected not in bout_results:
-            ax_speed.text(
-                0.5, 0.5, "Run Bout Analysis first",
-                transform=ax_speed.transAxes, ha='center', va='center',
-                fontsize=10, color='gray'
-            )
-            return
-
-        try:
-            fish_id = int(self.inspector_bout_fish_var.get())
-        except (ValueError, TypeError):
-            return
-
-        # Find bout result for this fish
-        bout_result = None
-        for r in bout_results[selected]:
-            if r.fish_id == fish_id:
-                bout_result = r
-                break
-        if bout_result is None:
-            ax_speed.text(
-                0.5, 0.5, f"No bout data for Fish {fish_id}",
-                transform=ax_speed.transAxes, ha='center', va='center',
-                fontsize=10, color='gray'
-            )
-            return
-
-        fps = loaded.calibration.frame_rate
-        scale = loaded.calibration.scale_factor
-        n_frames = loaded.n_frames
-
-        # Compute speed trace for this fish
-        raw = loaded.trajectories[:, fish_id, :]
-        x_pos = raw[:, 0] * scale
-        y_pos = (loaded.metadata.video_height - raw[:, 1]) * scale
-        dx = np.diff(x_pos)
-        dy = np.diff(y_pos)
-        speed = np.sqrt(dx ** 2 + dy ** 2) * fps
-        speed[np.isnan(speed)] = 0.0
-        time_s = np.arange(len(speed)) / fps
-
-        # Use the threshold from the run that produced the displayed bouts,
-        # not the current (possibly edited) UI value.
-        run_params = getattr(self, '_bout_run_params', None)
-        threshold = run_params.speed_threshold if run_params is not None else 0.5
-        lookback = run_params.heading_lookback_frames if run_params is not None else 5
-
-        # Detect whether the user has changed any parameter since the last run.
-        is_stale = False
-        if run_params is not None:
-            try:
-                is_stale = (
-                    float(getattr(self, 'bout_threshold_var', None).get()) != run_params.speed_threshold
-                    or int(getattr(self, 'bout_merge_gap_var', None).get()) != run_params.merge_gap_frames
-                    or int(getattr(self, 'bout_min_frames_var', None).get()) != run_params.min_bout_frames
-                    or int(getattr(self, 'bout_lookback_var', None).get()) != run_params.heading_lookback_frames
-                )
-            except (ValueError, TypeError, AttributeError):
-                pass
-
-        unit = loaded.calibration.unit_name
-
-        # --- Combined speed + heading panel ---
-        # Top: speed trace with colored bout bands
-        # Bottom row: |heading| bars going UP, colored by direction
-        # This saves space and avoids the confusing up/down heading display
-
-        ax_speed.plot(time_s, speed, color='black', lw=0.5, alpha=0.6)
-        ax_speed.axhline(
-            threshold, color='orange', linestyle='--', lw=1, alpha=0.7,
-            label=f'Threshold ({threshold} {unit}/s)'
-        )
-
-        try:
-            straight_thresh = int(self.inspector_straight_threshold_var.get())
-        except (ValueError, AttributeError):
-            straight_thresh = 15
-
-        for bout in bout_result.bouts:
-            t0 = bout.start_frame / fps
-            t1 = bout.end_frame / fps
-            hc = bout.heading_change_deg
-            if abs(hc) > straight_thresh:
-                color = '#1976d2' if hc > 0 else '#d32f2f'
-            else:
-                color = '#bdbdbd'
-            ax_speed.axvspan(t0, t1, color=color, alpha=0.25, zorder=0)
-
-        # Add |heading| as colored bars below the speed trace (negative y space)
-        # Scale heading bars to sit below the x-axis line
-        if len(speed) > 0:
-            y_cap = max(np.percentile(speed, 99) * 1.2, threshold * 3)
-        else:
-            y_cap = threshold * 3
-
-        # Heading bars: plotted as negative values (below zero) for visual separation
-        max_abs_hc = 30.0
-        if bout_result.bouts:
-            max_abs_hc = max(
-                max(abs(b.heading_change_deg) for b in bout_result.bouts),
-                30.0
-            )
-        heading_scale = y_cap * 0.35 / max_abs_hc  # Scale heading to use ~35% of plot
-
-        for bout in bout_result.bouts:
-            t_mid = (bout.start_frame + bout.end_frame) / 2 / fps
-            hc = bout.heading_change_deg
-            abs_hc = abs(hc)
-            if abs_hc > straight_thresh:
-                c = '#1976d2' if hc > 0 else '#d32f2f'
-            else:
-                c = '#757575'
-            bar_h = abs_hc * heading_scale
-            ax_speed.bar(
-                t_mid, -bar_h, bottom=0,
-                width=max(0.03, bout.duration_s),
-                color=c, alpha=0.7, edgecolor='none', zorder=1
-            )
-
-        ax_speed.axhline(0, color='black', lw=0.5, zorder=2)
-        ax_speed.set_ylabel(f"Speed ({unit}/s)", fontsize=8)
-        ax_speed.set_xlabel("Time (s)", fontsize=8)
-
-        stale_note = "  \u26a0 params changed \u2014 re-run analysis" if is_stale else ""
-        param_note = (f"threshold={threshold} {unit}/s  |  "
-                      f"look-back={lookback} fr{stale_note}")
-        ax_speed.set_title(
-            f"Fish {fish_id} \u2014 {len(bout_result.bouts)} bouts   "
-            f"(\u25A0 blue=left  \u25A0 red=right  \u25A0 gray=straight)\n"
-            f"{param_note}",
-            fontsize=9,
-            color='firebrick' if is_stale else 'black'
-        )
-        ax_speed.legend(fontsize=7, loc='upper right')
-        ax_speed.set_ylim(-y_cap * 0.4, y_cap)
-
-        # Right y-axis: degree scale for the heading bars.
-        # The bars are drawn in ax_speed with negative y values (0 → -bar_h).
-        # We need an inverted axis where 0° aligns with the speed zero-line and
-        # max_abs_hc° aligns with the bottom of the tallest bar.
-        #
-        # Math: twinx shares physical space with ax_speed (ylim = -y_cap*0.4 → y_cap).
-        # The degree axis ylim that achieves zero-alignment:
-        #   bottom_deg =  y_cap * 0.4 / heading_scale   (big positive, below zero line)
-        #   top_deg    = -y_cap       / heading_scale   (big negative, above zero line)
-        # This makes the axis inverted so larger degrees appear lower on the plot.
-        ax_deg = ax_speed.twinx()
-        if heading_scale > 0:
-            ax_deg.set_ylim(
-                y_cap * 0.4 / heading_scale,    # physical bottom
-                -y_cap / heading_scale          # physical top
-            )
-            # Choose a clean tick step so we get 3-5 ticks between 0 and max_abs_hc
-            for _step in [5, 10, 15, 20, 30, 45, 60, 90, 180]:
-                if max_abs_hc / _step <= 5:
-                    break
-            tick_vals = list(range(0, int(np.ceil(max_abs_hc)) + _step, _step))
-            tick_vals = [t for t in tick_vals if t <= max_abs_hc + _step * 0.5]
-            ax_deg.set_yticks(tick_vals)
-            ax_deg.set_yticklabels([f'{t:.0f}\u00b0' for t in tick_vals])
-        else:
-            ax_deg.set_yticks([])
-        ax_deg.set_ylabel("|Turn| (\u00b0)", fontsize=8, color='gray')
-        ax_deg.tick_params(axis='y', colors='gray', labelsize=7)
-        ax_deg.spines['right'].set_color('gray')
-        ax_deg.spines['right'].set_alpha(0.5)
-
-        # Cursor line
-        self._insp_bout_cursor_speed = ax_speed.axvline(
-            x=0, color='green', lw=1.5, alpha=0.8
-        )
 
     # =========================================================================
     # DYNAMIC UPDATE (fast, every frame/step)
@@ -1522,12 +1216,6 @@ class InspectorTabMixin:
                 display = _cv2.resize(display, (vid_w, vid_h))
             else:
                 display = np.ones((vid_h, vid_w, 3), dtype=np.uint8) * 200
-
-        # Save raw frame for zoom (before overlays)
-        self._insp_zoom_raw_frame = display.copy()
-
-        # --- Get fish positions in pixel coordinates ---
-        raw_pos = loaded.trajectories[frame_idx]  # (n_fish, 2) pixels
 
         if (self._insp_fish_colors is None
                 or len(self._insp_fish_colors) != n_fish):
@@ -1590,18 +1278,6 @@ class InspectorTabMixin:
                 )
                 self._insp_video_canvas.coords(self._insp_title_item, cx, 14)
 
-        # --- Crop zoom for bout mode (always shown when zoom canvas exists) ---
-        if self._insp_zoom_canvas is not None:
-            try:
-                bout_fish = int(self.inspector_bout_fish_var.get())
-                if bout_fish < n_fish and not np.isnan(raw_pos[bout_fish, 0]):
-                    self._inspector_update_zoom(
-                        self._insp_zoom_raw_frame, raw_pos, bout_fish,
-                        vid_h, vid_w
-                    )
-            except (ValueError, TypeError):
-                pass
-
         # --- Update time panel cursor (matplotlib blitting — only the cursor moves) ---
         if self._insp_canvas is None:
             return
@@ -1618,66 +1294,3 @@ class InspectorTabMixin:
                     self._insp_canvas.draw_idle()
             else:
                 self._insp_canvas.draw_idle()
-
-        elif time_mode == 'bout':
-            center_s = time_s
-            window_s = self.inspector_bout_window_var.get()
-            total_s = loaded.n_frames / fps
-            t_start_w = max(0, center_s - window_s / 2)
-            t_end_w = t_start_w + window_s
-            if t_end_w > total_s:
-                t_end_w = total_s
-                t_start_w = max(0, t_end_w - window_s)
-            if self._insp_ax_time:
-                self._insp_ax_time.set_xlim(t_start_w, t_end_w)
-            if self._insp_bout_cursor_speed:
-                self._insp_bout_cursor_speed.set_xdata([center_s, center_s])
-            self._insp_canvas.draw_idle()
-
-    def _inspector_update_zoom(self, display, raw_pos, fish_id, vid_h, vid_w):
-        """Update the crop-zoom panel centered on the bout fish."""
-        if self._insp_zoom_canvas is None or not _PIL_AVAILABLE:
-            return
-
-        px = int(raw_pos[fish_id, 0])
-        py = int(raw_pos[fish_id, 1])
-        crop_r = 80  # Radius in pixels
-
-        y1 = max(0, py - crop_r)
-        y2 = min(vid_h, py + crop_r)
-        x1 = max(0, px - crop_r)
-        x2 = min(vid_w, px + crop_r)
-
-        crop = display[y1:y2, x1:x2].copy()
-        if crop.size == 0:
-            return
-
-        if _CV2_AVAILABLE and crop.shape[0] > 0 and crop.shape[1] > 0:
-            crop = _cv2.resize(crop, (250, 250),
-                               interpolation=_cv2.INTER_LINEAR)
-            cx, cy = 125, 125
-            _cv2.line(crop, (cx - 15, cy), (cx + 15, cy),
-                      (0, 255, 255), 1, _cv2.LINE_AA)
-            _cv2.line(crop, (cx, cy - 15), (cx, cy + 15),
-                      (0, 255, 255), 1, _cv2.LINE_AA)
-
-        pil_img = _PIL_Image.fromarray(crop)
-        photo = _PIL_ImageTk.PhotoImage(image=pil_img)
-        self._insp_zoom_photo = photo  # set early so old ref is released
-
-        zw = self._insp_zoom_canvas.winfo_width()
-        zh = self._insp_zoom_canvas.winfo_height()
-        zx = max(125, zw // 2)
-        zy = max(125, zh // 2)
-
-        if self._insp_zoom_canvas_item is None:
-            self._insp_zoom_canvas_item = self._insp_zoom_canvas.create_image(
-                zx, zy, anchor="center", image=photo
-            )
-        else:
-            self._insp_zoom_canvas.itemconfig(
-                self._insp_zoom_canvas_item, image=photo
-            )
-            self._insp_zoom_canvas.coords(
-                self._insp_zoom_canvas_item, zx, zy
-            )
