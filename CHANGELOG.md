@@ -69,6 +69,15 @@ from the validator is ticked as Reviewed and reloaded.
 speed by about 1% and path straightness by about 1%; the metrics it mattered
 for were withdrawn in 2.1.0.
 
+**Spatial Analysis folded into Results.** "Where they swim" on Results is the
+position heatmap: one map per session, square cells of one size and one
+colour scale for all sessions, with the tank outline. "Tank outline..." on
+Sessions & Units draws an outline on a video frame for sessions that have
+none from idtracker.ai, or a wrong one, and time near the wall follows it.
+The tab is gone, and with it the custom region of interest, the wall-time
+time series, the per-fish heatmap grid, the border-width, sampling and
+smoothing settings, and the separate thigmotaxis export button.
+
 **Individual Analysis removed.** Results replaces it, and gained its one view
 that had no counterpart: "Swim paths", every fish's path in each session with
 the tank outline. Its two CSV export buttons went with it; the Results export

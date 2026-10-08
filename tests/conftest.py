@@ -110,13 +110,10 @@ def app(_gui_app):
 
     for mapping in (_gui_app.loaded_files,
                     _gui_app.file_arena_definitions,
-                    _gui_app.file_roi_definitions, _gui_app.file_groups,
+                    _gui_app.file_groups,
                     _gui_app.video_readers):
         mapping.clear()
 
-    _gui_app.current_arena_file = None
-    _gui_app.arena_definition = None
-    _gui_app.arena_vertices = []
     _gui_app.processing_params = ProcessingParameters.default_for_fish()
     # The Sessions & Units tab: back to "nothing loaded, nothing chosen".
     _gui_app._applied_units = None

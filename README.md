@@ -81,16 +81,18 @@ with the videos: they are the tracking results.
    peak speed, path straightness and time near the wall. Small dots are fish,
    large markers are session means. Fish sharing a tank are not independent,
    so the session is the unit to compare, and a group needs several sessions
-   to be tested. **Speed distributions** shows the same data in full, and
-   **What do these measures mean?** explains each one.
-   - Time near the wall uses the arena outline drawn in idtracker.ai's setup
-     window, so nothing needs redrawing.
+   to be tested. **Speed distributions** shows the same data in full,
+   **Swim paths** and **Where they swim** show where each session's fish went
+   and where they spent their time, and **What do these measures mean?**
+   explains each measure.
+   - Time near the wall uses the tank outline drawn in idtracker.ai's setup
+     window, so nothing needs redrawing. If a session has none, or it is
+     wrong, **Tank outline...** on **Sessions & Units** draws one on a video
+     frame.
 3. **Shoaling** shows how close the fish keep to each other: nearest-neighbour
    and inter-individual distance, against what fish placed at random in the
    tank would give, and how both change through the recording.
-4. **Spatial Analysis** has the position heatmaps, and arena drawing for
-   sessions without an outline.
-5. **Video Inspector** plays the video with the tracking drawn on top, and
+4. **Video Inspector** plays the video with the tracking drawn on top, and
    exports frames and clips.
 
 Already have tracked sessions from before? Skip the Tracking tab and press
@@ -112,7 +114,7 @@ folder containing several and loads them all.
 |---|---|
 | Individual | Speed, distance, freezing, path straightness, turning bias |
 | Shoaling | Nearest neighbour distance (NND), inter-individual distance (IID), convex hull area |
-| Spatial | Thigmotaxis (time near the walls), position heatmaps |
+| Position | Time near the walls, swim paths, where the fish spend their time |
 
 All distances and areas are in the unit you chose; the `Unit` and
 `PixelsPerUnit` columns in each export say which and at what scale, so results
@@ -123,9 +125,9 @@ fish being still. Freezes are counted within stretches of continuous
 tracking and never across a gap; one cut short by lost tracking is reported as
 *censored* rather than counted, and rates are per unit of observed time.
 
-**Thigmotaxis** is the share of time spent near the walls, a measure of
-anxiety-like behaviour. You draw the arena boundary; an inner zone (15% inward
-by default) separates border from centre.
+**Time near the wall** (thigmotaxis) is the share of time spent in a zone
+along the walls, a measure of anxiety-like behaviour. The zone is 15% of the
+tank's shorter side wide, measured in from the tank outline.
 
 **Shoaling:**
 
@@ -245,7 +247,7 @@ fish_analyzer/
 ├── processing.py                # individual metrics
 ├── segments.py                  # tracking-gap boundaries, shared by episode metrics
 ├── shoaling.py                  # NND, IID, convex hull
-├── spatial.py                   # thigmotaxis and heatmaps
+├── spatial.py                   # tank outline and time near the wall
 ├── export.py                    # CSV exports
 ├── video_utils.py, overlay_render.py, media_export.py   # video and clip export
 └── gui/                         # one file per tab

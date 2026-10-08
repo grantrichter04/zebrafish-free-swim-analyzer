@@ -50,7 +50,6 @@ from .spatial import (
     ArenaDefinition,
     ThigmotaxisResults,
     ThigmotaxisCalculator,
-    HeatmapGenerator,
     SHAPELY_AVAILABLE,
 )
 

@@ -317,3 +317,80 @@ def test_a_chosen_group_survives_a_rename(
     app._rename_session()
 
     assert _rows(app)["wt_a"]["group"] == "wild type"
+
+
+# --- the tank outline -------------------------------------------------------------
+
+def test_one_outline_lands_on_the_same_pixels_in_every_session(
+        app, quiet, tmp_path, synthetic_npy, synthetic_npy_larger_fish, monkeypatch):
+    """Sessions with different body lengths are on different scales, so the
+    outline is placed per session from its pixels. Copying its scaled corners
+    instead resized the tank relative to the fish."""
+    from fish_analyzer.gui import outline_dialog
+    _make_session(tmp_path, synthetic_npy, "control1")
+    _make_session(tmp_path, synthetic_npy_larger_fish, "treated1")
+    app._add_path(tmp_path)
+    # One shared scale is the app's default; give each its own to test this.
+    for loaded in app.loaded_files.values():
+        loaded.calibration.pixels_per_unit = loaded.metadata.body_length
+    monkeypatch.setattr(data_tab, "load_frame_image",
+                        lambda loaded_file: np.zeros((1024, 1024), dtype=np.uint8))
+    opened = []
+    real_dialog = outline_dialog.TankOutlineDialog
+    monkeypatch.setattr(data_tab, "TankOutlineDialog",
+                        lambda *a, **k: opened.append(real_dialog(*a, **k)))
+
+    app._draw_tank_outline()
+    dialog = opened[0]
+    corners = [(100, 200), (900, 200), (900, 800), (100, 800)]
+    for x, y in corners:
+        dialog._on_click(_Click(dialog.ax, x, y))
+    dialog._confirm()
+
+    arenas = app.file_arena_definitions
+    assert set(arenas) == {"control1", "treated1"}, "no selection means every session"
+    for arena in arenas.values():
+        assert arena.vertices_pixels.tolist() == [list(map(float, c)) for c in corners]
+    assert not np.allclose(arenas["control1"].vertices_bl, arenas["treated1"].vertices_bl)
+
+
+def test_a_new_outline_updates_time_near_the_wall(
+        app, quiet, tmp_path, synthetic_npy, monkeypatch):
+    monkeypatch.setattr(app, "_report_batch_outcome", lambda *a, **k: None)
+    app._add_path(_make_session(tmp_path, synthetic_npy, "control1"))
+    app._run_analysis()
+    loaded = app.loaded_files["control1"]
+    assert loaded.thigmotaxis_results is None, "no outline, so no wall time yet"
+
+    app._set_tank_outline(["control1"], [[0, 0], [1024, 0], [1024, 1024], [0, 1024]])
+
+    assert loaded.thigmotaxis_results is not None
+    near_wall = [app.results_tree.item(i, "values")[-1]
+                 for i in app.results_tree.get_children()]
+    assert all(value != "" for value in near_wall), "the Results table follows"
+
+
+def test_outline_dialog_wants_three_corners(app, monkeypatch):
+    from fish_analyzer.gui import outline_dialog
+    asked = []
+    monkeypatch.setattr(outline_dialog.messagebox, "showinfo",
+                        lambda title, text, **k: asked.append(text))
+    used = []
+    dialog = outline_dialog.TankOutlineDialog(
+        app.root, np.zeros((50, 50), dtype=np.uint8), "s", used.append,
+        existing=[[1, 1], [40, 1], [40, 40]])
+    try:
+        dialog._on_click(_Click(dialog.ax, 0, 0))
+        dialog._on_click(_Click(dialog.ax, 30, 0))
+        dialog._confirm()
+        assert used == [] and "three corners" in asked[0]
+
+        dialog._start_again()
+        assert dialog.corners() is None
+        for x, y in ((0, 0), (30, 0), (30, 40)):
+            dialog._on_click(_Click(dialog.ax, x, y))
+        dialog._confirm()
+        assert used[0].tolist() == [[0, 0], [30, 0], [30, 40]]
+    finally:
+        if dialog.window.winfo_exists():
+            dialog.window.destroy()

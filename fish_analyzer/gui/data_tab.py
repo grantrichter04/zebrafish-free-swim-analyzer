@@ -27,6 +27,7 @@ from ..shoaling import ShoalingCalculator, ShoalingParameters
 from ..spatial import (SHAPELY_AVAILABLE, ThigmotaxisCalculator,
                        arena_in_units, idtrackerai_arena)
 from .measure_dialog import MeasureScaleDialog, load_frame_image
+from .outline_dialog import TankOutlineDialog
 
 
 class DataTabMixin:
@@ -85,7 +86,9 @@ class DataTabMixin:
                  "analysis\"; \"Add sessions...\" takes a session folder or a "
                  "folder of them. Names and groups label every plot and export. "
                  "\"Open in validator...\" is idtracker.ai's tool for checking "
-                 "that fish were not swapped; saving there ticks Reviewed."
+                 "that fish were not swapped; saving there ticks Reviewed. "
+                 "\"Tank outline...\" is only needed when the outline drawn "
+                 "in idtracker.ai is missing or wrong."
         ).pack(anchor="w", padx=10, pady=(6, 0))
 
         table = tk.Frame(frame)
@@ -115,6 +118,8 @@ class DataTabMixin:
                   command=self._set_group).pack(side="left", padx=5)
         tk.Button(buttons, text="Open in validator...",
                   command=self._review_selected_session).pack(side="left", padx=5)
+        tk.Button(buttons, text="Tank outline...",
+                  command=self._draw_tank_outline).pack(side="left", padx=5)
         tk.Button(buttons, text="Details",
                   command=self._show_file_details).pack(side="left", padx=5)
         tk.Button(buttons, text="Remove",
@@ -252,8 +257,6 @@ class DataTabMixin:
                 cleared.append(nickname)
 
         if cleared:
-            # Clear the [#]=Analyzed markers in the spatial file list.
-            self._update_spatial_files_list()
             self._refresh_result_tabs()
 
         return cleared
@@ -276,15 +279,7 @@ class DataTabMixin:
                 print(f"Note: could not close video for '{nickname}': {e}")
 
         self.file_arena_definitions.pop(nickname, None)
-        self.file_roi_definitions.pop(nickname, None)
         self.file_groups.pop(nickname, None)
-
-        # The spatial tab holds the arena currently being edited by value, not
-        # by lookup, so it has to be dropped too.
-        if self.current_arena_file == nickname:
-            self.current_arena_file = None
-            self.arena_definition = None
-            self.arena_vertices = []
 
     @staticmethod
     def _invalidation_notice(cleared: list) -> str:
@@ -496,8 +491,7 @@ class DataTabMixin:
             for name, loaded in self.loaded_files.items()}
         self.loaded_files[new].nickname = new
 
-        for keyed in (self.file_arena_definitions,
-                      self.file_roi_definitions, self.video_readers):
+        for keyed in (self.file_arena_definitions, self.video_readers):
             if old in keyed:
                 keyed[new] = keyed.pop(old)
         # A group that was chosen stays. One that was only ever derived from
@@ -506,8 +500,6 @@ class DataTabMixin:
         if old in self.file_groups:
             self.file_groups[new] = self.file_groups.pop(old)
 
-        if self.current_arena_file == old:
-            self.current_arena_file = new
         if self.inspector_file_var.get() == old:
             self.inspector_file_var.set(new)
 
@@ -541,7 +533,6 @@ class DataTabMixin:
     def _refresh_session_lists(self):
         """Redraw every other tab's list of sessions."""
         self._update_inspector_file_dropdown()
-        self._update_spatial_files_list()
         self._refresh_result_tabs()
 
     @staticmethod
@@ -774,6 +765,40 @@ class DataTabMixin:
 
         MeasureScaleDialog(self.root, image, nickname, use)
 
+    def _draw_tank_outline(self):
+        """Draw the tank outline for the selected sessions, or for all of them
+        when none is selected, on a frame of the first."""
+        names = self._selected_sessions() or list(self.loaded_files)
+        if not names:
+            messagebox.showinfo(
+                "Tank outline", "Load a session first, so there is a frame to draw on.")
+            return
+        first = self.loaded_files[names[0]]
+        image = load_frame_image(first)
+        if image is None:
+            messagebox.showinfo(
+                "No frame to draw on",
+                f"No video or background image was found for '{names[0]}'.")
+            return
+        current = (self.file_arena_definitions.get(names[0])
+                   or idtrackerai_arena(first))
+        applies_to = names[0] if len(names) == 1 else f"{len(names)} sessions"
+        TankOutlineDialog(
+            self.root, image, applies_to,
+            lambda corners: self._set_tank_outline(names, corners),
+            existing=None if current is None else current.vertices_pixels)
+
+    def _set_tank_outline(self, names: List[str], corners_pixels) -> None:
+        """Use one outline for `names`, and redo what is measured against it."""
+        for name in names:
+            loaded_file = self.loaded_files[name]
+            self.file_arena_definitions[name] = arena_in_units(
+                corners_pixels, loaded_file)
+            if loaded_file.processed_data:
+                self._analyse_wall_time(name)
+        self._refresh_result_tabs()
+        self.set_status(f"Tank outline set for {len(names)} session(s).")
+
     # =========================================================================
     # ANALYSIS METHODS
     # =========================================================================
@@ -881,8 +906,8 @@ class DataTabMixin:
         """Time near the wall for one session. Returns a problem to report,
         or None.
 
-        The arena is the one drawn on the Spatial Analysis tab if there is
-        one, and otherwise the outline drawn in idtracker.ai's setup window,
+        The arena is the one drawn with "Tank outline..." if there is one,
+        and otherwise the outline drawn in idtracker.ai's setup window,
         so a session tracked through this app needs no redrawing. With neither
         the measure is simply left empty.
         """

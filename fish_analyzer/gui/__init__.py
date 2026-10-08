@@ -9,7 +9,6 @@ This package splits the GUI into logical components:
 - data_tab.py: File loading and calibration
 - results_tab.py: The headline metrics, speed distributions and swim paths
 - shoaling_tab.py: Group behavior analysis
-- spatial_tab.py: Thigmotaxis and heatmap analysis
 - inspector_tab.py: Unified video inspector with overlay controls
 - utils.py: Shared helper functions
 
@@ -21,14 +20,13 @@ from .tracking_tab import TrackingTabMixin
 from .data_tab import DataTabMixin
 from .results_tab import ResultsTabMixin
 from .shoaling_tab import ShoalingTabMixin
-from .spatial_tab import SpatialTabMixin
 from .inspector_tab import InspectorTabMixin
 from .inspector_export import InspectorExportMixin
 
 
 class EnhancedFishAnalyzer(GUIBase, TrackingTabMixin, DataTabMixin,
                            ResultsTabMixin,
-                           ShoalingTabMixin, SpatialTabMixin,
+                           ShoalingTabMixin,
                            InspectorTabMixin, InspectorExportMixin):
     """
     Main application class - orchestrates the entire GUI.
@@ -39,7 +37,6 @@ class EnhancedFishAnalyzer(GUIBase, TrackingTabMixin, DataTabMixin,
     - DataTabMixin: Sessions, units, running the analysis
     - ResultsTabMixin: The headline metrics as SuperPlots
     - ShoalingTabMixin: Group behavior analysis
-    - SpatialTabMixin: Thigmotaxis, heatmaps
     - InspectorTabMixin: Unified video inspector with overlays
     - InspectorExportMixin: The inspector's frame and clip export controls
 

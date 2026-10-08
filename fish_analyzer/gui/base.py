@@ -6,7 +6,7 @@ Base class containing initialization, shared state, and core window setup.
 This provides the foundation that all tab mixins build upon.
 """
 
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Any
 from pathlib import Path
 import sys
 import io
@@ -89,7 +89,7 @@ class GUIBase:
     - Loaded files dictionary
     - Default parameters
     - Animation and video reader state
-    - Arena definition state
+    - Tank outlines
     - Status bar for user feedback
 
     Tab-specific methods are provided by mixin classes.
@@ -111,18 +111,8 @@ class GUIBase:
         # Video reader state
         self.video_readers: Dict[str, Any] = {}  # Per-file video readers
 
-        # Arena drawing state
-        self.arena_vertices = []
-        self.arena_definition = None
-        self.arena_fig = None
-        self.arena_ax = None
-        self.arena_canvas = None
-        self._arena_width_bl = None
-        self._arena_height_bl = None
-
-        # Per-file arena storage
+        # Tank outline per session: drawn here, or read from idtracker.ai
         self.file_arena_definitions: Dict[str, Any] = {}
-        self.current_arena_file: Optional[str] = None
 
         # Group assignments: file nickname → group label (for collapsed distributions)
         self.file_groups: Dict[str, str] = {}
@@ -180,7 +170,6 @@ class GUIBase:
         self._create_data_tab()
         self._create_results_tab()
         self._create_shoaling_tab()
-        self._create_spatial_tab()
         self._create_inspector_tab()
 
     def _setup_log_redirect(self):

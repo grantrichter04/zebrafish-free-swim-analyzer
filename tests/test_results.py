@@ -271,6 +271,75 @@ def test_results_tab_switches_to_swim_paths(app, tmp_path, synthetic_npy, monkey
     app._draw_results_plot()
 
 
+# --- where they swim ---------------------------------------------------------------
+
+def test_position_density_is_the_share_of_time_in_each_square_cell(two_groups):
+    loaded = two_groups["control_1"]
+    cell = results.density_cell(two_groups, ["control_1"])
+    density, x_edges, y_edges = results.position_density(loaded, cell)
+
+    assert density.sum() == pytest.approx(100.0), "every tracked position is counted once"
+    assert np.allclose(np.diff(x_edges), cell) and np.allclose(np.diff(y_edges), cell)
+    assert density.shape == (len(y_edges) - 1, len(x_edges) - 1)
+    # The brightest cell is where the fish actually were, the way the video shows it.
+    row, column = np.unravel_index(density.argmax(), density.shape)
+    scale = loaded.calibration.scale_factor
+    xs = loaded.trajectories[..., 0].ravel() * scale
+    ys = (loaded.metadata.video_height - loaded.trajectories[..., 1].ravel()) * scale
+    inside = ((xs >= x_edges[column]) & (xs < x_edges[column + 1])
+              & (ys >= y_edges[row]) & (ys < y_edges[row + 1]))
+    assert inside.sum() / np.isfinite(xs).sum() * 100 == pytest.approx(density.max())
+
+
+def test_untracked_positions_are_left_out_of_the_density(two_groups):
+    loaded = two_groups["control_1"]
+    loaded.trajectories = loaded.trajectories.copy()
+    loaded.trajectories[:50, 0, :] = np.nan
+    density, _, _ = results.position_density(
+        loaded, results.density_cell(two_groups, ["control_1"]))
+    assert density.sum() == pytest.approx(100.0)
+
+
+def test_sessions_share_one_cell_size_and_one_colour_scale(two_groups):
+    names = list(two_groups)
+    cell = results.density_cell(two_groups, names)
+    widest = max(loaded.metadata.video_width * loaded.calibration.scale_factor
+                 for loaded in two_groups.values())
+    assert cell == pytest.approx(widest / 48)
+
+    quiet, busy = np.array([[0.0, 1.0]]), np.array([[0.0, 3.0]])
+    assert results.shared_density_ceiling([quiet, busy]) == pytest.approx(2.98)
+    assert results.shared_density_ceiling([np.zeros((2, 2))]) == 1.0
+
+
+def test_results_tab_switches_to_where_they_swim(
+        app, tmp_path, synthetic_npy, monkeypatch):
+    from fish_analyzer.gui import data_tab
+    for name in ("showinfo", "showerror"):
+        monkeypatch.setattr(data_tab.messagebox, name, lambda *a, **k: None)
+    monkeypatch.setattr(app, "_report_batch_outcome", lambda *a, **k: None)
+    target = tmp_path / "session_control_1" / "trajectories"
+    target.mkdir(parents=True)
+    shutil.copy(synthetic_npy, target / "trajectories.npy")
+    app._add_path(tmp_path / "session_control_1")
+    app._run_analysis()
+    app._set_tank_outline(["control_1"], [[0, 0], [1024, 0], [1024, 1024], [0, 1024]])
+    drawn = []
+    real = results.plot_position_density
+    monkeypatch.setattr(
+        results, "plot_position_density",
+        lambda ax, name, *rest: (drawn.append((name, rest[-1] is not None)),
+                                 real(ax, name, *rest))[1])
+
+    app.results_view.set("density")
+    app._draw_results_plot()
+
+    assert drawn == [("control_1", True)], "one map per session, with its outline"
+    assert app.results_plot_frame.winfo_children(), "a figure was embedded"
+    app.results_view.set("comparison")
+    app._draw_results_plot()
+
+
 # --- time near the wall -----------------------------------------------------------
 
 def _session_with_arena(tmp_path, source_npy, name, roi_list):
@@ -367,7 +436,7 @@ def test_wall_panel_says_so_when_there_is_no_arena(two_groups):
 
     results.superplot(ax, table, results.METRICS[-1], {})
 
-    assert "No arena outline" in ax.texts[0].get_text()
+    assert "No tank outline" in ax.texts[0].get_text()
 
 
 def test_measures_are_explained_in_the_app(app):

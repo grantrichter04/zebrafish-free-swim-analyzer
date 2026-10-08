@@ -91,74 +91,16 @@ def test_purge_file_state_clears_every_side_dictionary(app):
 
     reader = FakeReader()
     app.file_arena_definitions[nick] = "arena"
-    app.file_roi_definitions[nick] = "roi"
     app.file_groups[nick] = "group"
     app.video_readers[nick] = reader
-    app.current_arena_file = nick
 
     app._purge_file_state(nick)
 
-    for mapping in (app.file_arena_definitions, app.file_roi_definitions,
+    for mapping in (app.file_arena_definitions,
                     app.file_groups, app.video_readers):
         assert nick not in mapping
 
     assert reader.closed, "the cv2 capture must be released, not just dropped"
-    assert app.current_arena_file is None
-
-
-# ---------------------------------------------------------------------------
-# C4 — an arena copied between files landed in the wrong place
-# ---------------------------------------------------------------------------
-
-def _arena_for(loaded, vertices_bl):
-    """Build an ArenaDefinition the way _complete_arena does."""
-    from fish_analyzer.spatial import ArenaDefinition
-    verts_bl = np.asarray(vertices_bl, dtype=float)
-    verts_px = verts_bl * loaded.metadata.body_length
-    verts_px[:, 1] = loaded.metadata.video_height - verts_px[:, 1]
-    return ArenaDefinition(vertices_pixels=verts_px, vertices_bl=verts_bl)
-
-
-def test_arena_rescale_preserves_pixel_geometry(app, synthetic_npy,
-                                                synthetic_npy_larger_fish):
-    """Rescaling must keep the polygon on the same pixels of the frame.
-
-    vertices_bl was divided by the *source* file's body length, while fish
-    positions are divided by the *target's*, so a plain copy resized the arena
-    relative to the fish.
-    """
-    from fish_analyzer import TrajectoryFileLoader
-
-    src = TrajectoryFileLoader.load_file(synthetic_npy, "src")
-    tgt = TrajectoryFileLoader.load_file(synthetic_npy_larger_fish, "tgt")
-    assert src.metadata.body_length != tgt.metadata.body_length
-
-    arena = _arena_for(src, [[1, 1], [9, 1], [9, 7], [1, 7]])
-    rescaled = app._rescale_arena_for(arena, tgt)
-
-    # Invert the target's transform: we must land back on the same pixels.
-    back = rescaled.vertices_bl * tgt.metadata.body_length
-    back[:, 1] = tgt.metadata.video_height - back[:, 1]
-    assert np.allclose(back, arena.vertices_pixels, atol=1e-9)
-
-
-def test_arena_rescale_actually_changes_bl_vertices(app, synthetic_npy,
-                                                    synthetic_npy_larger_fish):
-    """Guards the point of the fix: a plain copy is not equivalent.
-
-    If this ever passes trivially, _rescale_arena_for has regressed to a copy.
-    """
-    from fish_analyzer import TrajectoryFileLoader
-
-    src = TrajectoryFileLoader.load_file(synthetic_npy, "src")
-    tgt = TrajectoryFileLoader.load_file(synthetic_npy_larger_fish, "tgt")
-
-    arena = _arena_for(src, [[1, 1], [9, 1], [9, 7], [1, 7]])
-    rescaled = app._rescale_arena_for(arena, tgt)
-
-    assert not np.allclose(rescaled.vertices_bl, arena.vertices_bl), (
-        "different body lengths must produce different body-length vertices"
-    )
 
 
 # ---------------------------------------------------------------------------

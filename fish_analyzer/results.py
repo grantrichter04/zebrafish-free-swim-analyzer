@@ -194,7 +194,7 @@ def superplot(ax, table: pd.DataFrame, metric: Metric,
         ax, table, metric.column, metric.title,
         metric.axis_label(shared_unit(table)), session_colors,
         # Only the wall measure can be missing wholesale: no arena was found.
-        empty_message="No arena outline.\nDraw one on the\nSpatial Analysis tab.")
+        empty_message="No tank outline.\nDraw one with\n\"Tank outline...\" on\nSessions & Units.")
     if not drawn:
         return
     if metric.kind == "ratio":
@@ -354,3 +354,64 @@ def plot_swim_paths(ax, name: str, loaded, fish_colors, arena=None) -> None:
     ax.tick_params(labelsize=8)
     for side in ("top", "right"):
         ax.spines[side].set_visible(False)
+
+
+# =============================================================================
+# WHERE THEY SWIM
+# =============================================================================
+#
+# Swim paths show the route; this shows the time. A fish that hangs in one
+# corner draws a small scribble there and a bright patch here.
+
+def density_cell(loaded_files: Dict, sessions: List[str], across: int = 48) -> float:
+    """One cell size for every session, so a cell means the same everywhere:
+    the widest frame divided into `across` squares."""
+    return max(
+        max(loaded.metadata.video_width, loaded.metadata.video_height)
+        * loaded.calibration.scale_factor
+        for loaded in (loaded_files[name] for name in sessions)) / across
+
+
+def position_density(loaded, cell: float) -> tuple:
+    """The share of the session's tracked positions, all fish together, that
+    fell in each square cell: (percentages, x_edges, y_edges), drawn the way
+    the video shows it."""
+    scale = loaded.calibration.scale_factor
+    width = loaded.metadata.video_width * scale
+    height = loaded.metadata.video_height * scale
+    x_edges = np.arange(0.0, width + cell, cell)
+    y_edges = np.arange(0.0, height + cell, cell)
+    positions = np.asarray(loaded.trajectories, dtype=float).reshape(-1, 2)
+    positions = positions[~np.isnan(positions).any(axis=1)]
+    counts, _, _ = np.histogram2d(
+        positions[:, 0] * scale,
+        (loaded.metadata.video_height - positions[:, 1]) * scale,
+        bins=[x_edges, y_edges])
+    return counts.T / max(1, len(positions)) * 100, x_edges, y_edges
+
+
+def shared_density_ceiling(densities: List[np.ndarray]) -> float:
+    """The top of one colour scale for every session: the 99th percentile of
+    the occupied cells, so one crowded cell does not darken everything else."""
+    occupied = np.concatenate([d[d > 0] for d in densities])
+    return float(np.percentile(occupied, 99)) if len(occupied) else 1.0
+
+
+def plot_position_density(ax, name: str, loaded, density: np.ndarray,
+                          x_edges: np.ndarray, y_edges: np.ndarray,
+                          ceiling: float, arena=None):
+    """One session's density map. Returns the image, for a shared colour bar."""
+    scale = loaded.calibration.scale_factor
+    image = ax.imshow(
+        density, origin="lower", cmap="magma", vmin=0, vmax=ceiling,
+        extent=(x_edges[0], x_edges[-1], y_edges[0], y_edges[-1]))
+    if arena is not None:
+        outline = np.vstack([arena.vertices_bl, arena.vertices_bl[:1]])
+        ax.plot(outline[:, 0], outline[:, 1], color="white", linewidth=1.2)
+    ax.set_xlim(0, loaded.metadata.video_width * scale)
+    ax.set_ylim(0, loaded.metadata.video_height * scale)
+    ax.set_aspect("equal")
+    ax.set_title(name, fontsize=11, fontweight="bold")
+    ax.set_xlabel(loaded.calibration.unit_name)
+    ax.tick_params(labelsize=8)
+    return image

@@ -58,7 +58,8 @@ class ResultsTabMixin:
         self.results_view = tk.StringVar(value="comparison")
         for value, text in (("comparison", "Group comparison"),
                             ("distributions", "Speed distributions"),
-                            ("paths", "Swim paths")):
+                            ("paths", "Swim paths"),
+                            ("density", "Where they swim")):
             tk.Radiobutton(view_row, text=text, value=value,
                            variable=self.results_view,
                            command=self._draw_results_plot).pack(side="left", padx=8)
@@ -156,6 +157,24 @@ class ResultsTabMixin:
             figure.legend(handles, labels, loc="center right", frameon=False,
                           fontsize=9, title="Fish")
             figure.tight_layout(rect=(0, 0, 0.93, 1))
+        elif self.results_view.get() == "density":
+            figure.set_layout_engine("constrained")
+            cell = results.density_cell(self.loaded_files, sessions)
+            maps = [results.position_density(self.loaded_files[name], cell)
+                    for name in sessions]
+            ceiling = results.shared_density_ceiling([m[0] for m in maps])
+            rows, columns = results.path_grid(len(sessions))
+            axes = []
+            for index, (name, (density, x_edges, y_edges)) in enumerate(
+                    zip(sessions, maps)):
+                axes.append(figure.add_subplot(rows, columns, index + 1))
+                image = results.plot_position_density(
+                    axes[-1], name, self.loaded_files[name], density, x_edges,
+                    y_edges, ceiling, self.file_arena_definitions.get(name))
+            unit = self.loaded_files[sessions[0]].calibration.unit_name
+            figure.colorbar(
+                image, ax=axes, shrink=0.85, extend="max",
+                label=f"% of time in each {cell:.2g} {unit} square")
         else:
             axes = figure.subplots(1, len(results.METRICS))
             for ax, metric in zip(axes, results.METRICS):
