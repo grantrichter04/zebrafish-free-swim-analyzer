@@ -332,18 +332,6 @@ def test_tracked_sessions_load_into_the_analysis_tabs(
 
 # --- reviewing in the validator ---------------------------------------------------
 
-def test_review_is_offered_only_for_a_tracked_video(tab, experiment):
-    tab._tracking_set_folder(experiment)
-
-    tab.tracking_videos_tree.selection_set("0")       # control.avi, tracked
-    tab._tracking_update_buttons()
-    assert tab.tracking_review_button["state"] == "normal"
-
-    tab.tracking_videos_tree.selection_set("1")       # exp.avi, not tracked
-    tab._tracking_update_buttons()
-    assert tab.tracking_review_button["state"] == "disabled"
-
-
 def test_corrections_saved_in_the_validator_reload_a_loaded_session(
         tab, experiment, synthetic_npy, synthetic_npy_larger_fish, dialogs, monkeypatch):
     import json
@@ -351,6 +339,7 @@ def test_corrections_saved_in_the_validator_reload_a_loaded_session(
     session = experiment / "session_control"
     trajectories = session / "trajectories" / "trajectories.npy"
     shutil.copy(synthetic_npy, trajectories)
+    (session / "session.json").write_text("{}")
     told = []
     monkeypatch.setattr("tkinter.messagebox.showinfo",
                         lambda title, text: told.append(title))
@@ -367,15 +356,17 @@ def test_corrections_saved_in_the_validator_reload_a_loaded_session(
         return 0
 
     monkeypatch.setattr(tracking, "run_process", validator)
-    tab.tracking_videos_tree.selection_set("0")
+    tab.sessions_tree.selection_set("control")
+    assert tab.sessions_tree.set("control", "reviewed") == ""
 
-    tab._tracking_review()
+    tab._review_selected_session()
     _wait_until_idle(tab)
 
     assert tab.loaded_files["control"].metadata.body_length == 52.0, "reloaded"
     assert tab.loaded_files["control"].processed_data is None
     assert "Session reloaded" in told
     assert dict(_rows(tab))["control.avi"] == "tracked, reviewed 2026-10-08"
+    assert tab.sessions_tree.set("control", "reviewed") == "\u2713 2026-10-08"
     assert "corrections saved" in tab.tracking_hint_var.get()
 
 
@@ -384,15 +375,52 @@ def test_a_review_that_changes_nothing_leaves_loaded_sessions_alone(
     import shutil
     shutil.copy(synthetic_npy, experiment / "session_control" / "trajectories"
                 / "trajectories.npy")
+    (experiment / "session_control" / "session.json").write_text("{}")
     monkeypatch.setattr("tkinter.messagebox.showinfo", lambda *a, **k: None)
     tab._tracking_set_folder(experiment)
     tab._tracking_load_sessions()
-    tab.loaded_files["control"].processed_data = ["results"]
+    tab.loaded_files["control"].processed_data = []
     monkeypatch.setattr(tracking, "run_process", lambda *a, **k: 0)
-    tab.tracking_videos_tree.selection_set("0")
+    tab.sessions_tree.selection_set("control")
 
-    tab._tracking_review()
+    tab._review_selected_session()
     _wait_until_idle(tab)
 
-    assert tab.loaded_files["control"].processed_data == ["results"]
+    assert tab.loaded_files["control"].processed_data == []
     assert "nothing was changed" in tab.tracking_hint_var.get()
+
+
+def test_a_loaded_session_can_be_reviewed_from_the_sessions_table(
+        tab, experiment, synthetic_npy, dialogs, monkeypatch):
+    """The sessions table is where tracking quality is shown, so the review
+    is reachable from there too - including for a renamed session."""
+    import shutil
+    session = experiment / "session_control"
+    shutil.copy(synthetic_npy, session / "trajectories" / "trajectories.npy")
+    (session / "session.json").write_text("{}")
+    monkeypatch.setattr("tkinter.messagebox.showinfo", lambda *a, **k: None)
+    tab._tracking_set_folder(experiment)
+    tab._tracking_load_sessions()
+    tab._rename("control", "ctrl")
+    opened = []
+    monkeypatch.setattr(tracking, "run_process",
+                        lambda command, *a, **k: opened.append(command[-1]) or 0)
+    tab.sessions_tree.selection_set("ctrl")
+
+    tab._review_selected_session()
+    _wait_until_idle(tab)
+
+    assert opened == [str(session)]
+
+
+def test_review_explains_itself_when_the_folder_is_not_a_full_session(
+        tab, experiment, synthetic_npy, monkeypatch):
+    told = []
+    monkeypatch.setattr("tkinter.messagebox.showinfo",
+                        lambda title, text: told.append(text))
+    monkeypatch.setattr(tracking, "run_process",
+                        lambda *a, **k: pytest.fail("the validator was started"))
+
+    tab._review_session(experiment / "session_control", "control")
+
+    assert "not a complete idtracker.ai session" in told[0]

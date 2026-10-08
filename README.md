@@ -71,9 +71,19 @@ with the videos: they are the tracking results.
 
    One scale is used for every session, so results can be compared between
    them, and it is written into every export.
-2. **Individual Analysis**, **Bout Analysis**, **Shoaling Analysis** and
+   - **Rename...** and **Set group...** give sessions short names and put them
+     in experimental groups; these label every plot and export.
+   - **Open in validator...** opens idtracker.ai's own tool on the selected
+     session, to check that fish were not swapped and correct any that were.
+     Save there (Ctrl+S) and the session is ticked as **Reviewed** and
+     reloaded with the corrections.
+2. **Results** shows the headline metrics: total distance, typical speed,
+   peak speed and path straightness. Small dots are fish, large markers are
+   session means. Fish sharing a tank are not independent, so the session is
+   the unit to compare, and a group needs several sessions to be tested.
+3. **Individual Analysis**, **Bout Analysis**, **Shoaling Analysis** and
    **Spatial Analysis** each show their results and have a CSV export button.
-3. **Video Inspector** plays the video with the tracking drawn on top, and
+4. **Video Inspector** plays the video with the tracking drawn on top, and
    exports frames and clips.
 
 Already have tracked sessions from before? Skip the Tracking tab and press

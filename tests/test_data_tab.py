@@ -45,7 +45,7 @@ def test_one_session_folder_loads_and_fills_the_table(
     assert row["body"] == "40.0"
     assert row["fps"] == "30.00 fps"
     assert row["accuracy"] == "98.0%"
-    assert row["scale"] == "40.0 px/BL"
+    assert row["reviewed"] == "", "never opened in the validator"
     assert quiet["info"] == [], "one session needs no confirmation dialog"
 
 
@@ -136,7 +136,6 @@ def test_centimetres_apply_to_every_session_and_discard_old_results(
     assert app.loaded_files["control"].processed_data is None
     assert "discarded" in quiet["info"][0][1]
     assert app.rest_unit_label["text"] == "cm/s"
-    assert _rows(app)["treated"]["scale"] == "34.0 px/cm"
 
 
 def test_freeze_threshold_keeps_its_physical_speed_when_units_change(

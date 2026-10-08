@@ -44,6 +44,15 @@ through idtracker.ai:
 - The freeze threshold is converted when the unit changes, so it keeps the
   same physical speed.
 
+**Results tab.** Total distance, typical (median) speed, peak (99th
+percentile) speed and path straightness as SuperPlots: fish as small dots,
+session means as large markers, and a group line at the mean of its sessions,
+because the tank is the experimental unit. One table, one export.
+
+**Names, groups and review on the sessions table.** Rename a session, put
+several in a group, and open idtracker.ai's validator on one; a session saved
+from the validator is ticked as Reviewed and reloaded.
+
 **Position smoothing removed.** The Savitzky-Golay option changed distance and
 speed by about 1% and path straightness by about 1%; the metrics it mattered
 for were withdrawn in 2.1.0. Plot smoothing on the Individual and Shoaling

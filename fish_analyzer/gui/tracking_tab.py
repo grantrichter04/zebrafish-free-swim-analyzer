@@ -99,8 +99,6 @@ class TrackingTabMixin:
         self.tracking_videos_tree.column("video", width=600, anchor="w")
         self.tracking_videos_tree.column("status", width=140, anchor="w")
         self.tracking_videos_tree.pack(fill="x", padx=10, pady=(0, 8))
-        self.tracking_videos_tree.bind(
-            "<<TreeviewSelect>>", lambda e: self._tracking_update_buttons())
 
     def _create_tracking_setup_section(self, parent):
         frame = tk.LabelFrame(parent, text="2. Setup", font=("Arial", 12, "bold"))
@@ -158,10 +156,6 @@ class TrackingTabMixin:
             command=self._tracking_load_sessions,
             bg="lightblue", font=("Arial", 10, "bold"))
         self.tracking_load_button.pack(side="right", padx=5)
-        self.tracking_review_button = tk.Button(
-            controls, text="Review tracking of selected video...",
-            command=self._tracking_review)
-        self.tracking_review_button.pack(side="right", padx=5)
 
         self.tracking_progress_var = tk.StringVar()
         tk.Label(frame, textvariable=self.tracking_progress_var, anchor="w",
@@ -281,10 +275,6 @@ class TrackingTabMixin:
             state=state(self._tracking_batch_running and not self._tracking_stop))
         self.tracking_load_button.config(
             state=state(idle and self._tracking_tracked()))
-        selected = self._tracking_selected_video()
-        self.tracking_review_button.config(state=state(
-            tracking.idtrackerai_available() and idle and selected is not None
-            and tracking.tracking_status(selected) == tracking.TRACKED))
 
     # =========================================================================
     # MAKING AND CHECKING A SETUP IN IDTRACKER.AI
@@ -532,53 +522,70 @@ class TrackingTabMixin:
         self._report_batch_outcome("Tracking", len(todo), succeeded, failed, [])
 
     # =========================================================================
-    # REVIEWING A TRACKED VIDEO IN IDTRACKER.AI'S VALIDATOR
+    # REVIEWING A SESSION IN IDTRACKER.AI'S VALIDATOR
     # =========================================================================
 
-    def _tracking_review(self):
-        """Open idtracker.ai's validator on the selected tracked video.
+    def _review_session(self, session_folder: Path, name: str):
+        """Open idtracker.ai's validator on a session.
 
-        Optional. It is where identity swaps are found and corrected; saving
-        there rewrites the session's trajectories, so a session already loaded
-        for analysis is reloaded afterwards.
+        Optional, and started from the Sessions & Units tab, where each
+        session's tracking quality is on show. It is where identity swaps are
+        found and corrected; saving there rewrites the session's trajectories,
+        so the session is reloaded afterwards. It lives here because it uses
+        this tab's machinery for running idtracker.ai in the background.
         """
-        video = self._tracking_selected_video()
-        if video is None or tracking.tracking_status(video) != tracking.TRACKED:
+        trajectories = session_folder / "trajectories" / "trajectories.npy"
+        if not tracking.idtrackerai_available():
             messagebox.showinfo(
-                "Review tracking", "Select a tracked video in the list first.")
+                "Review tracking",
+                "idtracker.ai is not installed in this environment. Run "
+                "install.bat to add it.")
+            return
+        if self._tracking_busy:
+            messagebox.showinfo(
+                "Review tracking",
+                "idtracker.ai is already running. Wait for it to finish, or "
+                "close its window, then try again.")
+            return
+        if not trajectories.is_file() or not (session_folder / "session.json").is_file():
+            messagebox.showinfo(
+                "Review tracking",
+                f"'{name}' is not a complete idtracker.ai session folder, so "
+                "the validator cannot open it.")
             return
         if not messagebox.askokcancel(
                 "Review tracking in idtracker.ai",
-                f"idtracker.ai's validator will open on:\n    {video.name}\n\n"
+                f"idtracker.ai's validator will open on:\n    {name}\n\n"
                 "It plays the video with each fish's identity drawn on it and "
                 "lists the frames it is least sure of. Use it to check that "
                 "fish were not swapped, and to correct the ones that were.\n\n"
-                "If you change anything, save in the validator (Ctrl+S) before "
-                "closing it. The corrected tracking replaces the original."):
+                "Save in the validator (Ctrl+S) before closing it. That marks "
+                "the session as reviewed and keeps any corrections, which "
+                "replace the original tracking."):
             return
 
-        trajectories = (tracking.session_folder_for(video)
-                        / "trajectories" / "trajectories.npy")
         before = trajectories.stat().st_mtime_ns
-        command = tracking.build_review_command(video)
+        command = tracking.build_review_command(session_folder)
 
         def work(log):
-            log(f"> reviewing {video.name}")
-            return tracking.run_process(command, video.parent, log,
+            log(f"> reviewing {name}")
+            return tracking.run_process(command, session_folder.parent, log,
                                         lambda: self._tracking_stop)
 
         def finished(exit_code):
             self._tracking_refresh()
             if trajectories.stat().st_mtime_ns == before:
-                self.tracking_hint_var.set(
-                    f"Reviewed {video.name}: nothing was changed.")
-                return
-            self.tracking_hint_var.set(
-                f"Reviewed {video.name}: corrections saved.")
-            self._tracking_reload_if_loaded(trajectories)
+                outcome = f"Reviewed {name}: nothing was changed."
+            else:
+                outcome = f"Reviewed {name}: corrections saved."
+                self._tracking_reload_if_loaded(trajectories)
+            self.tracking_hint_var.set(outcome)
+            self.set_status(outcome)
+            self._update_sessions_table()
 
-        self.tracking_hint_var.set(
-            f"idtracker.ai's validator is open on {video.name}.")
+        opened = f"idtracker.ai's validator is open on {name}."
+        self.tracking_hint_var.set(opened)
+        self.set_status(opened)
         self._tracking_background(work, finished)
 
     def _tracking_reload_if_loaded(self, trajectories: Path):

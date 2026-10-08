@@ -168,8 +168,7 @@ def test_a_stopped_run_is_not_a_success_even_if_files_exist(tmp_path, monkeypatc
 
 
 def test_review_command_opens_the_validator_on_the_session(tmp_path):
-    video = tmp_path / "exp 1.avi"
-    command = tracking.build_review_command(video)
+    command = tracking.build_review_command(tmp_path / "session_exp 1")
 
     assert command[1] == "-c" and "validator" in command[2]
     assert command[-1] == str(tmp_path / "session_exp 1")

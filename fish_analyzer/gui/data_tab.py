@@ -22,6 +22,7 @@ import numpy as np
 from ..data_structures import CalibrationSettings
 from ..file_loading import TrajectoryFileLoader
 from ..processing import ProcessingParameters, process_and_analyze_file
+from .. import tracking
 from .measure_dialog import MeasureScaleDialog, load_frame_image
 
 
@@ -38,15 +39,15 @@ class DataTabMixin:
 
     SESSION_COLUMNS = (
         # id, heading, width
-        ("name", "Session", 260),
-        ("group", "Group", 120),
+        ("name", "Session", 250),
+        ("group", "Group", 130),
+        ("reviewed", "Reviewed", 110),
         ("fish", "Fish", 50),
         ("minutes", "Minutes", 70),
-        ("tracked", "Tracked (lowest fish)", 160),
-        ("accuracy", "idtracker.ai accuracy", 150),
-        ("body", "Body length (px)", 120),
-        ("fps", "Frame rate", 90),
-        ("scale", "Scale in use", 150),
+        ("tracked", "Tracked (lowest fish)", 150),
+        ("accuracy", "idtracker.ai accuracy", 140),
+        ("body", "Body length (px)", 110),
+        ("fps", "Frame rate", 80),
     )
 
     def _create_data_tab(self):
@@ -78,8 +79,10 @@ class DataTabMixin:
             frame, justify=tk.LEFT, font=("Arial", 9), fg="gray", wraplength=1000,
             text="A session is one tracked video. Sessions tracked on the "
                  "Tracking tab arrive here with \"Load tracked sessions for "
-                 "analysis\". \"Add sessions...\" takes one session folder, or a "
-                 "folder containing several and loads them all."
+                 "analysis\"; \"Add sessions...\" takes a session folder or a "
+                 "folder of them. Names and groups label every plot and export. "
+                 "\"Open in validator...\" is idtracker.ai's tool for checking "
+                 "that fish were not swapped; saving there ticks Reviewed."
         ).pack(anchor="w", padx=10, pady=(6, 0))
 
         table = tk.Frame(frame)
@@ -107,15 +110,12 @@ class DataTabMixin:
                   command=self._rename_session).pack(side="left", padx=5)
         tk.Button(buttons, text="Set group...",
                   command=self._set_group).pack(side="left", padx=5)
+        tk.Button(buttons, text="Open in validator...",
+                  command=self._review_selected_session).pack(side="left", padx=5)
         tk.Button(buttons, text="Details",
                   command=self._show_file_details).pack(side="left", padx=5)
         tk.Button(buttons, text="Remove",
                   command=self._remove_file).pack(side="left", padx=5)
-        tk.Label(buttons, font=("Arial", 9), fg="gray",
-                 text="Give sessions short names and put them in groups "
-                      "(for example control, treated): these label every "
-                      "plot and export. Select several to group them together."
-                 ).pack(side="left", padx=15)
 
     def _create_units_section(self, parent):
         frame = tk.LabelFrame(parent, text="2. Units", font=("Arial", 12, "bold"))
@@ -441,17 +441,16 @@ class DataTabMixin:
             metadata = loaded_file.metadata
             tracked = 100.0 * np.mean(
                 ~np.isnan(loaded_file.trajectories[..., 0]), axis=0)
-            calibration = loaded_file.calibration
             tree.insert("", "end", iid=nickname, values=(
                 nickname,
                 self._group_of(nickname),
+                self._reviewed_mark(loaded_file),
                 loaded_file.n_fish,
                 f"{loaded_file.duration_minutes:.1f}",
                 f"{tracked.mean():.1f}%  ({tracked.min():.1f}%)",
                 f"{metadata.estimated_accuracy * 100:.1f}%",
                 f"{metadata.body_length:.1f}",
                 f"{metadata.frames_per_second:.2f} fps",
-                f"{calibration.pixels_per_unit:.1f} px/{calibration.unit_name}",
             ))
         tree.selection_set([n for n in selected if n in self.loaded_files])
 
@@ -551,6 +550,27 @@ class DataTabMixin:
         self._refresh_bout_file_list()
         self._update_spatial_files_list()
         self._update_results()
+
+    @staticmethod
+    def _session_folder_of(loaded_file) -> Path:
+        # .../session_X/trajectories/trajectories.npy -> .../session_X
+        return Path(loaded_file.file_path).parent.parent
+
+    def _reviewed_mark(self, loaded_file) -> str:
+        """A tick and the date, once the session has been saved from
+        idtracker.ai's validator."""
+        reviewed = tracking.session_reviewed_on(self._session_folder_of(loaded_file))
+        return f"\u2713 {reviewed}" if reviewed else ""
+
+    def _review_selected_session(self):
+        """Open idtracker.ai's validator on the selected session."""
+        selected = self._selected_sessions()
+        if len(selected) != 1:
+            messagebox.showinfo(
+                "Review tracking", "Select one session in the table first.")
+            return
+        self._review_session(
+            self._session_folder_of(self.loaded_files[selected[0]]), selected[0])
 
     def _show_file_details(self):
         """Show detailed information about the selected session."""
