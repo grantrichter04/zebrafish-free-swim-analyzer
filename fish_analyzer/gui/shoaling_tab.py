@@ -45,9 +45,10 @@ class ShoalingTabMixin:
     """
 
     SHOALING_COLUMNS = (
-        ("Group", "Group", 130), ("Session", "Session", 220), ("Fish", "Fish", 60),
-        ("NND", "Nearest neighbour", 150), ("RandomNND", "if random", 110),
-        ("IID", "Inter-individual", 150), ("RandomIID", "if random", 110),
+        ("Group", "Group", 110), ("Session", "Session", 200), ("Fish", "Fish", 50),
+        ("NND", "Nearest neighbour", 150), ("RandomNND", "if random", 100),
+        ("IID", "Inter-individual", 140), ("RandomIID", "if random", 100),
+        ("Hull", "Area covered", 130), ("RandomHull", "if random", 100),
         ("FramesUsed_pct", "Frames used %", 110),
     )
     NO_SHOALING_YET = ("No results yet. Load sessions and press \"Run All "
@@ -75,7 +76,7 @@ class ShoalingTabMixin:
         tk.Label(view_row, text="Show:", font=("Arial", 10, "bold")).pack(side="left")
         self.shoaling_view = tk.StringVar(value="comparison")
         for value, text in (("comparison", "Group comparison"),
-                            ("time", "Over time")):
+                            ("time", "Minute by minute")):
             tk.Radiobutton(view_row, text=text, value=value,
                            variable=self.shoaling_view,
                            command=self._draw_shoaling_plot).pack(side="left", padx=8)
@@ -124,6 +125,7 @@ class ShoalingTabMixin:
         unit = results.shared_unit(table)
         self.shoaling_tree.heading("NND", text=f"Nearest neighbour ({unit})")
         self.shoaling_tree.heading("IID", text=f"Inter-individual ({unit})")
+        self.shoaling_tree.heading("Hull", text=f"Area covered ({unit}\u00b2)")
 
         def number(value) -> str:
             return "" if value != value else f"{value:.2f}"
@@ -133,6 +135,7 @@ class ShoalingTabMixin:
                 row["Group"], row["Session"], row["Fish"],
                 number(row["NND"]), number(row["RandomNND"]),
                 number(row["IID"]), number(row["RandomIID"]),
+                number(row["Hull"]), number(row["RandomHull"]),
                 f"{row['FramesUsed_pct']:.1f}"))
 
     def _draw_shoaling_plot(self):
@@ -150,12 +153,20 @@ class ShoalingTabMixin:
         figure = Figure(figsize=(11, 3.6), dpi=100)
         axes = figure.subplots(1, len(shoal_summary.MEASURES))
 
+        by_minute = self.shoaling_view.get() == "time"
+        if by_minute:
+            minutes = shoal_summary.minute_table(self.loaded_files, self.file_groups)
         for ax, (column, title, _) in zip(axes, shoal_summary.MEASURES):
-            if self.shoaling_view.get() == "time":
-                shoal_summary.plot_over_time(
-                    ax, self.loaded_files, column, title, session_colors)
+            label = shoal_summary.measure_unit(column, unit)
+            # The hull is one value for the shoal, so one point per session.
+            shown = table.drop_duplicates("Session") if column == "Hull" else table
+            few = "Needs at least\nthree fish."
+            if by_minute:
+                results.draw_minute_lines(ax, minutes, column, title, label,
+                                          session_colors, empty_message=few)
+            elif not results.draw_superplot(ax, shown, column, title, label,
+                                            session_colors, empty_message=few):
                 continue
-            results.draw_superplot(ax, table, column, title, unit, session_colors)
             reference = table[f"Random{column}"].dropna()
             if len(reference):
                 results.draw_reference_line(ax, reference.mean(), "if random")
@@ -175,13 +186,15 @@ class ShoalingTabMixin:
         """Say, in plain words, what each measure is and how it is made."""
         window = tk.Toplevel(self.root)
         window.title("What the shoaling measures mean")
-        window.geometry("720x460")
+        window.geometry("720x620")
         text = tk.Text(window, wrap="word", font=("Arial", 10), padx=14, pady=12)
         text.pack(fill="both", expand=True)
         text.tag_configure("title", font=("Arial", 11, "bold"), spacing1=10)
         for _, title, meaning in shoal_summary.MEASURES:
             text.insert("end", title + "\n", "title")
             text.insert("end", meaning + "\n")
+        text.insert("end", "Minute by minute\n", "title")
+        text.insert("end", results.MINUTE_MEANING + "\n")
         text.insert("end", "The \"if random\" line\n", "title")
         text.insert("end", shoal_summary.REFERENCE_MEANING + "\n")
         text.insert("end", "Which moments are used\n", "title")

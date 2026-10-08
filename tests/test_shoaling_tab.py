@@ -63,17 +63,32 @@ def test_table_has_a_row_per_fish_and_summary_a_row_per_session(
     assert list(summary["Group"]) == ["control", "treated"]
 
 
-def test_over_time_draws_one_line_per_session(synthetic_npy, synthetic_npy_larger_fish):
+def test_minute_table_is_the_same_distances_cut_into_minutes(
+        synthetic_npy, synthetic_npy_larger_fish):
     files = {"a": _with_shoaling(synthetic_npy, "a"),
              "b": _with_shoaling(synthetic_npy_larger_fish, "b")}
-    ax = Figure().subplots()
 
-    shoal_summary.plot_over_time(ax, files, "NND", "Nearest neighbour",
-                                 {"a": (0, 0, 1, 1), "b": (1, 0, 0, 1)},
-                                 smooth_seconds=5)
+    minutes = shoal_summary.minute_table(files)
 
-    assert [line.get_label() for line in ax.lines] == ["a", "b"]
-    assert ax.get_ylabel() == "BL" and ax.get_xlabel() == "Time (minutes)"
+    assert list(minutes.columns) == ["Group", "Session", "Fish", "Minute",
+                                     "NND", "IID", "Hull", "Unit"]
+    shoal = files["a"].shoaling_results
+    one = minutes[minutes["Session"] == "a"]
+    if one["Minute"].nunique() == 1:
+        assert one["NND"].mean() == pytest.approx(shoal.mean_nnd, rel=1e-6), \
+            "one minute of recording: the minute is the whole recording"
+        assert one["Hull"].iloc[0] == pytest.approx(shoal.mean_hull_area, rel=1e-6)
+    assert (one.groupby("Minute")["Hull"].nunique() == 1).all(), \
+        "the hull is the shoal's, the same for each of its fish"
+
+
+def test_hull_area_has_a_random_reference_and_needs_three_fish():
+    area = shoal_summary.random_hull_area(SQUARE, 6)
+    assert 0 < area < 100, "inside the 10 x 10 arena"
+    assert shoal_summary.random_hull_area(SQUARE, 3) < area, \
+        "fewer fish cover less"
+    assert shoal_summary.random_hull_area(SQUARE, 6) == area, "it does not move between redraws"
+    assert shoal_summary.random_hull_area(SQUARE, 2) is None
 
 
 # --- the tab ----------------------------------------------------------------------
@@ -108,7 +123,8 @@ def test_run_all_analysis_fills_the_shoaling_tab(
 
     app.shoaling_view.set("time")
     app._draw_shoaling_plot()
-    assert app.shoaling_plot_frame.winfo_children(), "the over-time view drew"
+    assert app.shoaling_plot_frame.winfo_children(), "the minute-by-minute view drew"
+    assert float(rows[0][7]) > 0 and float(rows[0][8]) > 0, "hull area and its reference"
     app.shoaling_view.set("comparison")
 
     # Changing units throws shoaling results away along with the rest.

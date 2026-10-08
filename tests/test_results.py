@@ -29,8 +29,8 @@ def test_table_has_one_row_per_fish_with_the_headline_metrics(two_groups):
 
     assert len(table) == 9
     assert list(table.columns) == [
-        "Group", "Session", "Fish", "Tracked_pct", "Distance", "TypicalSpeed",
-        "PeakSpeed", "Straightness", "NearWall", "WallZoneArea_pct", "Unit",
+        "Group", "Session", "Fish", "Tracked_pct", "Distance", "MedianSpeed",
+        "Speed99", "Straightness", "NearWall", "WallZoneArea_pct", "Unit",
         "PixelsPerUnit"]
     assert table["NearWall"].isna().all(), "no arena, so no wall time yet"
     assert set(table["Group"]) == {"control", "treated"}, \
@@ -38,9 +38,9 @@ def test_table_has_one_row_per_fish_with_the_headline_metrics(two_groups):
     first = two_groups["control_1"].processed_data[0]
     row = table.iloc[0]
     assert row["Distance"] == first.metrics["total_distance"]
-    assert row["TypicalSpeed"] == first.metrics["median_speed"]
-    assert row["PeakSpeed"] == first.metrics["speed_p99"]
-    assert row["PeakSpeed"] >= row["TypicalSpeed"]
+    assert row["MedianSpeed"] == first.metrics["median_speed"]
+    assert row["Speed99"] == first.metrics["speed_p99"]
+    assert row["Speed99"] >= row["MedianSpeed"]
     assert 0 <= row["Straightness"] <= 1
 
 
@@ -62,7 +62,7 @@ def test_the_group_line_is_the_mean_of_session_means_not_of_fish():
         "Group": ["g"] * 5, "Session": ["a", "a", "a", "a", "b"],
         "Fish": list("12345"), "Tracked_pct": [100.0] * 5,
         "Distance": [10.0, 10.0, 10.0, 10.0, 50.0],
-        "TypicalSpeed": [1.0] * 5, "PeakSpeed": [2.0] * 5,
+        "MedianSpeed": [1.0] * 5, "Speed99": [2.0] * 5,
         "Straightness": [0.5] * 5, "NearWall": [60.0] * 5,
         "WallZoneArea_pct": [51.0] * 5, "Unit": ["cm"] * 5,
         "PixelsPerUnit": [30.0] * 5,
@@ -86,8 +86,8 @@ def test_the_group_line_is_the_mean_of_session_means_not_of_fish():
 
 def test_speeds_are_labelled_per_second_and_straightness_has_no_unit():
     labels = {m.column: m.axis_label("BL") for m in results.METRICS}
-    assert labels == {"Distance": "BL", "TypicalSpeed": "BL/s",
-                      "PeakSpeed": "BL/s", "Straightness": "0 to 1",
+    assert labels == {"Distance": "BL", "MedianSpeed": "BL/s",
+                      "Speed99": "BL/s", "Straightness": "0 to 1",
                       "NearWall": "% of time"}
     assert all(len(m.meaning) > 40 for m in results.METRICS), \
         "every measure says what it is"
@@ -177,7 +177,7 @@ def test_a_fish_that_sits_still_shows_as_a_peak_at_zero():
     assert y[0] == 0 and y[-1] == 100 and np.all(np.diff(x) >= 0)
     pooled = np.concatenate([swimmer.speeds, sitter.speeds])
     assert x[np.searchsorted(y, 50)] == pytest.approx(np.median(pooled), rel=0.02), \
-        "where the curve crosses 50% is the typical speed"
+        "where the curve crosses 50% is the median speed"
     assert [t.get_text() for t in right.get_yticklabels()] == [
         "tank \u00b7 1", "tank \u00b7 2"]
     assert left.get_xlabel() == "Speed (BL/s)"
@@ -207,47 +207,99 @@ def test_results_tab_switches_to_speed_distributions(
     app._draw_results_plot()
 
 
-# --- swim paths --------------------------------------------------------------------
+# --- minute by minute --------------------------------------------------------------
 
-def test_swim_paths_draw_one_line_per_fish_and_the_tank_outline(two_groups):
-    from fish_analyzer.overlay_render import fish_colors
-    from fish_analyzer.spatial import arena_in_units
+def test_minute_table_has_one_row_per_fish_per_minute(two_groups):
+    minutes = results.minute_table(two_groups)
+    loaded = two_groups["control_1"]
+    expected = results.bin_count(loaded.n_frames / loaded.calibration.frame_rate)
+
+    assert list(minutes.columns) == [
+        "Group", "Session", "Fish", "Minute", "Distance", "MedianSpeed",
+        "Speed99", "Straightness", "NearWall", "Unit"]
+    one = minutes[minutes["Session"] == "control_1"]
+    assert len(one) == expected * 3
+    assert sorted(set(one["Minute"])) == list(range(1, expected + 1))
+    assert minutes["NearWall"].isna().all(), "no tank outline, so no wall time"
+
+
+def test_the_minutes_add_up_to_the_whole_recording(two_groups):
+    """The minute-by-minute view must be the same measurement cut up, not a
+    second opinion: the distances of the minutes sum to the total distance."""
+    loaded = two_groups["control_1"]
+    minutes = results.minute_table({"control_1": loaded})
+    duration = loaded.n_frames / loaded.calibration.frame_rate
+    n_bins = results.bin_count(duration)
+    for fish in loaded.processed_data:
+        rows = minutes[minutes["Fish"] == fish.identity_label].sort_values("Minute")
+        lengths = np.array([min(60.0 * (i + 1), duration) - 60.0 * i for i in range(n_bins)])
+        swum = (rows["Distance"].to_numpy() * lengths / 60.0).sum()
+        assert swum == pytest.approx(fish.metrics["total_distance"], rel=1e-6)
+
+
+def test_a_fish_that_stops_shows_in_its_minute_and_nowhere_else():
+    """Two minutes at 30 fps: swimming, then still. The whole-recording median
+    hides which; the minutes say it."""
+    import sys
+    from pathlib import Path as _Path
+    sys.path.insert(0, str(_Path(__file__).resolve().parent))
+    from synthetic_tracks import FPS, make_file, straight_line
+
+    moving = straight_line(n=int(60 * FPS), step_px=1.0)
+    still = np.repeat(moving[-1:], int(60 * FPS), axis=0)
+    loaded = make_file(np.concatenate([moving, still]))
+    loaded.processed_data = process_and_analyze_file(loaded)
+
+    minutes = results.minute_table({"tank": loaded}).set_index("Minute")
+
+    assert list(minutes.index) == [1, 2]
+    assert minutes.loc[1, "MedianSpeed"] > 0 and minutes.loc[2, "MedianSpeed"] == 0
+    assert minutes.loc[2, "Distance"] == pytest.approx(0.0, abs=1e-9)
+    assert minutes.loc[1, "Straightness"] == pytest.approx(1.0)
+    assert np.isnan(minutes.loc[2, "Straightness"]), "a fish that did not move has no path"
+
+
+def test_wall_time_is_read_minute_by_minute(two_groups):
+    from fish_analyzer.spatial import ThigmotaxisCalculator, arena_in_units
 
     loaded = two_groups["control_1"]
-    arena = arena_in_units([[100, 200], [900, 200], [900, 800], [100, 800]], loaded)
+    arena = arena_in_units([[0, 0], [1024, 0], [1024, 1024], [0, 1024]], loaded)
+    loaded.thigmotaxis_results = ThigmotaxisCalculator(loaded, arena).calculate()
+
+    minutes = results.minute_table({"control_1": loaded})
+
+    assert minutes["NearWall"].between(0, 100).all()
+    whole = loaded.thigmotaxis_results
+    for fish in loaded.processed_data:
+        mine = minutes[minutes["Fish"] == fish.identity_label]
+        if len(mine) == 1:
+            assert mine["NearWall"].iloc[0] == pytest.approx(
+                np.nanmean(whole.per_fish_in_border_samples[:, fish.fish_id]) * 100)
+
+
+def test_minute_lines_are_a_line_per_fish_and_a_mean_per_session():
+    table = pd.DataFrame({
+        "Session": ["a"] * 4 + ["b"] * 2, "Fish": ["1", "1", "2", "2", "1", "1"],
+        "Minute": [1, 2, 1, 2, 1, 2], "Value": [1.0, 3.0, 3.0, 5.0, 10.0, 10.0]})
     ax = Figure().add_subplot(111)
 
-    results.plot_swim_paths(ax, "control_1", loaded, fish_colors(3), arena)
+    assert results.draw_minute_lines(ax, table, "Value", "t", "u",
+                                     {"a": (1, 0, 0), "b": (0, 0, 1)})
 
-    paths, outline = ax.lines[:-1], ax.lines[-1]
-    assert [line.get_label() for line in paths] == [
-        str(fish.identity_label) for fish in loaded.processed_data]
-    first = loaded.processed_data[0].trajectory
-    assert np.array_equal(paths[0].get_xdata(), first["x"].to_numpy(), equal_nan=True)
-    assert outline.get_xydata()[0].tolist() == outline.get_xydata()[-1].tolist(), \
-        "the outline is closed"
-    scale = loaded.calibration.scale_factor
-    assert ax.get_xlim() == (0, loaded.metadata.video_width * scale), \
-        "the whole frame, so sessions can be compared by eye"
-    assert ax.get_title() == "control_1"
+    thick = [line for line in ax.lines if line.get_linewidth() > 2]
+    assert [list(line.get_ydata()) for line in thick] == [[2.0, 4.0], [10.0, 10.0]], \
+        "the thick line is the mean of that session's fish, minute by minute"
+    assert len(ax.lines) == 3 + 2, "three fish and two session means"
+    assert ax.get_xlabel() == "Minute of the recording"
 
-
-def test_swim_paths_need_no_tank_outline(two_groups):
-    from fish_analyzer.overlay_render import fish_colors
-
-    ax = Figure().add_subplot(111)
-    results.plot_swim_paths(ax, "control_1", two_groups["control_1"], fish_colors(3))
-    assert len(ax.lines) == 3
+    empty = Figure().add_subplot(111)
+    table["Value"] = np.nan
+    assert not results.draw_minute_lines(empty, table, "Value", "t", "u", {}, "nothing")
+    assert empty.texts[0].get_text() == "nothing"
 
 
-@pytest.mark.parametrize("sessions, grid", [(1, (1, 1)), (2, (1, 2)), (4, (1, 4)),
-                                            (6, (2, 5)), (12, (2, 6))])
-def test_path_panels_fill_a_wide_figure(sessions, grid):
-    assert results.path_grid(sessions) == grid
-    assert grid[0] * grid[1] >= sessions
-
-
-def test_results_tab_switches_to_swim_paths(app, tmp_path, synthetic_npy, monkeypatch):
+def test_results_tab_switches_to_minute_by_minute(
+        app, tmp_path, synthetic_npy, monkeypatch):
     from fish_analyzer.gui import data_tab
     for name in ("showinfo", "showerror"):
         monkeypatch.setattr(data_tab.messagebox, name, lambda *a, **k: None)
@@ -258,17 +310,27 @@ def test_results_tab_switches_to_swim_paths(app, tmp_path, synthetic_npy, monkey
     app._add_path(tmp_path / "session_control_1")
     app._run_analysis()
     drawn = []
-    real = results.plot_swim_paths
-    monkeypatch.setattr(results, "plot_swim_paths",
-                        lambda ax, name, *rest: (drawn.append(name), real(ax, name, *rest)))
+    real = results.minute_plot
+    monkeypatch.setattr(results, "minute_plot",
+                        lambda ax, table, metric, colors: (
+                            drawn.append(metric.column), real(ax, table, metric, colors))[1])
 
-    app.results_view.set("paths")
+    app.results_view.set("minutes")
     app._draw_results_plot()
 
-    assert drawn == ["control_1"]
+    assert drawn == [m.column for m in results.METRICS]
     assert app.results_plot_frame.winfo_children(), "a figure was embedded"
     app.results_view.set("comparison")
     app._draw_results_plot()
+
+
+# --- panels, one per session -------------------------------------------------------
+
+@pytest.mark.parametrize("sessions, grid", [(1, (1, 1)), (2, (1, 2)), (4, (1, 4)),
+                                            (6, (2, 5)), (12, (2, 6))])
+def test_session_panels_fill_a_wide_figure(sessions, grid):
+    assert results.panel_grid(sessions) == grid
+    assert grid[0] * grid[1] >= sessions
 
 
 # --- where they swim ---------------------------------------------------------------

@@ -8,8 +8,8 @@ The metrics answer "is one group more active than another?" and none of them
 needs a threshold:
 
     Distance        how much the fish swam
-    TypicalSpeed    the median speed: how fast it usually goes
-    PeakSpeed       the 99th percentile of speed: how fast its fast moments are
+    MedianSpeed     the median speed: how fast it usually goes
+    Speed99         the 99th percentile of speed: how fast its fast moments are
     Straightness    how direct its path is, second by second (see METRICS)
     NearWall        the share of its time spent in the zone along the walls
 
@@ -48,10 +48,10 @@ METRICS: List[Metric] = [
     Metric("Distance", "total_distance", "Total distance", "length",
            "How far the fish swam: every frame-to-frame step added up. Frames "
            "where the fish was not tracked add nothing."),
-    Metric("TypicalSpeed", "median_speed", "Typical speed", "speed",
+    Metric("MedianSpeed", "median_speed", "Median speed", "speed",
            "The median of its frame-by-frame speed: half the time it was "
            "slower than this, half the time faster."),
-    Metric("PeakSpeed", "speed_p99", "Peak speed", "speed",
+    Metric("Speed99", "speed_p99", "99th percentile speed", "speed",
            "The 99th percentile of its speed: it was faster than this for only "
            "1% of the time. A percentile, not the maximum, so a few tracking "
            "errors cannot set it."),
@@ -68,6 +68,7 @@ METRICS: List[Metric] = [
 
 #: Columns that describe a row without being a metric to plot.
 WALL_ZONE_SHARE = "WallZoneArea_pct"
+NO_OUTLINE = "No tank outline.\nDraw one with\n\"Tank outline...\" on\nSessions & Units."
 
 
 def default_group(session_name: str) -> str:
@@ -194,7 +195,7 @@ def superplot(ax, table: pd.DataFrame, metric: Metric,
         ax, table, metric.column, metric.title,
         metric.axis_label(shared_unit(table)), session_colors,
         # Only the wall measure can be missing wholesale: no arena was found.
-        empty_message="No tank outline.\nDraw one with\n\"Tank outline...\" on\nSessions & Units.")
+        empty_message=NO_OUTLINE)
     if not drawn:
         return
     if metric.kind == "ratio":
@@ -265,8 +266,8 @@ def plot_session_speed_ecdf(ax, samples: List[SpeedSample],
 
     A cumulative curve needs no bins and no smoothing, so nothing about it is
     a choice, and the two speed metrics can be read straight off it: where a
-    curve crosses 50% is that session's typical speed, where it crosses 99%
-    its peak speed. A session that is faster overall sits to the right.
+    curve crosses 50% is that session's median speed, where it crosses 99%
+    its 99th percentile. A session that is faster overall sits to the right.
     """
     bins = _speed_bins(samples)
     levels = np.linspace(0.0, 1.0, 501)
@@ -277,7 +278,7 @@ def plot_session_speed_ecdf(ax, samples: List[SpeedSample],
         ax.plot(np.quantile(pooled, levels), levels * 100,
                 color=session_colors[session], linewidth=2,
                 label=f"{session}  ({in_session[0].group})")
-    for level, text in ((50, "typical speed"), (99, "peak speed")):
+    for level, text in ((50, "median"), (99, "99th percentile")):
         ax.axhline(level, color="gray", linestyle=":", linewidth=1)
         ax.text(bins[-1], level - 1.5, f"{text} ", fontsize=8, color="gray",
                 ha="right", va="top")
@@ -322,46 +323,20 @@ def plot_fish_speed_ridges(ax, samples: List[SpeedSample],
 
 
 # =============================================================================
-# SWIM PATHS
-# =============================================================================
-#
-# The picture behind the numbers: where each fish went. A fish that circled
-# the wall, one that sat in a corner and one that crossed the tank freely can
-# share a total distance and look nothing alike here.
-
-def path_grid(n_sessions: int) -> tuple:
-    """(rows, columns) for one panel per session in a wide, short figure."""
-    columns = min(n_sessions, int(np.ceil(np.sqrt(3 * n_sessions))))
-    return int(np.ceil(n_sessions / columns)), columns
-
-
-def plot_swim_paths(ax, name: str, loaded, fish_colors, arena=None) -> None:
-    """Every fish's path in one session, one colour per fish, drawn the way
-    the video shows it. `arena`, when given, is outlined as the tank."""
-    scale = loaded.calibration.scale_factor
-    for fish, color in zip(loaded.processed_data, fish_colors):
-        ax.plot(fish.trajectory["x"].to_numpy(), fish.trajectory["y"].to_numpy(),
-                color=color, linewidth=0.6, alpha=0.7,
-                label=str(fish.identity_label))
-    if arena is not None:
-        outline = np.vstack([arena.vertices_bl, arena.vertices_bl[:1]])
-        ax.plot(outline[:, 0], outline[:, 1], color="black", linewidth=1.2)
-    ax.set_xlim(0, loaded.metadata.video_width * scale)
-    ax.set_ylim(0, loaded.metadata.video_height * scale)
-    ax.set_aspect("equal")
-    ax.set_title(name, fontsize=11, fontweight="bold")
-    ax.set_xlabel(loaded.calibration.unit_name)
-    ax.tick_params(labelsize=8)
-    for side in ("top", "right"):
-        ax.spines[side].set_visible(False)
-
+# WHERE THEY SWIM
 
 # =============================================================================
 # WHERE THEY SWIM
 # =============================================================================
 #
-# Swim paths show the route; this shows the time. A fish that hangs in one
-# corner draws a small scribble there and a bright patch here.
+# Where the time went. A fish that hangs in one corner, or a tank that keeps
+# off the walls, shows here at a glance.
+
+def panel_grid(n_sessions: int) -> tuple:
+    """(rows, columns) for one panel per session in a wide, short figure."""
+    columns = min(n_sessions, int(np.ceil(np.sqrt(3 * n_sessions))))
+    return int(np.ceil(n_sessions / columns)), columns
+
 
 def density_cell(loaded_files: Dict, sessions: List[str], across: int = 48) -> float:
     """One cell size for every session, so a cell means the same everywhere:
@@ -415,3 +390,138 @@ def plot_position_density(ax, name: str, loaded, density: np.ndarray,
     ax.set_xlabel(loaded.calibration.unit_name)
     ax.tick_params(labelsize=8)
     return image
+
+
+
+# =============================================================================
+# MINUTE BY MINUTE
+# =============================================================================
+#
+# One number for a whole recording hides when things happened: a fish that
+# sat still for three minutes, a tank that slowed down as it settled. Here
+# every measure is worked out again on each minute by itself. Nothing is
+# smoothed, so a point is exactly what happened in that minute and no more.
+
+BIN_SECONDS = 60.0
+
+
+def bin_count(duration_s: float) -> int:
+    """Whole minutes, and a last short one only if it is at least half a minute."""
+    return max(1, int(duration_s / BIN_SECONDS + 0.5))
+
+
+def minute_table(loaded_files: Dict, file_groups: Optional[Dict[str, str]] = None
+                 ) -> pd.DataFrame:
+    """One row per analysed fish per minute, with the headline metrics for
+    that minute alone. Distance is what was swum in the minute; a short last
+    minute is scaled up to a full one."""
+    from .processing import straightness_windows
+
+    file_groups = file_groups or {}
+    rows = []
+    for name, loaded in loaded_files.items():
+        if not loaded.processed_data:
+            continue
+        group = file_groups.get(name) or default_group(name)
+        fps = loaded.calibration.frame_rate
+        duration = loaded.n_frames / fps
+        n_bins = bin_count(duration)
+        wall = getattr(loaded, "thigmotaxis_results", None)
+        wall_bin = (None if wall is None else
+                    np.minimum((np.asarray(wall.timestamps) // BIN_SECONDS).astype(int),
+                               n_bins - 1))
+        window = max(2, int(fps))
+        for fish in loaded.processed_data:
+            series = fish.metrics.get("speed_time_series")
+            if series is None:
+                continue
+            speed = np.asarray(series["speed"], dtype=float)
+            speed_bin = np.minimum(
+                (np.asarray(series["time"], dtype=float) // BIN_SECONDS).astype(int),
+                n_bins - 1)
+            starts, straight = straightness_windows(
+                fish.trajectory["x"].to_numpy(), fish.trajectory["y"].to_numpy(), window)
+            straight_bin = np.minimum((starts / fps // BIN_SECONDS).astype(int), n_bins - 1)
+            for index in range(n_bins):
+                length = min(BIN_SECONDS * (index + 1), duration) - BIN_SECONDS * index
+                tracked = speed[speed_bin == index]
+                tracked = tracked[~np.isnan(tracked)]
+                in_bin = straight[straight_bin == index]
+                near = (np.nan if wall is None else
+                        _nanmean(wall.per_fish_in_border_samples[wall_bin == index,
+                                                                 fish.fish_id]) * 100)
+                rows.append({
+                    "Group": group, "Session": name, "Fish": fish.identity_label,
+                    "Minute": index + 1,
+                    "Distance": tracked.sum() / fps * (BIN_SECONDS / length),
+                    "MedianSpeed": np.median(tracked) if len(tracked) else np.nan,
+                    "Speed99": np.percentile(tracked, 99) if len(tracked) else np.nan,
+                    "Straightness": in_bin.mean() if len(in_bin) else np.nan,
+                    "NearWall": near,
+                    "Unit": loaded.calibration.unit_name,
+                })
+    return pd.DataFrame(rows, columns=["Group", "Session", "Fish", "Minute"]
+                        + [m.column for m in METRICS] + ["Unit"])
+
+
+def _nanmean(values) -> float:
+    values = np.asarray(values, dtype=float)
+    values = values[~np.isnan(values)]
+    return float(values.mean()) if len(values) else np.nan
+
+
+def draw_minute_lines(ax, table: pd.DataFrame, column: str, title: str,
+                      ylabel: str, session_colors: Dict[str, tuple],
+                      empty_message: str = "No data.") -> bool:
+    """One column of a per-fish, per-minute table: a thin line per fish and a
+    thick one for each session's mean. Returns False if there was nothing to
+    draw. `table` needs Session, Fish and Minute columns."""
+    ax.set_title(title, fontsize=11, fontweight="bold")
+    for side in ("top", "right"):
+        ax.spines[side].set_visible(False)
+    if table[column].isna().all():
+        ax.set_xticks([])
+        ax.set_yticks([])
+        ax.text(0.5, 0.5, empty_message, ha="center", va="center",
+                transform=ax.transAxes, fontsize=9, color="gray")
+        return False
+    for session in dict.fromkeys(table["Session"]):
+        fish = (table[table["Session"] == session]
+                .pivot(index="Minute", columns="Fish", values=column))
+        color = session_colors[session]
+        ax.plot(fish.index, fish.to_numpy(), color=color, linewidth=0.7, alpha=0.35)
+        ax.plot(fish.index, fish.mean(axis=1), color=color, linewidth=2.4,
+                marker="o", markersize=4)
+    minutes = int(table["Minute"].max())
+    # About five labels, whatever the length: every minute crowds a narrow panel.
+    step = max(1, int(np.ceil(minutes / 6)))
+    ax.set_xticks(range(step, minutes + 1, step))
+    ax.set_xlim(0.5, minutes + 0.5)
+    ax.set_xlabel("Minute of the recording")
+    ax.set_ylabel(ylabel)
+    ax.set_ylim(bottom=0)
+    ax.grid(True, axis="y", alpha=0.3)
+    return True
+
+
+def minute_plot(ax, table: pd.DataFrame, metric: Metric,
+                session_colors: Dict[str, tuple]) -> None:
+    """One of the headline metrics, minute by minute."""
+    title = "Distance in each minute" if metric.column == "Distance" else metric.title
+    drawn = draw_minute_lines(
+        ax, table, metric.column, title, metric.axis_label(shared_unit(table)),
+        session_colors, empty_message=NO_OUTLINE)
+    if not drawn:
+        return
+    if metric.kind == "ratio":
+        ax.set_ylim(0, 1)
+    elif metric.kind == "percent":
+        ax.set_ylim(0, 100)
+
+
+MINUTE_MEANING = (
+    "\"Minute by minute\" works each measure out again on every minute of the "
+    "recording by itself. Thin lines are fish, the thick line is their "
+    "session's mean. Nothing is smoothed: a point is what happened in that "
+    "minute. Look here before trusting a single number for the whole "
+    "recording; one fish that stops for a few minutes moves its tank's mean.")

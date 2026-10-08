@@ -661,31 +661,7 @@ class MetricsCalculator:
             y = trj['y'].values
             window_frames = max(2, int(self.params.straightness_window_seconds * frame_rate))
 
-            straightness_values = []
-
-            for start in range(0, len(x) - window_frames + 1, window_frames // 2):
-                end = start + window_frames
-                x_win = x[start:end]
-                y_win = y[start:end]
-
-                # Skip windows with NaN
-                if np.any(np.isnan(x_win)) or np.any(np.isnan(y_win)):
-                    continue
-
-                # Net displacement (straight-line start to end)
-                net_disp = np.sqrt(
-                    (x_win[-1] - x_win[0]) ** 2 +
-                    (y_win[-1] - y_win[0]) ** 2
-                )
-
-                # Path distance (sum of step lengths)
-                dx = np.diff(x_win)
-                dy = np.diff(y_win)
-                step_lengths = np.sqrt(dx ** 2 + dy ** 2)
-                path_dist = np.sum(step_lengths)
-
-                if path_dist > 0:
-                    straightness_values.append(net_disp / path_dist)
+            _, straightness_values = straightness_windows(x, y, window_frames)
 
             if len(straightness_values) == 0:
                 return {'mean_path_straightness': np.nan}
@@ -697,6 +673,27 @@ class MetricsCalculator:
         except Exception as e:
             print(f"Warning: Path straightness calculation failed: {e}")
             return {'mean_path_straightness': np.nan, '_failed': True}
+
+
+def straightness_windows(x: np.ndarray, y: np.ndarray, window_frames: int):
+    """Path straightness in each half-overlapping window of `window_frames`:
+    (index of the window's first frame, net displacement / distance swum).
+
+    A window with an untracked frame, or in which the fish did not move at
+    all, has no straightness and is left out.
+    """
+    starts, values = [], []
+    for start in range(0, len(x) - window_frames + 1, max(1, window_frames // 2)):
+        x_win = x[start:start + window_frames]
+        y_win = y[start:start + window_frames]
+        if np.any(np.isnan(x_win)) or np.any(np.isnan(y_win)):
+            continue
+        net_disp = np.hypot(x_win[-1] - x_win[0], y_win[-1] - y_win[0])
+        path_dist = np.sum(np.hypot(np.diff(x_win), np.diff(y_win)))
+        if path_dist > 0:
+            starts.append(start)
+            values.append(net_disp / path_dist)
+    return np.asarray(starts, dtype=int), np.asarray(values, dtype=float)
 
 
 def process_and_analyze_file(

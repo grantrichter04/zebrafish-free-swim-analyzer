@@ -29,7 +29,7 @@ class ResultsTabMixin:
     RESULT_COLUMNS = (
         ("Group", "Group", 130), ("Session", "Session", 200), ("Fish", "Fish", 60),
         ("Tracked_pct", "Tracked %", 80), ("Distance", "Distance", 100),
-        ("TypicalSpeed", "Typical speed", 110), ("PeakSpeed", "Peak speed", 100),
+        ("MedianSpeed", "Median speed", 120), ("Speed99", "99th pct speed", 130),
         ("Straightness", "Straightness", 100), ("NearWall", "Near wall %", 100),
     )
 
@@ -57,8 +57,8 @@ class ResultsTabMixin:
         tk.Label(view_row, text="Show:", font=("Arial", 10, "bold")).pack(side="left")
         self.results_view = tk.StringVar(value="comparison")
         for value, text in (("comparison", "Group comparison"),
+                            ("minutes", "Minute by minute"),
                             ("distributions", "Speed distributions"),
-                            ("paths", "Swim paths"),
                             ("density", "Where they swim")):
             tk.Radiobutton(view_row, text=text, value=value,
                            variable=self.results_view,
@@ -114,13 +114,13 @@ class ResultsTabMixin:
 
         unit = table["Unit"].iloc[0]
         self.results_tree.heading("Distance", text=f"Distance ({unit})")
-        self.results_tree.heading("TypicalSpeed", text=f"Typical speed ({unit}/s)")
-        self.results_tree.heading("PeakSpeed", text=f"Peak speed ({unit}/s)")
+        self.results_tree.heading("MedianSpeed", text=f"Median speed ({unit}/s)")
+        self.results_tree.heading("Speed99", text=f"99th pct speed ({unit}/s)")
         for _, row in table.iterrows():
             self.results_tree.insert("", "end", values=(
                 row["Group"], row["Session"], row["Fish"],
                 f"{row['Tracked_pct']:.1f}", f"{row['Distance']:.1f}",
-                f"{row['TypicalSpeed']:.2f}", f"{row['PeakSpeed']:.2f}",
+                f"{row['MedianSpeed']:.2f}", f"{row['Speed99']:.2f}",
                 f"{row['Straightness']:.2f}",
                 "" if row["NearWall"] != row["NearWall"] else f"{row['NearWall']:.1f}"))
 
@@ -145,25 +145,13 @@ class ResultsTabMixin:
             results.plot_session_speed_ecdf(left, samples, session_colors)
             results.plot_fish_speed_ridges(right, samples, session_colors)
             figure.tight_layout()
-        elif self.results_view.get() == "paths":
-            rows, columns = results.path_grid(len(sessions))
-            for index, name in enumerate(sessions):
-                loaded = self.loaded_files[name]
-                ax = figure.add_subplot(rows, columns, index + 1)
-                results.plot_swim_paths(
-                    ax, name, loaded, fish_colors(len(loaded.processed_data)),
-                    self.file_arena_definitions.get(name))
-            handles, labels = ax.get_legend_handles_labels()
-            figure.legend(handles, labels, loc="center right", frameon=False,
-                          fontsize=9, title="Fish")
-            figure.tight_layout(rect=(0, 0, 0.93, 1))
         elif self.results_view.get() == "density":
             figure.set_layout_engine("constrained")
             cell = results.density_cell(self.loaded_files, sessions)
             maps = [results.position_density(self.loaded_files[name], cell)
                     for name in sessions]
             ceiling = results.shared_density_ceiling([m[0] for m in maps])
-            rows, columns = results.path_grid(len(sessions))
+            rows, columns = results.panel_grid(len(sessions))
             axes = []
             for index, (name, (density, x_edges, y_edges)) in enumerate(
                     zip(sessions, maps)):
@@ -176,9 +164,15 @@ class ResultsTabMixin:
                 image, ax=axes, shrink=0.85, extend="max",
                 label=f"% of time in each {cell:.2g} {unit} square")
         else:
+            by_minute = self.results_view.get() == "minutes"
+            if by_minute:
+                minutes = results.minute_table(self.loaded_files, self.file_groups)
             axes = figure.subplots(1, len(results.METRICS))
             for ax, metric in zip(axes, results.METRICS):
-                results.superplot(ax, table, metric, session_colors)
+                if by_minute:
+                    results.minute_plot(ax, minutes, metric, session_colors)
+                else:
+                    results.superplot(ax, table, metric, session_colors)
             figure.legend(
                 handles=[Line2D([], [], marker="o", linestyle="", markersize=9,
                                 markerfacecolor=session_colors[name],
@@ -200,6 +194,8 @@ class ResultsTabMixin:
         for metric in results.METRICS:
             text.insert("end", metric.title + "\n", "title")
             text.insert("end", metric.meaning + "\n")
+        text.insert("end", "Minute by minute\n", "title")
+        text.insert("end", results.MINUTE_MEANING + "\n")
         text.insert("end", "Reading the plots\n", "title")
         text.insert(
             "end",
