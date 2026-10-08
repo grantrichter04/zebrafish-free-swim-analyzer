@@ -23,6 +23,8 @@ from ..data_structures import CalibrationSettings
 from ..file_loading import TrajectoryFileLoader
 from ..processing import ProcessingParameters, process_and_analyze_file
 from .. import tracking
+from ..spatial import (SHAPELY_AVAILABLE, ThigmotaxisCalculator,
+                       arena_in_units, idtrackerai_arena)
 from .measure_dialog import MeasureScaleDialog, load_frame_image
 
 
@@ -650,6 +652,13 @@ class DataTabMixin:
             loaded_file.calibration = CalibrationSettings(
                 pixels_per_unit=pixels_per_unit, unit_name=unit,
                 frame_rate=loaded_file.metadata.frames_per_second)
+            # An arena is kept in the session's unit as well as in pixels, so
+            # it has to follow a change of unit or it would sit at the wrong
+            # size against the trajectories.
+            arena = self.file_arena_definitions.get(nickname)
+            if arena is not None:
+                self.file_arena_definitions[nickname] = arena_in_units(
+                    arena.vertices_pixels, loaded_file)
         return changed
 
     def _apply_units(self, announce: bool = True) -> bool:
@@ -836,6 +845,9 @@ class DataTabMixin:
                         f"{nickname}: only {len(fish_list)} of "
                         f"{loaded_file.n_fish} fish analyzed"
                     )
+                problem = self._analyse_wall_time(nickname)
+                if problem:
+                    degraded.append(f"{nickname}: {problem}")
             except Exception as e:
                 # One bad file must not abandon the rest, and must not leave a
                 # previous run's results attached pretending to be current.
@@ -859,6 +871,33 @@ class DataTabMixin:
         self._report_batch_outcome("Individual Analysis", total, succeeded,
                                    failed, degraded)
         return True
+
+    def _analyse_wall_time(self, nickname: str) -> Optional[str]:
+        """Time near the wall for one session. Returns a problem to report,
+        or None.
+
+        The arena is the one drawn on the Spatial Analysis tab if there is
+        one, and otherwise the outline drawn in idtracker.ai's setup window,
+        so a session tracked through this app needs no redrawing. With neither
+        the measure is simply left empty.
+        """
+        loaded_file = self.loaded_files[nickname]
+        loaded_file.thigmotaxis_results = None
+        if not SHAPELY_AVAILABLE:
+            return None
+        arena = self.file_arena_definitions.get(nickname)
+        if arena is None:
+            arena = idtrackerai_arena(loaded_file)
+            if arena is None:
+                return None
+            self.file_arena_definitions[nickname] = arena
+        try:
+            loaded_file.thigmotaxis_results = ThigmotaxisCalculator(
+                loaded_file, arena).calculate()
+        except Exception as e:
+            print(f"[FAILED] wall time for {nickname}: {e}")
+            return f"time near the wall could not be computed ({e})"
+        return None
 
     def _get_processing_parameters_from_gui(self) -> ProcessingParameters:
         """Read processing parameters from the GUI inputs."""

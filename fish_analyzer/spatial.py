@@ -32,7 +32,10 @@ ENHANCEMENTS (v2.0):
 - Better smoothing support in results class
 """
 
+import json
+import math
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional, Tuple, List, Dict, Any
 import numpy as np
 from scipy.ndimage import uniform_filter1d
@@ -203,6 +206,10 @@ class ThigmotaxisResults:
     n_samples: int
     frame_rate: float = 30.0
     sample_interval: int = 30
+    #: The border zone's share of the arena's area, in percent. A fish using
+    #: the tank evenly would spend this share of its time near the wall, so it
+    #: is the level "time near the wall" has to be read against.
+    border_area_pct: float = float('nan')
 
     def get_smoothed_group_timeseries(self, window_seconds: float = 5.0) -> np.ndarray:
         """
@@ -317,6 +324,76 @@ class ThigmotaxisResults:
         return "\n".join(lines)
 
 
+def center_zone(arena_poly, border_pct: float):
+    """The arena shrunk inward by the border width: everything not near a wall.
+
+    The border is `border_pct` of the arena's shorter side wide, all the way
+    round. At the default 15% a fish is "near the wall" when it is within
+    0.15 x that side of any wall.
+    """
+    minx, miny, maxx, maxy = arena_poly.bounds
+    centre = arena_poly.buffer(-min(maxx - minx, maxy - miny) * border_pct)
+    if centre.is_empty:
+        raise ValueError("Border zone too large - no center area remains")
+    return centre
+
+
+def arena_in_units(vertices_pixels: np.ndarray, loaded_file: LoadedTrajectoryFile
+                   ) -> 'ArenaDefinition':
+    """An arena from pixel vertices, in the session's current unit and with
+    the y axis pointing up, as the trajectories are."""
+    vertices_pixels = np.asarray(vertices_pixels, dtype=float)
+    scale = loaded_file.calibration.scale_factor
+    in_units = np.column_stack([
+        vertices_pixels[:, 0] * scale,
+        (loaded_file.metadata.video_height - vertices_pixels[:, 1]) * scale,
+    ])
+    return ArenaDefinition(vertices_pixels=vertices_pixels, vertices_bl=in_units)
+
+
+def idtrackerai_arena(loaded_file: LoadedTrajectoryFile) -> Optional['ArenaDefinition']:
+    """The arena outline drawn in idtracker.ai's setup window, if there is
+    exactly one.
+
+    idtracker.ai stores it in the session's session.json as text, for example
+    "+ Polygon [[308.4, 67.2], ...]" or "+ Ellipse {'center': ..., 'axes':
+    ..., 'angle': ...}". Outlines starting with "-" are exclusions and are
+    ignored. With none, or several, there is no single arena to assume.
+    """
+    session_json = Path(loaded_file.file_path).parent.parent / "session.json"
+    try:
+        with open(session_json, encoding="utf-8") as file:
+            labels = json.load(file).get("roi_list") or []
+    except (OSError, ValueError):
+        return None
+    if isinstance(labels, str):
+        labels = [labels]
+    outlines = [label for label in labels if str(label).startswith("+")]
+    if len(outlines) != 1:
+        return None
+
+    label = outlines[0]
+    try:
+        data = json.loads(label[10:].replace("'", '"'))
+        if label[2:9] == "Polygon":
+            vertices = np.asarray(data, dtype=float)
+        elif label[2:9] == "Ellipse":
+            (cx, cy), (a, b) = data["center"], data["axes"]
+            tilt = math.radians(data.get("angle", 0))
+            t = np.linspace(0, 2 * math.pi, 72, endpoint=False)
+            vertices = np.column_stack([
+                cx + a * np.cos(t) * math.cos(tilt) - b * np.sin(t) * math.sin(tilt),
+                cy + a * np.cos(t) * math.sin(tilt) + b * np.sin(t) * math.cos(tilt),
+            ])
+        else:
+            return None
+    except (ValueError, KeyError, TypeError):
+        return None
+    if vertices.ndim != 2 or len(vertices) < 3:
+        return None
+    return arena_in_units(vertices, loaded_file)
+
+
 class ThigmotaxisCalculator:
     """
     Calculate thigmotaxis (wall-hugging) behavior.
@@ -378,16 +455,7 @@ class ThigmotaxisCalculator:
         # Create arena and inner zone polygons
         arena_poly = self.arena.to_shapely(use_bl=True)
 
-        # Buffer inward to create center zone (negative buffer shrinks)
-        arena_bounds = arena_poly.bounds  # (minx, miny, maxx, maxy)
-        arena_width = arena_bounds[2] - arena_bounds[0]
-        arena_height = arena_bounds[3] - arena_bounds[1]
-        buffer_distance = min(arena_width, arena_height) * self.border_pct
-
-        center_poly = arena_poly.buffer(-buffer_distance)
-
-        if center_poly.is_empty:
-            raise ValueError("Border zone too large - no center area remains")
+        center_poly = center_zone(arena_poly, self.border_pct)
 
         n_fish = self.file.n_fish
         n_frames = self.file.n_frames
@@ -523,7 +591,8 @@ class ThigmotaxisCalculator:
             n_fish=n_fish,
             n_samples=n_samples,
             frame_rate=self.file.calibration.frame_rate,
-            sample_interval=self.sample_interval
+            sample_interval=self.sample_interval,
+            border_area_pct=100.0 * (1.0 - center_poly.area / arena_poly.area),
         )
 
 

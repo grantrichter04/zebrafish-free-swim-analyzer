@@ -30,7 +30,7 @@ class ResultsTabMixin:
         ("Group", "Group", 130), ("Session", "Session", 200), ("Fish", "Fish", 60),
         ("Tracked_pct", "Tracked %", 80), ("Distance", "Distance", 100),
         ("TypicalSpeed", "Typical speed", 110), ("PeakSpeed", "Peak speed", 100),
-        ("Straightness", "Straightness", 100),
+        ("Straightness", "Straightness", 100), ("NearWall", "Near wall %", 100),
     )
 
     def _create_results_tab(self):
@@ -51,6 +51,18 @@ class ResultsTabMixin:
             top, text="Export results (CSV)...", command=self._export_results,
             bg="lightblue", font=("Arial", 10, "bold"), state="disabled")
         self.results_export_button.pack(side="right")
+
+        view_row = tk.Frame(tab)
+        view_row.pack(fill="x", padx=20, pady=(6, 0))
+        tk.Label(view_row, text="Show:", font=("Arial", 10, "bold")).pack(side="left")
+        self.results_view = tk.StringVar(value="comparison")
+        for value, text in (("comparison", "Group comparison"),
+                            ("distributions", "Speed distributions")):
+            tk.Radiobutton(view_row, text=text, value=value,
+                           variable=self.results_view,
+                           command=self._draw_results_plot).pack(side="left", padx=8)
+        tk.Button(view_row, text="What do these measures mean?",
+                  command=self._explain_measures).pack(side="right")
 
         self.results_plot_frame = tk.Frame(tab)
         self.results_plot_frame.pack(fill="both", expand=True, padx=20, pady=5)
@@ -73,11 +85,10 @@ class ResultsTabMixin:
         table = results.results_table(self.loaded_files, self.file_groups)
         self._results_table = table
 
-        for child in self.results_plot_frame.winfo_children():
-            child.destroy()
         self.results_tree.delete(*self.results_tree.get_children())
 
         if table.empty:
+            self._draw_results_plot()
             self.results_note_var.set(
                 "No results yet. Load sessions and press \"Run All Analysis\" "
                 "on the Sessions & Units tab.")
@@ -97,21 +108,7 @@ class ResultsTabMixin:
                "  A group with one session cannot be tested against another."))
         self.results_export_button.config(state="normal")
 
-        colors = fish_colors(len(sessions))
-        session_colors = {name: tuple(colors[i]) for i, name in enumerate(sessions)}
-        figure = Figure(figsize=(11, 3.6), dpi=100)
-        axes = figure.subplots(1, len(results.METRICS))
-        for ax, metric in zip(axes, results.METRICS):
-            results.superplot(ax, table, metric, session_colors)
-        figure.legend(
-            handles=[Line2D([], [], marker="o", linestyle="", markersize=9,
-                            markerfacecolor=session_colors[name],
-                            markeredgecolor="black", label=name)
-                     for name in sessions],
-            loc="lower center", ncol=min(len(sessions), 6), frameon=False,
-            fontsize=9, title="Sessions")
-        figure.tight_layout(rect=(0, 0.13, 1, 1))
-        embed_figure_with_toolbar(figure, self.results_plot_frame)
+        self._draw_results_plot()
 
         unit = table["Unit"].iloc[0]
         self.results_tree.heading("Distance", text=f"Distance ({unit})")
@@ -122,7 +119,65 @@ class ResultsTabMixin:
                 row["Group"], row["Session"], row["Fish"],
                 f"{row['Tracked_pct']:.1f}", f"{row['Distance']:.1f}",
                 f"{row['TypicalSpeed']:.2f}", f"{row['PeakSpeed']:.2f}",
-                f"{row['Straightness']:.2f}"))
+                f"{row['Straightness']:.2f}",
+                "" if row["NearWall"] != row["NearWall"] else f"{row['NearWall']:.1f}"))
+
+    def _draw_results_plot(self):
+        """Draw whichever view is selected, from the current results."""
+        for child in self.results_plot_frame.winfo_children():
+            child.destroy()
+        table = self._results_table
+        if table is None or table.empty:
+            return
+
+        sessions = list(dict.fromkeys(table["Session"]))
+        colors = fish_colors(len(sessions))
+        session_colors = {name: tuple(colors[i]) for i, name in enumerate(sessions)}
+        figure = Figure(figsize=(11, 3.6), dpi=100)
+
+        if self.results_view.get() == "distributions":
+            samples = results.speed_samples(self.loaded_files, self.file_groups)
+            if not samples:
+                return
+            left, right = figure.subplots(1, 2)
+            results.plot_session_speed_ecdf(left, samples, session_colors)
+            results.plot_fish_speed_ridges(right, samples, session_colors)
+            figure.tight_layout()
+        else:
+            axes = figure.subplots(1, len(results.METRICS))
+            for ax, metric in zip(axes, results.METRICS):
+                results.superplot(ax, table, metric, session_colors)
+            figure.legend(
+                handles=[Line2D([], [], marker="o", linestyle="", markersize=9,
+                                markerfacecolor=session_colors[name],
+                                markeredgecolor="black", label=name)
+                         for name in sessions],
+                loc="lower center", ncol=min(len(sessions), 6), frameon=False,
+                fontsize=9, title="Sessions")
+            figure.tight_layout(rect=(0, 0.13, 1, 1))
+        embed_figure_with_toolbar(figure, self.results_plot_frame)
+
+    def _explain_measures(self):
+        """Say, in plain words, what each measure is and how it is made."""
+        window = tk.Toplevel(self.root)
+        window.title("What the measures mean")
+        window.geometry("720x520")
+        text = tk.Text(window, wrap="word", font=("Arial", 10), padx=14, pady=12)
+        text.pack(fill="both", expand=True)
+        text.tag_configure("title", font=("Arial", 11, "bold"), spacing1=10)
+        for metric in results.METRICS:
+            text.insert("end", metric.title + "\n", "title")
+            text.insert("end", metric.meaning + "\n")
+        text.insert("end", "Reading the plots\n", "title")
+        text.insert(
+            "end",
+            "Small dots are fish. Large markers are session means. The black "
+            "line is the mean of a group's session means. Fish sharing a tank "
+            "influence each other, so the session is the unit to compare, and "
+            "a group needs several sessions before it can be tested against "
+            "another.\n")
+        text.config(state="disabled")
+        return window
 
     def _export_results(self):
         if self._results_table is None or self._results_table.empty:
