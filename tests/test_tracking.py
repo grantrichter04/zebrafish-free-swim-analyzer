@@ -35,6 +35,23 @@ def test_find_setups_lists_toml_files(tmp_path):
     assert [p.name for p in tracking.find_setups(tmp_path)] == ["ir_rig.toml"]
 
 
+def test_a_setup_named_after_a_video_is_that_videos_own(tmp_path):
+    shared = _touch(tmp_path / "ir_rig.toml")
+    bumped = _touch(tmp_path / "tank 2.avi")
+    other = _touch(tmp_path / "tank 1.avi")
+    assert tracking.own_setup_for(bumped) == tmp_path / "tank 2.toml"
+    assert tracking.setup_for(bumped, shared) == shared, "none of its own yet"
+
+    own = _touch(tmp_path / "tank 2.toml")
+
+    assert tracking.setup_for(bumped, shared) == own
+    assert tracking.setup_for(bumped, None) == own
+    assert tracking.setup_for(other, shared) == shared
+    assert tracking.setup_for(other, None) is None
+    assert [p.name for p in tracking.find_setups(tmp_path)] == ["ir_rig.toml"], \
+        "a video's own setup is not offered for the whole folder"
+
+
 def test_status_follows_the_session_folder(tmp_path):
     video = _touch(tmp_path / "control 1.avi")
     assert tracking.session_folder_for(video) == tmp_path / "session_control 1"
@@ -49,9 +66,11 @@ def test_status_follows_the_session_folder(tmp_path):
 
 def test_track_command_overrides_the_video_and_name_in_the_setup(tmp_path):
     video, setup = tmp_path / "exp 1.avi", tmp_path / "rig.toml"
-    command = tracking.build_track_command(video, setup)
+    command = tracking.build_track_command(video, setup, tmp_path / "flag")
 
-    assert command[1:3] == ["-m", "idtrackerai.start"]
+    assert command[1] == str(tracking.TRACK_SCRIPT)
+    assert tracking.TRACK_SCRIPT.is_file()
+    assert command[command.index("--finish-flag") + 1] == str(tmp_path / "flag")
     assert command[command.index("--load") + 1] == str(setup)
     assert command[command.index("--video_paths") + 1] == str(video)
     assert command[command.index("--name") + 1] == "exp 1"
@@ -118,7 +137,8 @@ def _pretend_idtrackerai(monkeypatch, script: str):
     gets the video path as sys.argv[1]."""
     monkeypatch.setattr(
         tracking, "build_track_command",
-        lambda video, setup: [sys.executable, "-c", script, str(video)])
+        lambda video, setup, finish_flag: [
+            sys.executable, "-c", script, str(video)])
 
 
 WRITES_TRAJECTORIES = (
@@ -186,3 +206,65 @@ def test_reviewed_on_reads_the_date_the_validator_saved(tmp_path):
     (session / "session.json").write_text(
         '{"last_validated": "2026-10-08T11:02:33.123456"}')
     assert tracking.reviewed_on(video) == "2026-10-08"
+
+
+# A stand-in for the idtracker.ai package with the two things
+# idtrackerai_track.py touches: the training class, whose loop stops on
+# KeyboardInterrupt as the real one does, and the entry point.
+FAKE_CONTRASTIVE = """
+import time
+
+
+class ContrastiveLearning:
+    def validate(self):
+        return 0.5
+
+    def train(self):
+        print('training', flush=True)
+        try:
+            for _ in range(600):
+                self.validate()
+                time.sleep(0.05)
+            print('ran to the end')
+        except KeyboardInterrupt:
+            print('Training interrupted by user')
+"""
+FAKE_START = """
+import sys
+from idtrackerai.base.tracker.contrastive import ContrastiveLearning
+
+
+def main():
+    print('arguments', *sys.argv[1:], flush=True)
+    ContrastiveLearning().train()
+    print('carried on to the rest of tracking')
+"""
+
+
+def _fake_idtrackerai_package(root: Path, monkeypatch):
+    for module, source in (("idtrackerai/base/tracker/contrastive.py", FAKE_CONTRASTIVE),
+                           ("idtrackerai/start/__main__.py", FAKE_START)):
+        path = root / module
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(source)
+        for folder in path.relative_to(root).parents:
+            if str(folder) != ".":
+                (root / folder / "__init__.py").touch()
+    monkeypatch.setenv("PYTHONPATH", str(root))
+
+
+def test_identity_training_can_be_finished_early(tmp_path, monkeypatch):
+    """The Tracking tab's "Finish identity training now": the training loop
+    ends as if Ctrl+C had been pressed, and tracking carries on."""
+    _fake_idtrackerai_package(tmp_path / "site", monkeypatch)
+    video = _touch(tmp_path / "exp.avi")
+    lines = []
+    started = time.monotonic()
+
+    tracking.run_tracking(video, tmp_path / "rig.toml", lines.append,
+                          should_finish_training=lambda: "training" in lines)
+
+    assert time.monotonic() - started < 20
+    assert lines[0].startswith("arguments --load"), "idtracker.ai got its arguments"
+    assert lines[-2:] == ["Training interrupted by user",
+                          "carried on to the rest of tracking"]

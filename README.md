@@ -45,10 +45,21 @@ first; the app follows in a few seconds.
 3. Check the setup. The app offers to open it on the next video. Look that
    every fish is detected, then close the window. If you adjust anything,
    press **Save setup and close**; the change applies to all videos.
-4. Press **Track all untracked videos**. Videos are tracked one after another.
+4. If one video differs from the rest (another number of fish, a tank that was
+   moved), select it and press **Own setup for selected video...**. It opens
+   with the shared settings; change what differs and save. That video is then
+   tracked with its own setup, saved beside it under the video's name, and the
+   "Tracked with" column says so. Delete that file to go back to the shared
+   setup.
+5. Press **Track all untracked videos**. Videos are tracked one after another.
    The tab shows which one is running and for how long, with idtracker.ai's
    output below. Keep the laptop on and plugged in.
-5. When it finishes, press **Load tracked sessions for analysis**.
+6. When it finishes, press **Load tracked sessions for analysis**.
+
+While idtracker.ai is learning to tell the fish apart, the tab shows its
+silhouette score. If that has stopped rising, or is rising too slowly to wait
+for, **Finish identity training now** keeps the best result so far and moves on
+with that video. Check the tracking quality on "Sessions & Units" afterwards.
 
 A video that fails does not stop the others; the summary at the end says which
 failed and why. **Stop** ends the run, and the folder can be opened again later
@@ -242,6 +253,7 @@ print(f"Mean NND: {results.mean_nnd:.2f}")
 fish_analyzer/
 ├── tracking.py                  # run idtracker.ai on a folder of videos
 ├── idtrackerai_setup_window.py  # idtracker.ai's window, limited to saving a setup
+├── idtrackerai_track.py         # idtracker.ai tracking, with an early finish for identity training
 ├── selfcheck.py                 # the Check Setup report
 ├── file_loading.py              # load idtracker.ai session folders
 ├── processing.py                # individual metrics

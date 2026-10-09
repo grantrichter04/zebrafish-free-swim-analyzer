@@ -33,7 +33,12 @@ def tab(app, monkeypatch):
 
 def _rows(app):
     tree = app.tracking_videos_tree
-    return [tuple(tree.item(i, "values")) for i in tree.get_children()]
+    return [tuple(tree.item(i, "values"))[:2] for i in tree.get_children()]
+
+
+def _tracked_with(app):
+    tree = app.tracking_videos_tree
+    return {tree.set(i, "video"): tree.set(i, "setup") for i in tree.get_children()}
 
 
 def _wait_until_idle(app, timeout=10):
@@ -212,7 +217,8 @@ def _fake_tracking(monkeypatch, fail=(), on_start=None):
     """Stand in for idtracker.ai tracking: make the session folder, or fail."""
     tracked = []
 
-    def run(video, setup, on_line, should_stop=lambda: False):
+    def run(video, setup, on_line, should_stop=lambda: False,
+            should_finish_training=lambda: False):
         tracked.append((video.name, setup.name))
         if on_start:
             on_start(video)
@@ -305,6 +311,108 @@ def test_stop_ends_the_batch_after_the_current_video(
 def test_tracking_needs_a_setup(tab, experiment):
     tab._tracking_set_folder(experiment)
     assert tab.tracking_track_button["state"] == "disabled"
+    assert _tracked_with(tab)["exp.avi"] == "no setup yet"
+
+
+# --- a video with a setup of its own ------------------------------------------
+
+def test_a_video_can_be_given_its_own_setup(tab, experiment, dialogs, monkeypatch):
+    """One tank has five fish, or was moved: it starts from the shared setup,
+    is saved under the video's name, and the others are left alone."""
+    (experiment / "rig.toml").write_text("number_of_animals = 6\n")
+    calls = _fake_idtrackerai(monkeypatch)
+    tab._tracking_set_folder(experiment)
+    tab.tracking_videos_tree.selection_set("1")
+
+    tab._tracking_configure_own()
+    _wait_until_idle(tab)
+
+    command = calls[0]
+    assert command[command.index("--video") + 1] == str(experiment / "exp.avi")
+    assert command[command.index("--load") + 1] == str(experiment / "rig.toml")
+    assert command[command.index("--save-to") + 1] == str(experiment / "exp.toml")
+    assert (experiment / "rig.toml").read_text() == "number_of_animals = 6\n"
+    assert _tracked_with(tab) == {"control.avi": "rig.toml",
+                                  "exp.avi": "exp.toml (its own)"}
+    assert list(tab.tracking_setup_combo["values"]) == ["rig.toml"]
+    assert "its own setup" in tab.tracking_hint_var.get()
+    assert dialogs["asked"] == [], "an own setup is not offered to other videos"
+
+
+def test_checking_a_video_opens_the_setup_it_is_tracked_with(
+        tab, experiment, dialogs, monkeypatch):
+    (experiment / "rig.toml").write_text("number_of_animals = 6\n")
+    (experiment / "exp.toml").write_text("number_of_animals = 5\n")
+    calls = _fake_idtrackerai(monkeypatch, save=False)
+    tab._tracking_set_folder(experiment)
+    tab.tracking_videos_tree.selection_set("1")
+
+    tab._tracking_configure(edit=True)
+    _wait_until_idle(tab)
+
+    command = calls[0]
+    assert command[command.index("--load") + 1] == str(experiment / "exp.toml")
+    assert command[command.index("--save-to") + 1] == str(experiment / "exp.toml")
+
+
+def test_each_video_is_tracked_with_its_own_setup_if_it_has_one(
+        tab, experiment, dialogs, reports, monkeypatch):
+    (experiment / "third.avi").write_bytes(b"")
+    (experiment / "rig.toml").write_text("number_of_animals = 6\n")
+    (experiment / "exp.toml").write_text("number_of_animals = 5\n")
+    tracked = _fake_tracking(monkeypatch)
+    tab._tracking_set_folder(experiment)
+
+    tab._tracking_track_all()
+    _wait_until_idle(tab)
+
+    assert tracked == [("exp.avi", "exp.toml"), ("third.avi", "rig.toml")]
+
+
+# --- finishing identity training early ----------------------------------------
+
+def test_identity_training_can_be_finished_from_the_tab(
+        tab, experiment, dialogs, reports, monkeypatch):
+    """The button is live only while idtracker.ai's training table is
+    scrolling, and pressing it reaches the run of the video in progress."""
+    (experiment / "rig.toml").write_text("number_of_animals = 6\n")
+    monkeypatch.setattr("tkinter.messagebox.askyesno", lambda *a, **k: True)
+    seen = {}
+
+    def run(video, setup, on_line, should_stop=lambda: False,
+            should_finish_training=lambda: False):
+        on_line("12:53:15 Batch | Batches/s | Silhouette score | Too far apart")
+        on_line("12:55:02   600 |   12.3    |      0.8312!     |      4.1%  |  9.8%")
+        deadline = time.monotonic() + 10
+        while not should_finish_training() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        seen["asked"] = should_finish_training()
+        on_line("         Training interrupted by user")
+        target = tracking.session_folder_for(video) / "trajectories"
+        target.mkdir(parents=True)
+        (target / "trajectories.npy").write_bytes(b"")
+        return tracking.TrackOutcome(video, True, False, 1.0, [])
+
+    monkeypatch.setattr(tracking, "run_tracking", run)
+    tab._tracking_set_folder(experiment)
+    assert tab.tracking_finish_button["state"] == "disabled"
+
+    tab._tracking_track_all()
+    deadline = time.monotonic() + 10
+    while tab._tracking_silhouette is None and time.monotonic() < deadline:
+        tab.root.update()
+        time.sleep(0.02)
+    assert tab.tracking_finish_button["state"] == "normal"
+    tab._tracking_show_progress()
+    assert "silhouette score 0.8312" in tab.tracking_progress_var.get()
+
+    tab._tracking_request_finish_training()
+    assert tab.tracking_finish_button["state"] == "disabled", "asked once"
+    _wait_until_idle(tab)
+
+    assert seen["asked"]
+    assert tab.tracking_finish_button["state"] == "disabled"
+    assert not tab._tracking_finish_training, "does not carry to the next batch"
 
 
 def test_tracked_sessions_load_into_the_analysis_tabs(

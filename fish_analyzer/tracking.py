@@ -12,7 +12,11 @@ video that belongs to it:
         fish_A.avi
         fish_B.avi
         my_setup.toml
+        fish_B.toml
         session_fish_A/trajectories/trajectories.npy
+
+A setup named after a video (fish_B.toml) is that video's own and is used for
+it in place of the shared one.
 
 idtracker.ai always runs as a separate process. Its window is Qt and ours is
 tkinter, and a crash while tracking must not take the analyzer down with it.
@@ -22,6 +26,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from collections import deque
@@ -46,11 +51,29 @@ def find_videos(folder: Path) -> List[Path]:
 
 
 def find_setups(folder: Path) -> List[Path]:
-    """Setup files (.toml) directly inside `folder`, sorted by name."""
+    """Shared setup files (.toml) directly inside `folder`, sorted by name.
+
+    A setup named after a video belongs to that video alone (see
+    own_setup_for) and is left out.
+    """
+    own = {own_setup_for(video).name.lower() for video in find_videos(folder)}
     return sorted(
         (p for p in Path(folder).iterdir()
-         if p.is_file() and p.suffix.lower() == ".toml"),
+         if p.is_file() and p.suffix.lower() == ".toml"
+         and p.name.lower() not in own),
         key=lambda p: p.name.lower())
+
+
+def own_setup_for(video: Path) -> Path:
+    """Where a video's own setup is kept: beside it, under its name."""
+    return Path(video).with_suffix(".toml")
+
+
+def setup_for(video: Path, shared: Optional[Path]) -> Optional[Path]:
+    """The setup `video` is tracked with: its own if it has one, else the
+    shared one."""
+    own = own_setup_for(video)
+    return own if own.is_file() else shared
 
 
 def session_folder_for(video: Path) -> Path:
@@ -124,6 +147,7 @@ def python_executable() -> str:
 
 
 SETUP_WINDOW_SCRIPT = Path(__file__).with_name("idtrackerai_setup_window.py")
+TRACK_SCRIPT = Path(__file__).with_name("idtrackerai_track.py")
 
 
 def build_configure_command(video: Path, save_to: Path,
@@ -151,14 +175,18 @@ def setup_path_for(folder: Path, name: str) -> Optional[Path]:
     return Path(folder) / f"{name}.toml"
 
 
-def build_track_command(video: Path, setup: Path) -> List[str]:
+def build_track_command(video: Path, setup: Path,
+                        finish_flag: Path) -> List[str]:
     """Track `video` with `setup`, with no window.
 
+    It runs through idtrackerai_track.py, which is idtracker.ai plus a way to
+    finish its identity training early: creating the file `finish_flag`.
     idtracker.ai applies command-line arguments after the setup file, so the
     video and name stored in a setup saved from another video are overridden.
     """
     video = Path(video)
-    return [python_executable(), "-m", "idtrackerai.start",
+    return [python_executable(), str(TRACK_SCRIPT),
+            "--finish-flag", str(finish_flag),
             "--load", str(setup),
             "--video_paths", str(video),
             "--name", video.stem,
@@ -240,8 +268,13 @@ class TrackOutcome:
 
 def run_tracking(video: Path, setup: Path,
                  on_line: Callable[[str], None],
-                 should_stop: Callable[[], bool] = lambda: False) -> TrackOutcome:
+                 should_stop: Callable[[], bool] = lambda: False,
+                 should_finish_training: Callable[[], bool] = lambda: False
+                 ) -> TrackOutcome:
     """Track one video. Blocks; call from a worker thread.
+
+    When `should_finish_training` returns true, idtracker.ai is asked, once,
+    to stop learning identities and carry on with its best result so far.
 
     Success is judged by the trajectories file existing afterwards, not by
     the exit code: idtracker.ai exits with 0 whether or not tracking worked.
@@ -254,12 +287,22 @@ def run_tracking(video: Path, setup: Path,
         tail.append(text)
         on_line(text)
 
+    asked = [False]
+
     def stop() -> bool:
+        # Polled several times a second while idtracker.ai runs, which makes
+        # it the place to pass on a request to finish training too.
+        if not asked[0] and should_finish_training():
+            asked[0] = True
+            finish_flag.touch()
         stopped[0] = stopped[0] or should_stop()
         return stopped[0]
 
     started = time.monotonic()
-    run_process(build_track_command(video, setup), video.parent, line, stop)
+    with tempfile.TemporaryDirectory() as folder:
+        finish_flag = Path(folder) / "finish_training"
+        run_process(build_track_command(video, setup, finish_flag),
+                    video.parent, line, stop)
     return TrackOutcome(
         video=video,
         ok=not stopped[0] and tracking_status(video) == TRACKED,

@@ -10,6 +10,7 @@ the process runs on a worker thread, its output goes into a queue, and the
 main thread drains that queue on a timer.
 """
 import queue
+import re
 import threading
 import time
 import tkinter as tk
@@ -31,6 +32,9 @@ class TrackingTabMixin:
     """
 
     LOG_LINES_KEPT = 2000
+    # A row of idtracker.ai's identity-training table:
+    # batch | batches per second | silhouette score | ...
+    TRAINING_ROW = re.compile(r"\d+ \|\s*\d+\.\d+\s*\|\s*(\d\.\d{4})")
 
     def _create_tracking_tab(self):
         """Create the tracking tab: videos, setup, tracking, and the output."""
@@ -50,6 +54,10 @@ class TrackingTabMixin:
         # stopped. Anything else is read from the folder.
         self._tracking_live: Dict[Path, str] = {}
         self._tracking_progress: Optional[tuple] = None
+        # The latest silhouette score while idtracker.ai is learning
+        # identities, else None; and whether it was asked to finish early.
+        self._tracking_silhouette: Optional[str] = None
+        self._tracking_finish_training = False
         self._tracking_queue: "queue.Queue" = queue.Queue()
 
         tk.Label(
@@ -92,13 +100,17 @@ class TrackingTabMixin:
                   command=self._tracking_refresh).pack(side="left", padx=2)
 
         self.tracking_videos_tree = ttk.Treeview(
-            frame, columns=("video", "status"), show="headings", height=5,
-            selectmode="browse")
+            frame, columns=("video", "status", "setup"), show="headings",
+            height=5, selectmode="browse")
         self.tracking_videos_tree.heading("video", text="Video")
         self.tracking_videos_tree.heading("status", text="Status")
-        self.tracking_videos_tree.column("video", width=600, anchor="w")
-        self.tracking_videos_tree.column("status", width=140, anchor="w")
+        self.tracking_videos_tree.heading("setup", text="Tracked with")
+        self.tracking_videos_tree.column("video", width=420, anchor="w")
+        self.tracking_videos_tree.column("status", width=160, anchor="w")
+        self.tracking_videos_tree.column("setup", width=300, anchor="w")
         self.tracking_videos_tree.pack(fill="x", padx=10, pady=(0, 8))
+        self.tracking_videos_tree.bind(
+            "<<TreeviewSelect>>", lambda e: self._tracking_update_buttons())
 
     def _create_tracking_setup_section(self, parent):
         frame = tk.LabelFrame(parent, text="2. Setup", font=("Arial", 12, "bold"))
@@ -109,7 +121,8 @@ class TrackingTabMixin:
             text="A setup holds the idtracker.ai settings for this experiment: "
                  "the thresholds, the number of fish and the arena. It is saved "
                  "as a .toml file beside the videos and used for every video "
-                 "in the folder."
+                 "in the folder. A video that differs - another number of "
+                 "fish, a tank that was moved - can have its own."
         ).pack(anchor="w", padx=10, pady=(6, 0))
 
         controls = tk.Frame(frame)
@@ -121,7 +134,7 @@ class TrackingTabMixin:
             width=40)
         self.tracking_setup_combo.pack(side="left", padx=5)
         self.tracking_setup_combo.bind(
-            "<<ComboboxSelected>>", lambda e: self._tracking_update_buttons())
+            "<<ComboboxSelected>>", lambda e: self._tracking_refresh())
         self.tracking_configure_button = tk.Button(
             controls, text="Configure new setup...",
             command=lambda: self._tracking_configure(edit=False),
@@ -131,6 +144,10 @@ class TrackingTabMixin:
             controls, text="Check setup on selected video...",
             command=lambda: self._tracking_configure(edit=True))
         self.tracking_edit_button.pack(side="left", padx=2)
+        self.tracking_own_button = tk.Button(
+            controls, text="Own setup for selected video...",
+            command=self._tracking_configure_own)
+        self.tracking_own_button.pack(side="left", padx=2)
 
         self.tracking_hint_var = tk.StringVar()
         tk.Label(frame, textvariable=self.tracking_hint_var, justify=tk.LEFT,
@@ -151,6 +168,10 @@ class TrackingTabMixin:
         self.tracking_stop_button = tk.Button(
             controls, text="Stop", command=self._tracking_request_stop)
         self.tracking_stop_button.pack(side="left", padx=5)
+        self.tracking_finish_button = tk.Button(
+            controls, text="Finish identity training now",
+            command=self._tracking_request_finish_training)
+        self.tracking_finish_button.pack(side="left", padx=5)
         self.tracking_load_button = tk.Button(
             controls, text="Load tracked sessions for analysis",
             command=self._tracking_load_sessions,
@@ -213,14 +234,6 @@ class TrackingTabMixin:
             return
 
         self._tracking_videos = tracking.find_videos(folder)
-        for index, video in enumerate(self._tracking_videos):
-            tree.insert("", "end", iid=str(index),
-                        values=(video.name, self._tracking_status(video)))
-        if self._tracking_videos:
-            keep = (self._tracking_videos.index(selected_video)
-                    if selected_video in self._tracking_videos else 0)
-            tree.selection_set(str(keep))
-
         previous = self.tracking_setup_var.get()
         self._tracking_setups = tracking.find_setups(folder)
         names = [s.name for s in self._tracking_setups]
@@ -230,10 +243,19 @@ class TrackingTabMixin:
         elif previous not in names:
             self.tracking_setup_var.set(names[0] if names else "")
 
+        for index, video in enumerate(self._tracking_videos):
+            tree.insert("", "end", iid=str(index),
+                        values=(video.name, self._tracking_status(video),
+                                self._tracking_setup_label(video)))
+        if self._tracking_videos:
+            keep = (self._tracking_videos.index(selected_video)
+                    if selected_video in self._tracking_videos else 0)
+            tree.selection_set(str(keep))
+
         if tracking.idtrackerai_available() and not self._tracking_busy:
             if not self._tracking_videos:
                 self.tracking_hint_var.set("No videos found in this folder.")
-            elif not names:
+            elif not names and self._tracking_without_setup():
                 self.tracking_hint_var.set(
                     "This folder has no setup yet. Select a video and press "
                     "\"Configure new setup...\" to make one in idtracker.ai.")
@@ -251,6 +273,24 @@ class TrackingTabMixin:
         name = self.tracking_setup_var.get()
         return next((s for s in self._tracking_setups if s.name == name), None)
 
+    def _tracking_setup_for(self, video: Path) -> Optional[Path]:
+        """The setup `video` will be tracked with: its own, else the one
+        selected for the folder."""
+        return tracking.setup_for(video, self._tracking_selected_setup())
+
+    def _tracking_setup_label(self, video: Path) -> str:
+        setup = self._tracking_setup_for(video)
+        if setup is None:
+            return "no setup yet"
+        if setup == tracking.own_setup_for(video):
+            return f"{setup.name} (its own)"
+        return setup.name
+
+    def _tracking_without_setup(self) -> List[Path]:
+        """Untracked videos that have no setup to be tracked with."""
+        return [v for v in self._tracking_untracked()
+                if self._tracking_setup_for(v) is None]
+
     def _tracking_untracked(self) -> List[Path]:
         return [v for v in self._tracking_videos
                 if tracking.tracking_status(v) != tracking.TRACKED]
@@ -266,13 +306,20 @@ class TrackingTabMixin:
         idle = not self._tracking_busy
         ready = (tracking.idtrackerai_available() and idle
                  and bool(self._tracking_videos))
-        has_setup = self._tracking_selected_setup() is not None
+        video = self._tracking_selected_video()
+        has_setup = video is not None and self._tracking_setup_for(video) is not None
         self.tracking_configure_button.config(state=state(ready))
         self.tracking_edit_button.config(state=state(ready and has_setup))
+        self.tracking_own_button.config(state=state(ready))
         self.tracking_track_button.config(
-            state=state(ready and has_setup and self._tracking_untracked()))
+            state=state(ready and self._tracking_untracked()
+                        and not self._tracking_without_setup()))
         self.tracking_stop_button.config(
             state=state(self._tracking_batch_running and not self._tracking_stop))
+        self.tracking_finish_button.config(
+            state=state(self._tracking_batch_running and not self._tracking_stop
+                        and self._tracking_silhouette is not None
+                        and not self._tracking_finish_training))
         self.tracking_load_button.config(
             state=state(idle and self._tracking_tracked()))
 
@@ -295,7 +342,7 @@ class TrackingTabMixin:
             return
 
         if edit:
-            setup = self._tracking_selected_setup()
+            setup = self._tracking_setup_for(video)
             if setup is None:
                 messagebox.showinfo("No setup selected",
                                     "Pick a setup from the list first.")
@@ -315,6 +362,29 @@ class TrackingTabMixin:
                 "afterwards, for every video in the folder."):
             return
         self._tracking_open_setup_window(video, setup, load=None)
+
+    def _tracking_configure_own(self):
+        """Give the selected video a setup of its own, or reopen the one it
+        has. It starts as a copy of the shared setup, so only what differs
+        for this video needs changing."""
+        video = self._tracking_selected_video()
+        if video is None:
+            return
+        own = tracking.own_setup_for(video)
+        start_from = self._tracking_setup_for(video)
+        if not own.is_file() and not messagebox.askokcancel(
+                "Own setup for this video",
+                f"idtracker.ai will open on:\n    {video.name}\n\n"
+                + (f"It starts with the settings from {start_from.name}. "
+                   if start_from else "")
+                + "Change what is different for this video - the number of "
+                  "animals, the arena, the thresholds - then press \"Save "
+                  "setup and close\".\n\n"
+                  f"The result is saved as {own.name} and used for this video "
+                  "only. The other videos are not affected. To go back to the "
+                  f"shared setup, delete {own.name} from the folder."):
+            return
+        self._tracking_open_setup_window(video, own, load=start_from)
 
     def _tracking_ask_new_setup_name(self, folder: Path) -> Optional[Path]:
         """Ask what to call a new setup; None if the user backs out."""
@@ -360,6 +430,16 @@ class TrackingTabMixin:
                 self._tracking_checked.setdefault(setup.name, set()).add(video)
             self._tracking_refresh(select_setup=setup if after else None)
 
+            if setup == tracking.own_setup_for(video):
+                if saved:
+                    outcome = (f"{setup.name} saved: {video.name} is tracked "
+                               "with its own setup.")
+                elif after is None:
+                    outcome = f"Nothing was saved for {video.name}."
+                else:
+                    outcome = f"{setup.name} unchanged."
+                self.tracking_hint_var.set(outcome)
+                return
             if not saved and not checking:
                 self.tracking_hint_var.set("")
                 messagebox.showwarning(
@@ -380,12 +460,15 @@ class TrackingTabMixin:
         self._tracking_background(work, finished)
 
     def _tracking_offer_next_check(self, setup: Path, just_saved: bool):
-        """One setup serves every video, so offer to look at it on the next
-        video it has not been opened on. Thresholds that suit one recording
-        can miss fish in a darker or brighter one."""
+        """One setup serves every video that has none of its own, so offer
+        to look at it on the next of those it has not been opened on.
+        Thresholds that suit one recording can miss fish in a darker or
+        brighter one."""
         checked = self._tracking_checked.get(setup.name, set())
-        remaining = [v for v in self._tracking_videos if v not in checked]
-        done = len(self._tracking_videos) - len(remaining)
+        sharing = [v for v in self._tracking_videos
+                   if not tracking.own_setup_for(v).is_file()]
+        remaining = [v for v in sharing if v not in checked]
+        done = len(sharing) - len(remaining)
         status = (f"Setup saved: {setup.name}." if just_saved
                   else f"Setup unchanged: {setup.name}.")
         if not remaining:
@@ -394,8 +477,7 @@ class TrackingTabMixin:
             return
 
         self.tracking_hint_var.set(
-            f"{status} Checked on {done} of {len(self._tracking_videos)} "
-            "video(s).")
+            f"{status} Checked on {done} of {len(sharing)} video(s).")
         next_video = remaining[0]
         if messagebox.askyesno(
                 "Check the setup on the next video?",
@@ -414,19 +496,21 @@ class TrackingTabMixin:
     # =========================================================================
 
     def _tracking_track_all(self):
-        """Track each untracked video in turn with the selected setup."""
-        setup = self._tracking_selected_setup()
+        """Track each untracked video in turn, with its own setup if it has
+        one and the selected setup otherwise."""
         todo = self._tracking_untracked()
-        if setup is None or not todo:
+        if not todo or self._tracking_without_setup():
             return
+        setups = {video: self._tracking_setup_for(video) for video in todo}
         restarting = [v for v in todo
                       if tracking.tracking_status(v) == tracking.INCOMPLETE]
-        listing = "\n".join(f"    {v.name}" for v in todo[:10])
+        listing = "\n".join(f"    {v.name}  -  {setups[v].name}"
+                            for v in todo[:10])
         if len(todo) > 10:
             listing += f"\n    ... and {len(todo) - 10} more"
         if not messagebox.askokcancel(
                 "Track videos",
-                f"Track {len(todo)} video(s) with the setup \"{setup.name}\"?"
+                f"Track {len(todo)} video(s), each with the setup shown?"
                 f"\n\n{listing}\n\n"
                 "Videos are tracked one after another and each can take a "
                 "long time. Keep the laptop on and plugged in. You can leave "
@@ -451,7 +535,8 @@ class TrackingTabMixin:
                 log("")
                 log(f"========== {video.name} ==========")
                 outcome = tracking.run_tracking(
-                    video, setup, log, lambda: self._tracking_stop)
+                    video, setups[video], log, lambda: self._tracking_stop,
+                    lambda: self._tracking_finish_training)
                 outcomes.append(outcome)
                 self._tracking_post(
                     lambda o=outcome: self._tracking_video_finished(o))
@@ -464,6 +549,8 @@ class TrackingTabMixin:
     def _tracking_video_started(self, video: Path, index: int, total: int):
         self._tracking_live[video] = "running"
         self._tracking_progress = (index, total, video, time.monotonic())
+        self._tracking_silhouette = None
+        self._tracking_finish_training = False
         self._tracking_refresh()
         self._tracking_show_progress()
 
@@ -483,7 +570,11 @@ class TrackingTabMixin:
         self.tracking_progress_var.set(
             ("Stopping... " if self._tracking_stop else "")
             + f"Tracking {index + 1} of {total}: {video.name}  -  "
-              f"{minutes}:{seconds:02d} elapsed")
+              f"{minutes}:{seconds:02d} elapsed"
+            + ("" if self._tracking_silhouette is None else
+               "  -  learning identities, silhouette score "
+               f"{self._tracking_silhouette}"
+               + (", finishing" if self._tracking_finish_training else "")))
 
     def _tracking_tick(self):
         if self._tracking_batch_running:
@@ -502,6 +593,37 @@ class TrackingTabMixin:
             self._tracking_show_progress()
             self._tracking_update_buttons()
 
+    def _tracking_request_finish_training(self):
+        if self._tracking_silhouette is None:
+            return
+        if messagebox.askyesno(
+                "Finish identity training now?",
+                "idtracker.ai is still learning to tell the fish apart. Its "
+                f"silhouette score is {self._tracking_silhouette} and it "
+                "normally carries on until that stops rising.\n\n"
+                "Finishing now keeps the best result so far and moves on to "
+                "the rest of tracking for this video. Identities may be less "
+                "reliable than if it had run to the end; the tracking "
+                "quality on \"Sessions & Units\" will show.\n\n"
+                "Finish identity training now?"):
+            self._tracking_finish_training = True
+            self._tracking_show_progress()
+            self._tracking_update_buttons()
+
+    def _tracking_follow_training(self, line: str):
+        """Keep the latest silhouette score while idtracker.ai is learning
+        identities, read from the table it prints."""
+        row = self.TRAINING_ROW.search(line)
+        if row:
+            self._tracking_silhouette = row.group(1)
+        elif self._tracking_silhouette is not None and (
+                "Loading best model weights" in line
+                or "Training interrupted" in line):
+            self._tracking_silhouette = None
+        else:
+            return
+        self._tracking_update_buttons()
+
     def _tracking_batch_done(self, todo: List[Path],
                              outcomes: Optional[List["tracking.TrackOutcome"]]):
         outcomes = outcomes or []
@@ -509,6 +631,8 @@ class TrackingTabMixin:
         self._tracking_batch_running = False
         self._tracking_stop = False
         self._tracking_progress = None
+        self._tracking_silhouette = None
+        self._tracking_finish_training = False
         self._tracking_refresh()
 
         succeeded = [o.video.name for o in outcomes if o.ok]
@@ -676,6 +800,8 @@ class TrackingTabMixin:
                 item = self._tracking_queue.get_nowait()
                 if isinstance(item, str):
                     self._tracking_log(item)
+                    if self._tracking_batch_running:
+                        self._tracking_follow_training(item)
                     continue
                 kind, action = item
                 if kind == "finish":
