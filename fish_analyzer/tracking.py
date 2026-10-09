@@ -35,6 +35,8 @@ from importlib import util
 from pathlib import Path
 from typing import Callable, List, Optional
 
+from . import idtrackerai_rolling
+
 VIDEO_EXTENSIONS = {".avi", ".mp4", ".mov", ".mkv", ".mpg", ".mpeg"}
 
 NOT_TRACKED = "not tracked"
@@ -180,14 +182,19 @@ def build_track_command(video: Path, setup: Path,
     """Track `video` with `setup`, with no window.
 
     It runs through idtrackerai_track.py, which is idtracker.ai plus a way to
-    finish its identity training early: creating the file `finish_flag`.
+    finish its identity training early: creating the file `finish_flag`. A
+    setup that asks for a rolling background gets one there too, and
+    idtracker.ai is given the plain statistic, the only kind it knows.
     idtracker.ai applies command-line arguments after the setup file, so the
     video and name stored in a setup saved from another video are overridden.
     """
     video = Path(video)
+    rolling, stat = idtrackerai_rolling.setup_statistic(setup)
     return [python_executable(), str(TRACK_SCRIPT),
             "--finish-flag", str(finish_flag),
+            *(["--rolling-background", stat] if rolling else []),
             "--load", str(setup),
+            *(["--background_subtraction_stat", stat] if rolling else []),
             "--video_paths", str(video),
             "--name", video.stem,
             "--track"]

@@ -45,6 +45,14 @@ first; the app follows in a few seconds.
 3. Check the setup. The app offers to open it on the next video. Look that
    every fish is detected, then close the window. If you adjust anything,
    press **Save setup and close**; the change applies to all videos.
+   Two things in that window are ours, not idtracker.ai's. **Next frame with
+   more blobs than animals** jumps to the next frame where the settings detect
+   too many blobs, which is where a threshold needs looking at. **Rolling
+   (1 min)**, beside the background statistic, is for recordings whose lighting
+   drifts, such as sunlight moving across the tank: each stretch of video is
+   compared with a background made from the minute around it. A fish that
+   stays in one spot for more than half a minute is then not detected while it
+   sits there.
 4. If one video differs from the rest (another number of fish, a tank that was
    moved), select it and press **Own setup for selected video...**. It opens
    with the shared settings; change what differs and save. That video is then
@@ -254,6 +262,7 @@ fish_analyzer/
 ├── tracking.py                  # run idtracker.ai on a folder of videos
 ├── idtrackerai_setup_window.py  # idtracker.ai's window, limited to saving a setup
 ├── idtrackerai_track.py         # idtracker.ai tracking, with an early finish for identity training
+├── idtrackerai_rolling.py       # the rolling background both of the above use
 ├── selfcheck.py                 # the Check Setup report
 ├── file_loading.py              # load idtracker.ai session folders
 ├── processing.py                # individual metrics
