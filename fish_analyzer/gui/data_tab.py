@@ -233,7 +233,7 @@ class DataTabMixin:
         self.straight_unit_label = tk.Label(more, text="BL/s.")
         self.straight_unit_label.pack(side="left")
         tk.Label(more, text="   Smooth positions over").pack(side="left")
-        self.smoothing_var = tk.StringVar(value="0.17")
+        self.smoothing_var = tk.StringVar(value="0.1")
         tk.Entry(more, textvariable=self.smoothing_var, width=5).pack(side="left", padx=5)
         tk.Label(more, text="s (0 = off).").pack(side="left")
 

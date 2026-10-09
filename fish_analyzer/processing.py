@@ -13,7 +13,7 @@ KEY TRANSFORMATIONS:
 4. Compute behavioral metrics
 
 LIGHT SMOOTHING (2026-10-09):
-Positions get a centred running mean over smoothing_seconds (0.17 s, five
+Positions get a centred running mean over smoothing_seconds (0.1 s, three
 frames at 30 fps) before any metric is computed, inside each stretch of
 continuous tracking only. An earlier version dropped smoothing because it
 moved the metrics by about 1%; that was measured on fish swimming at normal
@@ -107,7 +107,7 @@ class ProcessingParameters:
     freeze_bridge_seconds: float = 0.5      # Longest tracking gap a freeze may span
     straightness_window_seconds: float = 1.0  # Window for path straightness calculation
     straightness_min_speed: float = 1.0     # unit/s a window must average to count
-    smoothing_seconds: float = 0.17         # Running mean on positions; 0 = off
+    smoothing_seconds: float = 0.1          # Running mean on positions; 0 = off
 
     def validate(self):
         """Check that all parameters are valid. Raises ValueError if not."""

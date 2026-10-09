@@ -124,7 +124,7 @@ def app(_gui_app):
     _gui_app.freeze_min_var.set("1")
     _gui_app.min_tracked_var.set("80")
     _gui_app.straight_speed_var.set("1")
-    _gui_app.smoothing_var.set("0.17")
+    _gui_app.smoothing_var.set("0.1")
     _gui_app._fill_shared_body_length()
     _gui_app._update_sessions_table()
     _gui_app._update_units_status()

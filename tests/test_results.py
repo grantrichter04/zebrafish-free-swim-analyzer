@@ -585,4 +585,4 @@ def test_the_combined_csv_keeps_a_session_whose_fish_were_all_left_out(tmp_path)
     assert rows[0]["Status"].startswith("excluded: tracked 33%")
     assert rows[1]["Status"] == "ok"
     assert "DistancePerTrackedMin" in rows[0] and "Setting_Smoothing_s" in rows[0]
-    assert rows[1]["Setting_Smoothing_s"] == "0.17"
+    assert rows[1]["Setting_Smoothing_s"] == "0.1"

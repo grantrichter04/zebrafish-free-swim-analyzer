@@ -303,13 +303,23 @@ def test_a_short_stop_is_not_a_freeze():
 
 
 def test_smoothing_lets_a_still_fish_with_tracker_wobble_freeze():
-    """Unsmoothed, 1 px of centroid wobble reads as ~0.7 BL/s at this body
-    length and a motionless fish never drops below 0.5 BL/s for a second."""
-    traj = stationary(n=900, jitter_px=1.0)
+    """Unsmoothed, centroid wobble reads as movement and a motionless fish
+    never stays below 0.5 BL/s for a second.
+
+    The wobble here is 0.01 body lengths (0.5 px at this body length), twice
+    the 0.003-0.005 measured on real sessions. The default 0.1 s copes with
+    that; it does not cope with 0.02 body lengths, which needs 0.17 s."""
+    traj = stationary(n=900, jitter_px=0.5)
     raw = metrics_for(traj, ProcessingParameters(smoothing_seconds=0))
     smoothed = metrics_for(traj)
     assert raw["freeze_fraction_pct"] < 20.0
     assert smoothed["freeze_fraction_pct"] > 90.0
+
+    coarse = stationary(n=900, jitter_px=1.0)
+    assert metrics_for(coarse)["freeze_fraction_pct"] < 20.0, \
+        "the limit of the default, stated in the README"
+    longer = metrics_for(coarse, ProcessingParameters(smoothing_seconds=0.17))
+    assert longer["freeze_fraction_pct"] > 90.0
 
 
 def test_smoothing_leaves_steady_swimming_alone():

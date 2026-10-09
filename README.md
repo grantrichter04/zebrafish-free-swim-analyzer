@@ -132,12 +132,17 @@ to Run All Analysis, and every export records them in its `Setting_` columns:
 - **Leave out fish tracked less than 80% of the time.** A fish seen only part
   of the time is listed in the export as excluded, with its tracked share,
   instead of being averaged in beside fish seen throughout.
-- **Smooth positions over 0.17 s** (five frames at 30 fps; 0 turns it off).
+- **Smooth positions over 0.1 s** (three frames at 30 fps; 0 turns it off).
   idtracker.ai's position for a fish wobbles by about a pixel from frame to
   frame. Without smoothing that wobble reads as movement: a still fish looks
   like it is swimming slowly (and almost never freezes), and a slow fish's
-  distance comes out 20-70% too long. Smoothing removes most of it and leaves
-  normal swimming essentially unchanged. It never reaches across a gap.
+  distance comes out 20-70% too long. Smoothing removes most of it. On real
+  recordings it changes distance by under 2% and the 99th-percentile speed by
+  about 6%, the same for every fish. It never reaches across a gap.
+  0.1 s is enough while the wobble is under about 0.01 body lengths; it
+  measured 0.003-0.005 on this lab's recordings. Fish that are small in the
+  frame, or tracked less steadily, need 0.17 s, or a resting fish will not be
+  counted as frozen.
 - **Frozen while slower than 0.5 BL/s for at least 1 s.**
 - **Straightness uses seconds faster than 1 BL/s.** In slower seconds the
   remaining wobble is much of the path, so they are left out;

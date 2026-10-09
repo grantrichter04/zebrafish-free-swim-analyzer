@@ -8,8 +8,14 @@ activity or in how well they were tracked. These are now accounted for; every
 setting is a box on Sessions & Units and is written into every export as a
 `Setting_` column.
 
-- **Positions are smoothed over 0.17 s** before any measure is computed,
-  within stretches of continuous tracking only (0 turns it off). Unsmoothed,
+- **Positions are smoothed over 0.1 s** (three frames at 30 fps) before any
+  measure is computed, within stretches of continuous tracking only (0 turns
+  it off). Checked on four real sessions, this is the shortest window that
+  recovers a resting fish's freezing (4.0 of its 10 minutes, against 0.7
+  unsmoothed); 0.17 s and 0.3 s recover no more and take 11% and 18% off the
+  99th-percentile speed, where 0.1 s takes 6% and under 2% off distance.
+  In simulation 0.1 s holds up to a wobble of about 0.01 body lengths (the
+  recordings measured 0.003-0.005); beyond that use 0.17 s. Unsmoothed,
   a motionless fish read 0.3-0.7 BL/s and was frozen 3-64% of the time
   instead of 100%, and a fish swimming 0.5 BL/s read 17-67% too far. Normal
   swimming changes by about 2%. This is denoising the positions, not the
