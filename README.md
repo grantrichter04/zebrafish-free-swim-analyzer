@@ -122,8 +122,33 @@ can be converted later.
 
 Frames where idtracker.ai lost a fish are treated as *unobserved*, not as the
 fish being still. Freezes are counted within stretches of continuous
-tracking and never across a gap; one cut short by lost tracking is reported as
-*censored* rather than counted, and rates are per unit of observed time.
+tracking; one cut short by lost tracking is reported as *censored* rather
+than counted, and rates are per unit of observed time. A gap of up to 0.5 s
+does not end a freeze if the fish is in the same place on both sides of it.
+
+**Settings that decide what the numbers mean** are on Sessions & Units, next
+to Run All Analysis, and every export records them in its `Setting_` columns:
+
+- **Leave out fish tracked less than 80% of the time.** A fish seen only part
+  of the time is listed in the export as excluded, with its tracked share,
+  instead of being averaged in beside fish seen throughout.
+- **Smooth positions over 0.17 s** (five frames at 30 fps; 0 turns it off).
+  idtracker.ai's position for a fish wobbles by about a pixel from frame to
+  frame. Without smoothing that wobble reads as movement: a still fish looks
+  like it is swimming slowly (and almost never freezes), and a slow fish's
+  distance comes out 20-70% too long. Smoothing removes most of it and leaves
+  normal swimming essentially unchanged. It never reaches across a gap.
+- **Frozen while slower than 0.5 BL/s for at least 1 s.**
+- **Straightness uses seconds faster than 1 BL/s.** In slower seconds the
+  remaining wobble is much of the path, so they are left out;
+  `StraightnessSeconds_pct` says how many seconds were used.
+
+**Distance** is what was swum while the fish was tracked, so a fish tracked
+less of the time reads lower. `DistancePerTrackedMin` in the exports
+corrects for that; either way, check `Tracked_pct` is similar between groups.
+The same applies to shoaling, which uses only frames in which every fish is
+tracked (`FramesUsed_pct`): fish are most often lost when they overlap, so a
+group tracked less well there will look slightly less tight.
 
 **Time near the wall** (thigmotaxis) is the share of time spent in a zone
 along the walls, a measure of anxiety-like behaviour. The zone is 15% of the

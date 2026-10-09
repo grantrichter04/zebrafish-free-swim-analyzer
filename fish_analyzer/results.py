@@ -47,7 +47,9 @@ class Metric:
 METRICS: List[Metric] = [
     Metric("Distance", "total_distance", "Total distance", "length",
            "How far the fish swam: every frame-to-frame step added up. Frames "
-           "where the fish was not tracked add nothing."),
+           "where the fish was not tracked add nothing, so a fish tracked less "
+           "of the time reads lower; the exported DistancePerTrackedMin "
+           "corrects for that. Compare Tracked % between groups."),
     Metric("MedianSpeed", "median_speed", "Median speed", "speed",
            "The median of its frame-by-frame speed: half the time it was "
            "slower than this, half the time faster."),
@@ -59,7 +61,10 @@ METRICS: List[Metric] = [
            "For each second of swimming: the straight-line distance from where "
            "the fish started that second to where it ended, divided by the "
            "distance it actually swam. 1 = it went straight; lower = it turned "
-           "or doubled back. Averaged over every second of the recording."),
+           "or doubled back. Averaged over the seconds in which the fish was "
+           "swimming (faster than the speed set on Sessions & Units, 1 BL/s by "
+           "default): in a slow or still second the tracker's small wobble is "
+           "most of the path, and the ratio would measure that instead."),
     Metric("NearWall", None, "Time near the wall", "percent",
            "The share of its time spent in the zone along the walls, which is "
            "15% of the tank's shorter side wide. The dashed line is what even "
@@ -102,13 +107,63 @@ def results_table(loaded_files: Dict, file_groups: Optional[Dict[str, str]] = No
                                if wall is not None else np.nan)
             row[WALL_ZONE_SHARE] = (round(float(wall.border_area_pct), 1)
                                     if wall is not None else np.nan)
+            row["DistancePerTrackedMin"] = fish.metrics.get(
+                "distance_per_tracked_min", np.nan)
             row["Unit"] = loaded.calibration.unit_name
             row["PixelsPerUnit"] = round(loaded.calibration.pixels_per_unit, 4)
             rows.append(row)
     columns = (["Group", "Session", "Fish", "Tracked_pct"]
                + [m.column for m in METRICS]
-               + [WALL_ZONE_SHARE, "Unit", "PixelsPerUnit"])
+               + [WALL_ZONE_SHARE, "DistancePerTrackedMin", "Unit", "PixelsPerUnit"])
     return pd.DataFrame(rows, columns=columns)
+
+
+def excluded_fish(loaded_files: Dict) -> List[str]:
+    """'session: fish N reason' for every fish left out of the results."""
+    out = []
+    for name, loaded in loaded_files.items():
+        if loaded.processed_data is None:
+            continue
+        for index, reason in sorted(getattr(loaded, "excluded_fish", {}).items()):
+            label = loaded.metadata.identity_labels[index]
+            out.append(f"{name}: fish {label} {reason}")
+    return out
+
+
+def results_export_table(loaded_files: Dict,
+                         file_groups: Optional[Dict[str, str]] = None
+                         ) -> pd.DataFrame:
+    """The results table as written to CSV: every analysed fish, then a row
+    for each fish left out and why, then the settings the numbers came from."""
+    file_groups = file_groups or {}
+    table = results_table(loaded_files, file_groups)
+    table.insert(3, "Status", "ok")
+    extra = []
+    for name, loaded in loaded_files.items():
+        if loaded.processed_data is None:
+            continue
+        group = file_groups.get(name) or default_group(name)
+        for index, reason in sorted(getattr(loaded, "excluded_fish", {}).items()):
+            xy = np.asarray(loaded.trajectories[:, index, :], dtype=float)
+            extra.append({
+                "Group": group, "Session": name,
+                "Fish": loaded.metadata.identity_labels[index],
+                "Status": f"excluded: {reason}",
+                "Tracked_pct": round(float(np.isfinite(xy).all(axis=1).mean() * 100), 1),
+                "Unit": loaded.calibration.unit_name,
+                "PixelsPerUnit": round(loaded.calibration.pixels_per_unit, 4),
+            })
+    if extra:
+        table = pd.concat([table, pd.DataFrame(extra)], ignore_index=True)[table.columns]
+    settings = {}
+    for name, loaded in loaded_files.items():
+        params = getattr(loaded, "processing_params", None)
+        if params is not None:
+            settings[name] = params.export_columns()
+    for column in dict.fromkeys(k for v in settings.values() for k in v):
+        table[column] = table["Session"].map(
+            lambda session: settings.get(session, {}).get(column, np.nan))
+    return table
 
 
 def session_means(table: pd.DataFrame, columns: Optional[List[str]] = None
@@ -443,7 +498,11 @@ def minute_table(loaded_files: Dict, file_groups: Optional[Dict[str, str]] = Non
         wall_bin = (None if wall is None else
                     np.minimum((np.asarray(wall.timestamps) // BIN_SECONDS).astype(int),
                                n_bins - 1))
-        window = max(2, int(fps))
+        params = getattr(loaded, "processing_params", None)
+        if params is None:
+            from .processing import ProcessingParameters
+            params = ProcessingParameters()
+        window = params.straightness_window_frames(fps)
         for fish in loaded.processed_data:
             series = fish.metrics.get("speed_time_series")
             if series is None:
@@ -452,8 +511,9 @@ def minute_table(loaded_files: Dict, file_groups: Optional[Dict[str, str]] = Non
             speed_bin = np.minimum(
                 (np.asarray(series["time"], dtype=float) // BIN_SECONDS).astype(int),
                 n_bins - 1)
-            starts, straight = straightness_windows(
-                fish.trajectory["x"].to_numpy(), fish.trajectory["y"].to_numpy(), window)
+            starts, straight, _ = straightness_windows(
+                fish.trajectory["x"].to_numpy(), fish.trajectory["y"].to_numpy(),
+                window, fps, params.straightness_min_speed)
             straight_bin = np.minimum((starts / fps // BIN_SECONDS).astype(int), n_bins - 1)
             for index in range(n_bins):
                 length = min(BIN_SECONDS * (index + 1), duration) - BIN_SECONDS * index

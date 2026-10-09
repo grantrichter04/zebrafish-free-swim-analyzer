@@ -30,8 +30,8 @@ def test_table_has_one_row_per_fish_with_the_headline_metrics(two_groups):
     assert len(table) == 9
     assert list(table.columns) == [
         "Group", "Session", "Fish", "Tracked_pct", "Distance", "MedianSpeed",
-        "Speed99", "Straightness", "NearWall", "WallZoneArea_pct", "Unit",
-        "PixelsPerUnit"]
+        "Speed99", "Straightness", "NearWall", "WallZoneArea_pct",
+        "DistancePerTrackedMin", "Unit", "PixelsPerUnit"]
     assert table["NearWall"].isna().all(), "no arena, so no wall time yet"
     assert set(table["Group"]) == {"control", "treated"}, \
         "ungrouped sessions fall into the group their name implies"
@@ -245,7 +245,7 @@ def test_a_fish_that_stops_shows_in_its_minute_and_nowhere_else():
     sys.path.insert(0, str(_Path(__file__).resolve().parent))
     from synthetic_tracks import FPS, make_file, straight_line
 
-    moving = straight_line(n=int(60 * FPS), step_px=1.0)
+    moving = straight_line(n=int(60 * FPS), step_px=2.0)   # 1.2 BL/s, above the straightness speed
     still = np.repeat(moving[-1:], int(60 * FPS), axis=0)
     loaded = make_file(np.concatenate([moving, still]))
     loaded.processed_data = process_and_analyze_file(loaded)
@@ -254,7 +254,8 @@ def test_a_fish_that_stops_shows_in_its_minute_and_nowhere_else():
 
     assert list(minutes.index) == [1, 2]
     assert minutes.loc[1, "MedianSpeed"] > 0 and minutes.loc[2, "MedianSpeed"] == 0
-    assert minutes.loc[2, "Distance"] == pytest.approx(0.0, abs=1e-9)
+    # Smoothing spreads the stop over a couple of frames either side of it.
+    assert minutes.loc[2, "Distance"] < 0.01 * minutes.loc[1, "Distance"]
     assert minutes.loc[1, "Straightness"] == pytest.approx(1.0)
     assert np.isnan(minutes.loc[2, "Straightness"]), "a fish that did not move has no path"
 
@@ -534,3 +535,54 @@ def test_measures_are_explained_in_the_app(app):
     finally:
         window.destroy()
 
+
+
+def test_the_export_lists_left_out_fish_and_the_settings_used():
+    """A session whose fish were all left out still appears, with why, and
+    every row says which settings its numbers came from."""
+    import sys
+    from pathlib import Path as _Path
+    sys.path.insert(0, str(_Path(__file__).resolve().parent))
+    from synthetic_tracks import make_file, straight_line
+
+    good = make_file(straight_line(n=900, step_px=2.0))
+    good.processed_data = process_and_analyze_file(good)
+    poor_track = straight_line(n=900, step_px=2.0)
+    poor_track[300:] = np.nan
+    poor = make_file(poor_track)
+    poor.processed_data = process_and_analyze_file(poor)
+    assert poor.processed_data == []
+
+    table = results.results_export_table({"poor": poor, "good": good})
+    assert list(table["Status"]) == ["ok", "excluded: tracked 33% of frames, "
+                                           "below the 80% minimum"]
+    assert table.loc[1, "Tracked_pct"] == pytest.approx(33.3, abs=0.1)
+    assert (table["Setting_MinTracked_pct"] == 80.0).all()
+    assert (table["Setting_FreezeMin_s"] == 1.0).all()
+    assert np.isfinite(table.loc[0, "DistancePerTrackedMin"])
+    assert results.excluded_fish({"poor": poor}) == [
+        "poor: fish 1 tracked 33% of frames, below the 80% minimum"]
+
+
+def test_the_combined_csv_keeps_a_session_whose_fish_were_all_left_out(tmp_path):
+    import csv
+    import sys
+    from pathlib import Path as _Path
+    sys.path.insert(0, str(_Path(__file__).resolve().parent))
+    from synthetic_tracks import make_file, straight_line
+    from fish_analyzer.export import export_combined_summary_csv
+
+    poor_track = straight_line(n=900, step_px=2.0)
+    poor_track[300:] = np.nan
+    poor = make_file(poor_track)
+    poor.processed_data = process_and_analyze_file(poor)
+    good = make_file(straight_line(n=900, step_px=2.0))
+    good.processed_data = process_and_analyze_file(good)
+
+    path = tmp_path / "all.csv"
+    assert export_combined_summary_csv({"poor": poor, "good": good}, {}, path) == 2
+    rows = list(csv.DictReader(open(path, encoding="utf-8")))
+    assert rows[0]["Status"].startswith("excluded: tracked 33%")
+    assert rows[1]["Status"] == "ok"
+    assert "DistancePerTrackedMin" in rows[0] and "Setting_Smoothing_s" in rows[0]
+    assert rows[1]["Setting_Smoothing_s"] == "0.17"

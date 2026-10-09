@@ -62,73 +62,96 @@ def export_combined_summary_csv(
         result = re.sub(r'[_\-\s]*\d+$', '', name).strip()
         return result if result else name
 
-    nan = float('nan')
-
     rows = []
     for nickname, loaded_file in loaded_files.items():
-        if not loaded_file.processed_data:
-            continue
-
-        unit = loaded_file.calibration.unit_name
         group = file_groups.get(nickname) or _auto_group(nickname)
-
-        for fish in loaded_file.processed_data:
-            m = fish.metrics
-
-            # ---- trajectory metrics ----
-            row = {
-                'Group':                       group,
-                'File':                        nickname,
-                'FishID':                      fish.fish_id,
-                'Label':                       fish.identity_label,
-                'Unit':                        unit,
-                'PixelsPerUnit':               round(loaded_file.calibration.pixels_per_unit, 4),
-                'Status':                      fish.status,
-                'ValidFrames_pct':             round(fish.valid_percentage * 100, 1),
-                'ObservedDuration_s':          round(m.get('observed_duration_s', nan), 2),
-                'LongestGap_s':                round(m.get('longest_gap_s', nan), 2),
-                'TotalDistance':               round(m.get('total_distance', nan), 3),
-                'NetDisplacement':             round(m.get('net_displacement', nan), 3),
-                'MeanSpeed':                   round(m.get('mean_speed', nan), 4),
-                'SpeedP99':                    round(m.get('speed_p99', nan), 4),
-                'MedianSpeed':                 round(m.get('median_speed', nan), 4),
-                'PathStraightness':            round(m.get('mean_path_straightness', nan), 4),
-                'FreezeEpisodes_Complete':     m.get('freeze_count', 0),
-                'FreezeEpisodes_Censored':     m.get('freeze_episodes_censored', 0),
-                'FreezeTotalDuration_s':       round(m.get('freeze_total_duration_s', 0), 2),
-                'FreezeMeanDuration_s':        round(m.get('freeze_mean_duration_s', 0), 2),
-                'FreezeFraction_pct':          round(m.get('freeze_fraction_pct', 0), 2),
-                'LateralityIndex':             round(m.get('laterality_index', nan), 4),
-                'RightTurns_CW':               m.get('n_right_turns', 0),
-                'LeftTurns_CCW':               m.get('n_left_turns', 0),
-            }
-
-            rows.append(row)
-
-        # A fish that failed or was gated out has no metrics, but leaving it
-        # out of the CSV entirely means a reader counts five fish in a
-        # six-fish recording and never knows (finding B10).
-        for fish_idx, reason in sorted(
-                getattr(loaded_file, 'excluded_fish', {}).items()):
-            excluded = {k: nan for k in rows[0]} if rows else {}
-            excluded.update({
-                'Group': group, 'File': nickname, 'FishID': fish_idx,
-                'Label': _label_for(loaded_file, fish_idx), 'Unit': unit,
-                'PixelsPerUnit': round(loaded_file.calibration.pixels_per_unit, 4),
-                'Status': f'excluded: {reason}',
-            })
-            rows.append(excluded)
+        rows.extend(_fish_rows(loaded_file, nickname, group))
 
     if not rows:
         return 0
 
-    fieldnames = list(rows[0].keys())
+    fieldnames = _all_columns(rows)
     with open(output_path, 'w', newline='', encoding='utf-8') as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(rows)
 
     return len(rows)
+
+
+def _fish_rows(loaded_file, nickname: str, group: str) -> List[Dict]:
+    """One row per fish in the recording: its metrics if it was analysed, or
+    blanks and the reason if it was not.
+
+    A fish that failed or was gated out has no metrics, but leaving it out of
+    the CSV entirely means a reader counts five fish in a six-fish recording
+    and never knows (finding B10). That holds even when *every* fish in a
+    session was gated out, which a strict tracking minimum makes possible.
+    """
+    if loaded_file.processed_data is None:   # not analysed (or results cleared)
+        return []
+    nan = float('nan')
+    unit = loaded_file.calibration.unit_name
+    params = getattr(loaded_file, 'processing_params', None)
+    settings = params.export_columns() if params is not None else {}
+    fixed = {
+        'Group': group, 'File': nickname, 'Unit': unit,
+        'PixelsPerUnit': round(loaded_file.calibration.pixels_per_unit, 4),
+    }
+    rows = []
+    for fish in loaded_file.processed_data or []:
+        m = fish.metrics
+        rows.append({
+            **fixed,
+            'FishID': fish.fish_id,
+            'Label': fish.identity_label,
+            'Status': fish.status,
+            'ValidFrames_pct': round(fish.valid_percentage * 100, 1),
+            'ObservedDuration_s': round(m.get('observed_duration_s', nan), 2),
+            'LongestGap_s': round(m.get('longest_gap_s', nan), 2),
+            'TotalDistance': round(m.get('total_distance', nan), 3),
+            'DistancePerTrackedMin': round(m.get('distance_per_tracked_min', nan), 3),
+            'NetDisplacement': round(m.get('net_displacement', nan), 3),
+            'MeanSpeed': round(m.get('mean_speed', nan), 4),
+            'SpeedP99': round(m.get('speed_p99', nan), 4),
+            'MedianSpeed': round(m.get('median_speed', nan), 4),
+            'PathStraightness': round(m.get('mean_path_straightness', nan), 4),
+            'StraightnessSeconds_pct': round(m.get('straightness_windows_used_pct', nan), 1),
+            'FreezeEpisodes_Complete': m.get('freeze_count', 0),
+            'FreezeEpisodes_Censored': m.get('freeze_episodes_censored', 0),
+            'FreezeTotalDuration_s': round(m.get('freeze_total_duration_s', 0), 2),
+            'FreezeMeanDuration_s': round(m.get('freeze_mean_duration_s', 0), 2),
+            'FreezeFraction_pct': round(m.get('freeze_fraction_pct', 0), 2),
+            'LateralityIndex': round(m.get('laterality_index', nan), 4),
+            'RightTurns_CW': m.get('n_right_turns', 0),
+            'LeftTurns_CCW': m.get('n_left_turns', 0),
+            **settings,
+        })
+    columns = list(rows[0]) if rows else None
+    for fish_idx, reason in sorted(
+            getattr(loaded_file, 'excluded_fish', {}).items()):
+        row = {k: nan for k in columns} if columns else {}
+        row.update({
+            **fixed,
+            'FishID': fish_idx,
+            'Label': _label_for(loaded_file, fish_idx),
+            'Status': f'excluded: {reason}',
+            'ValidFrames_pct': _tracked_pct(loaded_file, fish_idx),
+            **settings,
+        })
+        rows.append(row)
+    return rows
+
+
+def _all_columns(rows: List[Dict]) -> List[str]:
+    """Every column any row has, in first-seen order. A session whose fish
+    were all excluded has only the identifying columns, and may come first."""
+    return list(dict.fromkeys(k for row in rows for k in row))
+
+
+def _tracked_pct(loaded_file, fish_idx: int) -> float:
+    xy = np.asarray(loaded_file.trajectories[:, fish_idx, :], dtype=float)
+    return round(float(np.isfinite(xy).all(axis=1).mean() * 100), 1) if len(xy) else 0.0
 
 
 def _label_for(loaded_file, fish_idx: int) -> str:
@@ -148,11 +171,13 @@ def export_individual_metrics_csv(
     Export per-fish individual trajectory metrics to CSV.
 
     Columns: Group, File, FishID, Label, Unit, ValidFrames_pct, TotalDistance,
-             ObservedDuration_s, LongestGap_s, NetDisplacement, MeanSpeed,
-             SpeedP99, MedianSpeed, PathStraightness,
+             DistancePerTrackedMin, ObservedDuration_s, LongestGap_s,
+             NetDisplacement, MeanSpeed, SpeedP99, MedianSpeed,
+             PathStraightness, StraightnessSeconds_pct,
              FreezeEpisodes_Complete, FreezeEpisodes_Censored,
              FreezeTotalDuration_s, FreezeMeanDuration_s, FreezeFraction_pct,
-             LateralityIndex, RightTurns_CW, LeftTurns_CCW
+             LateralityIndex, RightTurns_CW, LeftTurns_CCW, then the
+             Setting_* columns the numbers were computed with
 
     Parameters
     ----------
@@ -176,46 +201,16 @@ def export_individual_metrics_csv(
 
     rows = []
     for nickname, loaded_file in loaded_files.items():
-        if not loaded_file.processed_data:
-            continue
-        unit = loaded_file.calibration.unit_name
         if file_groups is not None:
             group = file_groups.get(nickname) or _auto_group(nickname)
         else:
             group = ''
-        for fish in loaded_file.processed_data:
-            m = fish.metrics
-            rows.append({
-                'Group': group,
-                'File': nickname,
-                'FishID': fish.fish_id,
-                'Label': fish.identity_label,
-                'Unit': unit,
-                'PixelsPerUnit': round(loaded_file.calibration.pixels_per_unit, 4),
-                'Status': fish.status,
-                'ValidFrames_pct': round(fish.valid_percentage * 100, 1),
-                'ObservedDuration_s': round(m.get('observed_duration_s', float('nan')), 2),
-                'LongestGap_s': round(m.get('longest_gap_s', float('nan')), 2),
-                'TotalDistance': round(m.get('total_distance', float('nan')), 3),
-                'NetDisplacement': round(m.get('net_displacement', float('nan')), 3),
-                'MeanSpeed': round(m.get('mean_speed', float('nan')), 4),
-                'SpeedP99': round(m.get('speed_p99', float('nan')), 4),
-                'MedianSpeed': round(m.get('median_speed', float('nan')), 4),
-                'PathStraightness': round(m.get('mean_path_straightness', float('nan')), 4),
-                'FreezeEpisodes_Complete': m.get('freeze_count', 0),
-                'FreezeEpisodes_Censored': m.get('freeze_episodes_censored', 0),
-                'FreezeTotalDuration_s': round(m.get('freeze_total_duration_s', 0), 2),
-                'FreezeMeanDuration_s': round(m.get('freeze_mean_duration_s', 0), 2),
-                'FreezeFraction_pct': round(m.get('freeze_fraction_pct', 0), 2),
-                'LateralityIndex': round(m.get('laterality_index', float('nan')), 4),
-                'RightTurns_CW': m.get('n_right_turns', 0),
-                'LeftTurns_CCW': m.get('n_left_turns', 0),
-            })
+        rows.extend(_fish_rows(loaded_file, nickname, group))
 
     if not rows:
         return 0
 
-    fieldnames = list(rows[0].keys())
+    fieldnames = _all_columns(rows)
     with open(output_path, 'w', newline='', encoding='utf-8') as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()

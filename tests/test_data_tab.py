@@ -394,3 +394,33 @@ def test_outline_dialog_wants_three_corners(app, monkeypatch):
     finally:
         if dialog.window.winfo_exists():
             dialog.window.destroy()
+
+
+def test_the_analysis_settings_reach_the_parameters_and_follow_the_unit(
+        app, quiet, tmp_path, synthetic_npy):
+    """Every choice that changes what a number means is a box on this tab,
+    and the straightness speed converts with the unit like the freeze one."""
+    app._add_path(_make_session(tmp_path, synthetic_npy, "control"))
+    app.min_tracked_var.set("60")
+    app.freeze_min_var.set("2")
+    app.smoothing_var.set("0")
+    params = app._get_processing_parameters_from_gui()
+    assert params.min_valid_percentage == pytest.approx(0.6)
+    assert params.min_freeze_seconds == 2.0
+    assert params.smoothing_seconds == 0.0
+    assert params.straightness_min_speed == 1.0
+
+    app.units_choice.set("cm")
+    app.cm_pixels_var.set("680")
+    app.cm_length_var.set("20")
+    app._apply_units()
+    assert app.straight_unit_label["text"] == "cm/s."
+    assert float(app.straight_speed_var.get()) == pytest.approx(1.176, abs=0.005)
+
+
+def test_a_setting_that_is_not_a_number_is_refused_by_name(
+        app, quiet, tmp_path, synthetic_npy):
+    app._add_path(_make_session(tmp_path, synthetic_npy, "control"))
+    app.freeze_min_var.set("one")
+    with pytest.raises(ValueError, match="shortest freeze"):
+        app._get_processing_parameters_from_gui()

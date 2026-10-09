@@ -1,5 +1,30 @@
 # Changelog
 
+## Unreleased - measures that tracker wobble and dropout cannot move
+
+A review against simulated fish found that the tracker's ~1 px frame-to-frame
+wobble and gaps in tracking could bias the measures whenever groups differ in
+activity or in how well they were tracked. These are now accounted for; every
+setting is a box on Sessions & Units and is written into every export as a
+`Setting_` column.
+
+- **Positions are smoothed over 0.17 s** before any measure is computed,
+  within stretches of continuous tracking only (0 turns it off). Unsmoothed,
+  a motionless fish read 0.3-0.7 BL/s and was frozen 3-64% of the time
+  instead of 100%, and a fish swimming 0.5 BL/s read 17-67% too far. Normal
+  swimming changes by about 2%. This is denoising the positions, not the
+  display smoothing on Minute by minute, which stays off unless chosen.
+- **Fish tracked less than 80% of the time are left out** (was 1%), and named
+  with their tracked share in the run report, on Results and in the exports.
+  A session whose fish were all left out still appears in the exports.
+- **A freeze must last 1 s** (was 5 frames, about 0.17 s), and a gap of up to
+  0.5 s does not break one if the fish is in the same place either side, so
+  dropout cannot make a group look like it freezes less.
+- **Path straightness uses only seconds faster than 1 BL/s.** Still seconds
+  scored near 0 from wobble alone, so a fish that rested a lot looked like
+  it swam tortuously. `StraightnessSeconds_pct` is exported.
+- **`DistancePerTrackedMin`** is exported beside total distance.
+
 ## 2.2.0 - one install, video to results
 
 **Tracking is part of the app.** A new Tracking tab takes a folder of videos
