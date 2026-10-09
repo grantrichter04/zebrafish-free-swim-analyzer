@@ -148,3 +148,38 @@ def first_and_last_tracked(x: np.ndarray, y: np.ndarray) -> Tuple[int, int]:
     if tracked.size == 0:
         return -1, -1
     return int(tracked[0]), int(tracked[-1])
+
+
+def smooth_within_segments(x: np.ndarray, y: np.ndarray,
+                           window_frames: int) -> Tuple[np.ndarray, np.ndarray]:
+    """Centred running mean of positions, inside each tracked segment only.
+
+    Why: idtracker.ai's centroid wobbles by around a pixel from frame to frame
+    even when the fish is still. Frame-to-frame speed turns that wobble into
+    movement, so a motionless fish reads as swimming slowly, never freezes,
+    and has a tortuous path. A mean over a few frames removes most of the
+    wobble and leaves real swimming alone.
+
+    The window never reaches across a gap, so nothing is invented there. Near
+    either end of a segment it shrinks *symmetrically* (to the frames
+    available on both sides), which leaves a fish moving in a straight line
+    at constant speed exactly where it was. Gap frames stay NaN.
+
+    ``window_frames`` below 2 returns copies of the input unchanged; an even
+    window is rounded up to the next odd number so it stays centred.
+    """
+    x = np.asarray(x, dtype=float).copy()
+    y = np.asarray(y, dtype=float).copy()
+    if window_frames < 2:
+        return x, y
+    half = window_frames // 2
+    for a, b in contiguous_tracked_segments(x, y, min_length=3):
+        idx = np.arange(a, b)
+        h = np.minimum(half, np.minimum(idx - a, b - 1 - idx))
+        for values in (x, y):
+            seg = values[a:b]
+            csum = np.concatenate(([0.0], np.cumsum(seg)))
+            lo = idx - a - h
+            hi = idx - a + h + 1
+            values[a:b] = (csum[hi] - csum[lo]) / (hi - lo)
+    return x, y

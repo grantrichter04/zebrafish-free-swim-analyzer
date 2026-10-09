@@ -119,8 +119,10 @@ def test_path_straightness_is_one_for_a_straight_line():
 
 def test_path_straightness_matches_the_chord_over_arc_ratio():
     """A 1 s window on a constant-rate circler holds 30 samples = 29 steps,
-    so straightness is sin(29w/2) / (29 sin(w/2))."""
-    m = metrics_for(circler(n=600, omega=OMEGA))
+    so straightness is sin(29w/2) / (29 sin(w/2)). Smoothing off: this pins
+    the arithmetic, and smoothing shrinks the circle at its two ends."""
+    m = metrics_for(circler(n=600, omega=OMEGA),
+                    ProcessingParameters(smoothing_seconds=0))
     expected = np.sin(29 * OMEGA / 2) / (29 * np.sin(OMEGA / 2))
     assert m["mean_path_straightness"] == pytest.approx(expected, rel=1e-9)
 
@@ -258,16 +260,104 @@ def test_dropout_does_not_inflate_the_freeze_episode_count():
     """B5: NaN speed used to count as not-frozen, so every gap severed the run
     and one motionless fish reported 22 episodes.
 
-    One episode is not recoverable either — a run that ends because the tracker
-    blinked might be one episode or half of a longer one. So the episodes are
-    reported as censored, the time-frozen fraction still stands, and nothing
-    claims a count that the data cannot support.
+    A one-frame gap the fish sits still across cannot hide a swim, so a short
+    still gap is bridged and the fish reads as what it did: one freeze.
     """
     traj = with_scattered_dropout(stationary(n=600, jitter_px=0.0), fraction=0.05)
     m = metrics_for(traj)
-    assert m["freeze_count"] == 0
-    assert m["freeze_episodes_censored"] > 0
+    assert m["freeze_count"] == 1
+    assert m["freeze_episodes_censored"] == 0
     assert m["freeze_fraction_pct"] > 95.0
+
+
+def test_a_long_gap_still_censors_a_freeze():
+    """Past freeze_bridge_seconds nothing is known about the fish, so the runs
+    either side are censored rather than joined."""
+    traj = with_dropout(stationary(n=600, jitter_px=0.0), 200, 260)   # 2 s
+    m = metrics_for(traj)
+    assert m["freeze_count"] == 0
+    assert m["freeze_episodes_censored"] == 2
+
+
+def test_a_gap_the_fish_moved_across_is_not_bridged():
+    """Still, a 3-frame gap during which it moved 1 BL, still again: two runs,
+    each censored at the gap -- not one freeze through a move."""
+    traj = stationary(n=600, jitter_px=0.0)
+    traj[300:, 0, 0] += BODY_LENGTH_PX
+    traj = with_dropout(traj, 299, 302)
+    m = metrics_for(traj)
+    assert m["freeze_count"] == 0
+    assert m["freeze_episodes_censored"] == 2
+
+
+def test_a_short_stop_is_not_a_freeze():
+    """Half a second below the threshold is a pause, not a freeze, at the
+    1 s minimum."""
+    n = 600
+    step = np.full(n, 4.0)
+    step[300:315] = 0.0
+    traj = np.stack([100.0 + np.cumsum(step), np.full(n, 500.0)], axis=1)[:, None, :]
+    assert metrics_for(traj)["freeze_count"] == 0
+    longer = ProcessingParameters(min_freeze_seconds=0.3)
+    assert metrics_for(traj, longer)["freeze_count"] == 1
+
+
+def test_smoothing_lets_a_still_fish_with_tracker_wobble_freeze():
+    """Unsmoothed, centroid wobble reads as movement and a motionless fish
+    never stays below 0.5 BL/s for a second.
+
+    The wobble here is 0.01 body lengths (0.5 px at this body length), twice
+    the 0.003-0.005 measured on real sessions. The default 0.1 s copes with
+    that; it does not cope with 0.02 body lengths, which needs 0.17 s."""
+    traj = stationary(n=900, jitter_px=0.5)
+    raw = metrics_for(traj, ProcessingParameters(smoothing_seconds=0))
+    smoothed = metrics_for(traj)
+    assert raw["freeze_fraction_pct"] < 20.0
+    assert smoothed["freeze_fraction_pct"] > 90.0
+
+    coarse = stationary(n=900, jitter_px=1.0)
+    assert metrics_for(coarse)["freeze_fraction_pct"] < 20.0, \
+        "the limit of the default, stated in the README"
+    longer = metrics_for(coarse, ProcessingParameters(smoothing_seconds=0.17))
+    assert longer["freeze_fraction_pct"] > 90.0
+
+
+def test_smoothing_leaves_steady_swimming_alone():
+    traj = straight_line(n=600, step_px=2.0)
+    m = metrics_for(traj)
+    assert m["total_distance"] == pytest.approx(599 * 2.0 / BODY_LENGTH_PX)
+    assert m["median_speed"] == pytest.approx(2.0 * FPS / BODY_LENGTH_PX)
+
+
+def test_smoothing_does_not_reach_across_a_gap():
+    """A fish that vanishes and reappears 2 BL away: the frames beside the gap
+    must stay where they were, not be pulled toward the other side."""
+    from fish_analyzer.segments import smooth_within_segments
+    x = np.r_[np.zeros(20), np.nan, np.full(20, 2.0)]
+    y = np.zeros_like(x)
+    sx, _ = smooth_within_segments(x, y, 5)
+    assert np.isnan(sx[20])
+    assert np.allclose(sx[:20], 0.0) and np.allclose(sx[21:], 2.0)
+
+
+def test_straightness_ignores_seconds_the_fish_was_still():
+    """Swims straight for 10 s, then sits for 10 s with tracker wobble. The
+    still seconds' wobble used to drag straightness towards 0."""
+    moving = straight_line(n=300, step_px=4.0)
+    still = np.repeat(moving[-1:], 300, axis=0) + np.random.default_rng(3).normal(
+        0, 1.0, (300, 1, 2))
+    m = metrics_for(np.concatenate([moving, still]))
+    assert m["mean_path_straightness"] == pytest.approx(1.0, abs=0.01)
+    assert 40.0 < m["straightness_windows_used_pct"] < 60.0
+
+
+def test_distance_per_tracked_minute_does_not_penalise_dropout():
+    full = straight_line(n=1800, step_px=2.0)
+    gappy = with_dropout(full.copy(), 600, 780)      # 10% untracked
+    a, b = metrics_for(full), metrics_for(gappy)
+    assert b["total_distance"] < 0.92 * a["total_distance"]
+    assert b["distance_per_tracked_min"] == pytest.approx(
+        a["distance_per_tracked_min"], rel=0.01)
 
 
 def test_freeze_fraction_and_freeze_duration_reconcile_exactly():
@@ -446,17 +536,17 @@ def test_arena_pixel_and_body_length_vertices_are_y_mirrors():
 # Quality gates and failure reporting
 # =============================================================================
 
-def test_a_fish_tracked_in_one_percent_of_frames_is_still_exported():
-    """Pins the current min_valid_percentage=0.01 policy. Metrics computed
-    from 9 real steps are exported alongside metrics from 18,000 frames, with
-    only ValidFrames_pct to tell them apart."""
+def test_a_poorly_tracked_fish_is_excluded_and_says_why():
+    """B11: a fish tracked 1% of the time used to be averaged in beside fish
+    tracked throughout. Below 80% it is now left out, with its share."""
     traj = straight_line(n=1000, step_px=2.0)
-    traj[10:, 0, :] = np.nan
+    traj[700:, 0, :] = np.nan
     loaded = make_file(traj)
     fish = process_and_analyze_file(loaded, ProcessingParameters.default_for_fish())
-    assert len(fish) == 1
-    assert fish[0].valid_percentage == pytest.approx(0.01)
-    assert np.isfinite(fish[0].metrics["mean_speed"])
+    assert fish == []
+    assert "70%" in loaded.excluded_fish[0] and "80%" in loaded.excluded_fish[0]
+    lenient = ProcessingParameters(min_valid_percentage=0.5)
+    assert len(process_and_analyze_file(make_file(traj), lenient)) == 1
 
 
 def test_a_failed_direction_calculation_is_distinguishable_from_a_real_zero():

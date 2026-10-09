@@ -208,6 +208,10 @@ class DataTabMixin:
         tk.Entry(freeze, textvariable=self.rest_threshold_var, width=7).pack(side="left", padx=5)
         self.rest_unit_label = tk.Label(freeze, text="BL/s")
         self.rest_unit_label.pack(side="left")
+        tk.Label(freeze, text="for at least").pack(side="left")
+        self.freeze_min_var = tk.StringVar(value="1")
+        tk.Entry(freeze, textvariable=self.freeze_min_var, width=5).pack(side="left", padx=5)
+        tk.Label(freeze, text="s").pack(side="left")
 
         # Progress bar (hidden until analysis runs)
         self.analysis_progress = ttk.Progressbar(
@@ -215,10 +219,31 @@ class DataTabMixin:
         self.analysis_progress.pack(side="left", padx=10)
         self.analysis_progress.pack_forget()
 
+        # The other choices that decide what the numbers mean. Each is
+        # written into every export beside the results it produced.
+        more = tk.Frame(frame)
+        more.pack(fill="x", padx=10, pady=(0, 4))
+        tk.Label(more, text="Leave out fish tracked less than").pack(side="left")
+        self.min_tracked_var = tk.StringVar(value="80")
+        tk.Entry(more, textvariable=self.min_tracked_var, width=5).pack(side="left", padx=5)
+        tk.Label(more, text="% of the time.").pack(side="left")
+        tk.Label(more, text="   Straightness uses seconds faster than").pack(side="left")
+        self.straight_speed_var = tk.StringVar(value="1")
+        tk.Entry(more, textvariable=self.straight_speed_var, width=6).pack(side="left", padx=5)
+        self.straight_unit_label = tk.Label(more, text="BL/s.")
+        self.straight_unit_label.pack(side="left")
+        tk.Label(more, text="   Smooth positions over").pack(side="left")
+        self.smoothing_var = tk.StringVar(value="0.1")
+        tk.Entry(more, textvariable=self.smoothing_var, width=5).pack(side="left", padx=5)
+        tk.Label(more, text="s (0 = off).").pack(side="left")
+
         tk.Label(
             frame, justify=tk.LEFT, font=("Arial", 9), fg="gray",
             text="Analyses every session: activity, time near the wall and "
-                 "shoaling. The Results and Shoaling tabs fill in when it finishes."
+                 "shoaling. The Results and Shoaling tabs fill in when it finishes.\n"
+                 "Smoothing removes the tracker's frame-to-frame wobble, which "
+                 "otherwise makes a still fish look slowly moving and a slow "
+                 "fish's path look wiggly."
         ).pack(anchor="w", padx=10, pady=(0, 8))
 
     # =========================================================================
@@ -668,6 +693,7 @@ class DataTabMixin:
         cleared = self._invalidate_results_for(changed)
         self._applied_units = (unit, pixels_per_unit)
         self.rest_unit_label.config(text=f"{unit}/s")
+        self.straight_unit_label.config(text=f"{unit}/s.")
         self._update_sessions_table()
         self._update_units_status()
         if cleared:
@@ -682,17 +708,17 @@ class DataTabMixin:
 
     def _convert_freeze_threshold(self, old_pixels_per_unit: float,
                                   new_pixels_per_unit: float):
-        """Keep the freeze threshold at the same physical speed.
+        """Keep the freeze and straightness speeds at the same physical speed.
 
         0.5 BL/s and 0.5 cm/s are very different speeds; leaving the number
         alone when the unit changes would silently redefine "frozen".
         """
-        try:
-            threshold = float(self.rest_threshold_var.get())
-        except ValueError:
-            return
-        converted = threshold * old_pixels_per_unit / new_pixels_per_unit
-        self.rest_threshold_var.set(f"{converted:.3g}")
+        for var in (self.rest_threshold_var, self.straight_speed_var):
+            try:
+                speed = float(var.get())
+            except ValueError:
+                continue
+            var.set(f"{speed * old_pixels_per_unit / new_pixels_per_unit:.3g}")
 
     def _update_units_status(self):
         """Say what scale is in use, and whether the controls differ from it."""
@@ -850,9 +876,12 @@ class DataTabMixin:
                 succeeded.append(nickname)
 
                 if len(fish_list) < loaded_file.n_fish:
+                    why = "; ".join(
+                        f"fish {loaded_file.metadata.identity_labels[i]} {reason}"
+                        for i, reason in sorted(loaded_file.excluded_fish.items()))
                     degraded.append(
                         f"{nickname}: only {len(fish_list)} of "
-                        f"{loaded_file.n_fish} fish analyzed"
+                        f"{loaded_file.n_fish} fish analyzed ({why})"
                     )
                 for problem in (self._analyse_wall_time(nickname),
                                 self._analyse_shoaling(nickname)):
@@ -931,15 +960,22 @@ class DataTabMixin:
 
     def _get_processing_parameters_from_gui(self) -> ProcessingParameters:
         """Read processing parameters from the GUI inputs."""
-        try:
-            rest_threshold = float(self.rest_threshold_var.get())
-        except ValueError:
-            raise ValueError("The freeze speed threshold is not a number.") from None
+        def number(var, what: str) -> float:
+            try:
+                return float(var.get())
+            except ValueError:
+                raise ValueError(f"{what} is not a number.") from None
 
         params = ProcessingParameters(
-            min_valid_points=10,
-            min_valid_percentage=0.01,
-            rest_speed_threshold=rest_threshold,
+            min_valid_percentage=number(
+                self.min_tracked_var, "The minimum tracked percentage") / 100.0,
+            rest_speed_threshold=number(
+                self.rest_threshold_var, "The freeze speed threshold"),
+            min_freeze_seconds=number(
+                self.freeze_min_var, "The shortest freeze"),
+            straightness_min_speed=number(
+                self.straight_speed_var, "The straightness speed"),
+            smoothing_seconds=number(self.smoothing_var, "The smoothing"),
         )
         params.validate()
         return params

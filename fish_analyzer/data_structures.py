@@ -177,6 +177,9 @@ class LoadedTrajectoryFile:
     #: an exception). Populated by process_and_analyze_file so the CSV can show
     #: a row for every fish in the recording rather than silently dropping one.
     excluded_fish: Dict[int, str] = field(default_factory=dict)
+    #: The ProcessingParameters processed_data was computed with, written into
+    #: every export alongside the numbers.
+    processing_params: Optional[Any] = None
 
     def __post_init__(self):
         """Validate trajectory array shape after initialization."""

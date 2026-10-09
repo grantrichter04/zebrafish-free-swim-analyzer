@@ -12,8 +12,19 @@ KEY TRANSFORMATIONS:
 3. Calculate derivatives (speed, acceleration)
 4. Compute behavioral metrics
 
-Positions are used as tracked. There is no smoothing step: it changed the
-surviving metrics by about 1% and only made two runs of one video disagree.
+LIGHT SMOOTHING (2026-10-09):
+Positions get a centred running mean over smoothing_seconds (0.1 s, three
+frames at 30 fps) before any metric is computed, inside each stretch of
+continuous tracking only. An earlier version dropped smoothing because it
+moved the metrics by about 1%; that was measured on fish swimming at normal
+speed, where the tracker's ~1 px centroid wobble barely matters. It matters
+for slow and still fish. Simulated at a 75 px body length, unsmoothed, 0.5-1
+px of wobble makes a motionless fish read 0.3-0.7 BL/s -- right at the freeze
+threshold, so it was frozen 3-64% of the time instead of 100% -- inflates the
+distance of a fish swimming 0.5 BL/s by 17-67%, and drops path straightness
+towards 0. Five frames removes nearly all of that; a fish swimming 2.5 BL/s
+keeps its median speed, and its distance moves by about 2% (sharp turns are
+cut slightly short).
 
 METRICS CALCULATED:
 - Distance: total path length, net displacement
@@ -49,7 +60,7 @@ from traja import TrajaDataFrame
 from .data_structures import LoadedTrajectoryFile
 from .segments import (backward_speed_slices, contiguous_tracked_segments,
                        first_and_last_tracked, longest_gap_frames, run_lengths,
-                       tracked_frame_count)
+                       smooth_within_segments, tracked_frame_count)
 
 
 @dataclass
@@ -57,10 +68,24 @@ class ProcessingParameters:
     """
     Parameters controlling how trajectories are processed.
 
+    Speeds are in the session's unit per second (BL/s or cm/s); the GUI
+    converts them when the unit changes.
+
+    QUALITY GATE:
+    A fish tracked in fewer than min_valid_percentage of frames is excluded,
+    and listed in the export with its tracked share, rather than averaged in
+    beside fish that were seen all the time.
+
+    SMOOTHING:
+    smoothing_seconds of centred running mean on positions, never across a
+    tracking gap. 0 turns it off. See the module docstring for why.
+
     FREEZE DETECTION:
-    Fish are considered "frozen" (immobile) when their speed drops below
-    rest_speed_threshold for at least min_freeze_frames consecutive frames.
-    Freezing is a key anxiety-related behavior in zebrafish.
+    Fish are considered "frozen" (immobile) when their speed stays below
+    rest_speed_threshold for at least min_freeze_seconds. 1 s is the usual
+    adult criterion; anything much shorter counts slow swimming as freezing.
+    A tracking gap of up to freeze_bridge_seconds does not end a freeze if
+    the fish is in the same place on both sides of it.
 
     TURNING BIAS:
     rest_speed_threshold doubles as the gate on turn counting: a heading
@@ -71,12 +96,18 @@ class ProcessingParameters:
     Computed over a sliding window (straightness_window_seconds). For each
     window: straightness = net displacement / path distance. Values near 1.0
     indicate straight swimming; values near 0 indicate circling or meandering.
+    Only windows in which the fish averaged at least straightness_min_speed
+    count: in a slow or still window, what is left of the tracker's wobble
+    dominates the path and straightness says nothing about how it swims.
     """
     min_valid_points: int = 10
-    min_valid_percentage: float = 0.01
-    rest_speed_threshold: float = 0.5       # BL/s below which fish is "frozen"
-    min_freeze_frames: int = 5              # Minimum consecutive frames to count as a freeze
+    min_valid_percentage: float = 0.80
+    rest_speed_threshold: float = 0.5       # unit/s below which fish is "frozen"
+    min_freeze_seconds: float = 1.0         # Shortest stillness that counts as a freeze
+    freeze_bridge_seconds: float = 0.5      # Longest tracking gap a freeze may span
     straightness_window_seconds: float = 1.0  # Window for path straightness calculation
+    straightness_min_speed: float = 1.0     # unit/s a window must average to count
+    smoothing_seconds: float = 0.1          # Running mean on positions; 0 = off
 
     def validate(self):
         """Check that all parameters are valid. Raises ValueError if not."""
@@ -84,19 +115,45 @@ class ProcessingParameters:
             raise ValueError(f"Valid percentage must be between 0 and 1, got {self.min_valid_percentage}")
         if self.rest_speed_threshold < 0:
             raise ValueError(f"Rest threshold must be non-negative, got {self.rest_speed_threshold}")
+        if self.min_freeze_seconds <= 0:
+            raise ValueError(f"Minimum freeze length must be positive, got {self.min_freeze_seconds}")
+        if self.freeze_bridge_seconds < 0:
+            raise ValueError(f"Freeze gap bridging must be zero or more, got {self.freeze_bridge_seconds}")
         if self.straightness_window_seconds <= 0:
             raise ValueError(f"Straightness window must be positive, got {self.straightness_window_seconds}")
+        if self.straightness_min_speed < 0:
+            raise ValueError(f"Straightness speed must be non-negative, got {self.straightness_min_speed}")
+        if self.smoothing_seconds < 0:
+            raise ValueError(f"Smoothing must be zero or more, got {self.smoothing_seconds}")
+
+    def freeze_frames(self, frame_rate: float) -> int:
+        """min_freeze_seconds as a whole number of frames, at least 1."""
+        return max(1, int(round(self.min_freeze_seconds * frame_rate)))
+
+    def smoothing_frames(self, frame_rate: float) -> int:
+        """smoothing_seconds as an odd number of frames; 1 means off."""
+        frames = int(round(self.smoothing_seconds * frame_rate))
+        return frames + 1 if frames % 2 == 0 else frames
+
+    def straightness_window_frames(self, frame_rate: float) -> int:
+        return max(2, int(self.straightness_window_seconds * frame_rate))
+
+    def export_columns(self) -> Dict[str, float]:
+        """The settings every export carries, so a number in a CSV can be
+        traced back to how it was made. Speeds are in the row's Unit/s."""
+        return {
+            'Setting_MinTracked_pct': round(self.min_valid_percentage * 100, 1),
+            'Setting_Smoothing_s': self.smoothing_seconds,
+            'Setting_FreezeSpeed': self.rest_speed_threshold,
+            'Setting_FreezeMin_s': self.min_freeze_seconds,
+            'Setting_FreezeBridgesGapsUpTo_s': self.freeze_bridge_seconds,
+            'Setting_StraightnessMinSpeed': self.straightness_min_speed,
+        }
 
     @classmethod
     def default_for_fish(cls) -> 'ProcessingParameters':
         """Get default parameters that work well for fish tracking."""
-        return cls(
-            min_valid_points=10,
-            min_valid_percentage=0.01,
-            rest_speed_threshold=0.5,
-            min_freeze_frames=5,
-            straightness_window_seconds=1.0,
-        )
+        return cls()
 
 
 @dataclass
@@ -186,8 +243,8 @@ class TrajectoryProcessor:
                     processed_fish.append(fish_traj)
                     print(f"  Fish {fish_idx}: [ok] ({fish_traj.valid_percentage:.1%} valid data)")
                 else:
-                    self.excluded[fish_idx] = "insufficient valid data"
-                    print(f"  Fish {fish_idx}: [skip] (insufficient valid data)")
+                    self.excluded[fish_idx] = self._last_exclusion
+                    print(f"  Fish {fish_idx}: [skip] ({self._last_exclusion})")
             except Exception as e:
                 self.excluded[fish_idx] = f"failed: {e}"
                 print(f"  Fish {fish_idx}: [FAILED] (error: {e})")
@@ -200,6 +257,9 @@ class TrajectoryProcessor:
         """Process trajectory for a single fish."""
         raw_coords = self.file.trajectories[:, fish_idx, :]
         transformed_coords = self._transform_coordinates(raw_coords)
+        transformed_coords[:, 0], transformed_coords[:, 1] = smooth_within_segments(
+            transformed_coords[:, 0], transformed_coords[:, 1],
+            self.params.smoothing_frames(self.file.calibration.frame_rate))
         df = self._create_dataframe_with_time(transformed_coords)
 
         valid_mask = ~(df['x'].isna() | df['y'].isna())
@@ -208,8 +268,12 @@ class TrajectoryProcessor:
         valid_pct = n_valid / n_total if n_total > 0 else 0
 
         if n_valid < self.params.min_valid_points:
+            self._last_exclusion = f"only {n_valid} tracked frames"
             return None
         if valid_pct < self.params.min_valid_percentage:
+            self._last_exclusion = (
+                f"tracked {valid_pct:.0%} of frames, below the "
+                f"{self.params.min_valid_percentage:.0%} minimum")
             return None
 
         trj = TrajaDataFrame(df)
@@ -307,8 +371,17 @@ class MetricsCalculator:
 
         # Freeze analysis
         fish.metrics.update(
-            self._calc_freeze_metrics(speed_series, frame_rate, segments)
+            self._calc_freeze_metrics(speed_series, frame_rate, segments, x, y)
         )
+
+        # Distance as a rate over the time the fish was actually seen, so a
+        # fish tracked 85% of the time is not read as 15% less active than
+        # the same fish tracked throughout. Same denominator as the freeze
+        # fraction: the frames that carry a speed.
+        observed_min = fish.metrics['observed_duration_s'] / 60.0
+        fish.metrics['distance_per_tracked_min'] = (
+            fish.metrics['total_distance'] / observed_min
+            if observed_min > 0 else np.nan)
 
         # Turning bias and path straightness both catch their own exceptions
         # and return NaN. They flag it with a private '_failed' key, which is
@@ -418,13 +491,14 @@ class MetricsCalculator:
     # =========================================================================
 
     def _calc_freeze_metrics(self, speed_series: np.ndarray, frame_rate: float,
-                             segments: List[tuple]) -> Dict[str, Any]:
+                             segments: List[tuple], x: np.ndarray,
+                             y: np.ndarray) -> Dict[str, Any]:
         """
         Detect freezing episodes and compute freeze metrics.
 
-        A freeze is a run of at least min_freeze_frames consecutive frames,
-        *within one stretch of continuous tracking*, where speed stays below
-        rest_speed_threshold.
+        A freeze is a run of at least min_freeze_seconds of consecutive frames,
+        *within one stretch of continuous tracking* (short still gaps aside,
+        see below), where speed stays below rest_speed_threshold.
 
         WHY SEGMENTS (finding B5)
         -------------------------
@@ -453,9 +527,24 @@ class MetricsCalculator:
           still count toward the time-frozen totals, but it is not counted as
           an episode.
 
-        A fish that froze once through 5% scattered dropout now reports 0
-        complete episodes, 22 censored, and ~100% of observed time frozen --
-        which is exactly what is known about it.
+        SHORT GAPS INSIDE A FREEZE (2026-10-09)
+        ---------------------------------------
+        With a 1 s minimum, a freeze found strictly inside segments cannot
+        survive scattered dropout: a still fish losing one frame in twenty has
+        no 1 s stretch of continuous tracking, and read as ~50% frozen instead
+        of ~100%. A poorly tracked group would then look like it freezes less.
+
+        So a gap of up to freeze_bridge_seconds is bridged when the fish is in
+        the same place on both sides (moving slower than the freeze threshold
+        across it): it cannot have swum away and back in that time. A bridged
+        gap joins the runs on either side into one episode. Its frames count
+        toward the episode's *length* -- the episode did last that long -- but
+        not toward time frozen, which stays over observed frames only so the
+        identity below still holds. A longer gap, or one the fish moved
+        across, still ends the run and censors it.
+
+        A fish that froze once through 5% scattered dropout now reports 1
+        complete episode and ~100% of observed time frozen.
 
         DENOMINATORS (finding B6)
         -------------------------
@@ -473,14 +562,32 @@ class MetricsCalculator:
         we cannot claim a fish was frozen during frames we could not see.
         """
         threshold = self.params.rest_speed_threshold
-        min_frames = self.params.min_freeze_frames
+        min_frames = self.params.freeze_frames(frame_rate)
+        max_bridge = int(round(self.params.freeze_bridge_seconds * frame_rate))
         n_frames = len(speed_series)
+
+        # Join segments across a short gap when the fish is in the same place
+        # on both sides: it cannot have swum off and back in that time.
+        chains: List[List[tuple]] = []
+        for seg in segments:
+            if chains:
+                prev_stop, start = chains[-1][-1][1], seg[0]
+                gap = start - prev_stop
+                last, first = prev_stop - 1, start
+                still = (np.hypot(x[first] - x[last], y[first] - y[last])
+                         / ((first - last) / frame_rate)) < threshold
+                if gap <= max_bridge and still:
+                    chains[-1].append(seg)
+                    continue
+            chains.append([seg])
 
         complete: List[int] = []
         censored: List[int] = []
+        total_freeze_frames = 0
         n_observed = 0
 
-        for seg_start, seg_stop in segments:
+        for chain in chains:
+            seg_start, seg_stop = chain[0][0], chain[-1][1]
             # traja's speed[i] spans frames [i-1, i), so a segment's first
             # frame carries no speed — its predecessor is the gap.
             start, stop = seg_start + 1, seg_stop
@@ -491,6 +598,11 @@ class MetricsCalculator:
             # A finite speed here means both endpoint frames were tracked.
             usable = np.isfinite(speeds)
             n_observed += int(np.count_nonzero(usable))
+            # The speed samples that fall in a bridged gap: neither slow nor
+            # fast, but they do not break a run either.
+            bridged = np.zeros(len(speeds), dtype=bool)
+            for (_, gap_from), (gap_to, _) in zip(chain[:-1], chain[1:]):
+                bridged[gap_from - start:gap_to - start + 1] = True
 
             # Running out of recording is not the same as running into a gap:
             # the first and last episodes of a recording are conventionally
@@ -499,16 +611,16 @@ class MetricsCalculator:
             closes_at_recording_end = seg_stop == n_frames
 
             is_slow = usable & (speeds < threshold)
-            for a, b in run_lengths(is_slow):
-                if b - a < min_frames:
+            for a, b in run_lengths(is_slow | bridged):
+                frozen = int(np.count_nonzero(is_slow[a:b]))
+                if b - a < min_frames or frozen == 0:
                     continue
                 touches_gap = (
                     (a == 0 and not opens_at_recording_start)
                     or (b == stop - start and not closes_at_recording_end)
                 )
+                total_freeze_frames += frozen
                 (censored if touches_gap else complete).append(b - a)
-
-        total_freeze_frames = sum(complete) + sum(censored)
 
         return {
             'freeze_count': len(complete),
@@ -659,41 +771,56 @@ class MetricsCalculator:
         try:
             x = trj['x'].values
             y = trj['y'].values
-            window_frames = max(2, int(self.params.straightness_window_seconds * frame_rate))
+            window_frames = self.params.straightness_window_frames(frame_rate)
 
-            _, straightness_values = straightness_windows(x, y, window_frames)
+            _, straightness_values, n_tracked = straightness_windows(
+                x, y, window_frames, frame_rate, self.params.straightness_min_speed)
 
+            used_pct = (len(straightness_values) / n_tracked * 100
+                        if n_tracked else np.nan)
             if len(straightness_values) == 0:
-                return {'mean_path_straightness': np.nan}
+                return {'mean_path_straightness': np.nan,
+                        'straightness_windows_used_pct': used_pct}
 
             return {
                 'mean_path_straightness': float(np.mean(straightness_values)),
+                'straightness_windows_used_pct': used_pct,
             }
 
         except Exception as e:
             print(f"Warning: Path straightness calculation failed: {e}")
-            return {'mean_path_straightness': np.nan, '_failed': True}
+            return {'mean_path_straightness': np.nan,
+                    'straightness_windows_used_pct': np.nan, '_failed': True}
 
 
-def straightness_windows(x: np.ndarray, y: np.ndarray, window_frames: int):
-    """Path straightness in each half-overlapping window of `window_frames`:
-    (index of the window's first frame, net displacement / distance swum).
+def straightness_windows(x: np.ndarray, y: np.ndarray, window_frames: int,
+                         frame_rate: float, min_speed: float = 0.0):
+    """Path straightness in each half-overlapping window of `window_frames`.
 
-    A window with an untracked frame, or in which the fish did not move at
-    all, has no straightness and is left out.
+    Returns (index of each kept window's first frame, its net displacement /
+    distance swum, how many windows were fully tracked).
+
+    A window with an untracked frame has no straightness and is left out. So
+    is one in which the fish averaged less than `min_speed` (unit/s): there
+    the tracker's residual wobble is a large part of the path, and the ratio
+    measures that rather than the fish. The third value is the denominator
+    for reporting how many tracked windows were swimming fast enough to use.
     """
     starts, values = [], []
+    n_tracked = 0
+    min_path = min_speed * (window_frames - 1) / frame_rate
     for start in range(0, len(x) - window_frames + 1, max(1, window_frames // 2)):
         x_win = x[start:start + window_frames]
         y_win = y[start:start + window_frames]
         if np.any(np.isnan(x_win)) or np.any(np.isnan(y_win)):
             continue
+        n_tracked += 1
         net_disp = np.hypot(x_win[-1] - x_win[0], y_win[-1] - y_win[0])
         path_dist = np.sum(np.hypot(np.diff(x_win), np.diff(y_win)))
-        if path_dist > 0:
+        if path_dist > 0 and path_dist >= min_path:
             starts.append(start)
             values.append(net_disp / path_dist)
-    return np.asarray(starts, dtype=int), np.asarray(values, dtype=float)
+    return np.asarray(starts, dtype=int), np.asarray(values, dtype=float), n_tracked
 
 
 def process_and_analyze_file(
@@ -727,6 +854,8 @@ def process_and_analyze_file(
     # Carry the exclusions onto the file so the exporter can emit a row for
     # every fish the recording contained, not only the ones that survived.
     loaded_file.excluded_fish = dict(processor.excluded)
+    # And the settings, so every export can say how its numbers were made.
+    loaded_file.processing_params = params
 
     calculator = MetricsCalculator(params)
     for fish in fish_list:

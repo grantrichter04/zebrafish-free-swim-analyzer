@@ -103,6 +103,8 @@ class ResultsTabMixin:
         if table.empty:
             self._draw_results_plot()
             self.results_note_var.set(
+                ("Every fish was left out." + self._exclusion_note())
+                if results.excluded_fish(self.loaded_files) else
                 "No results yet. Load sessions and press \"Run All Analysis\" "
                 "on the Sessions & Units tab.")
             self.results_export_button.config(state="disabled")
@@ -118,7 +120,8 @@ class ResultsTabMixin:
             "Fish sharing a tank are not independent, so compare the large "
             "markers."
             + ("" if per_group.min() > 1 else
-               "  A group with one session cannot be tested against another."))
+               "  A group with one session cannot be tested against another.")
+            + self._exclusion_note())
         self.results_export_button.config(state="normal")
 
         self._draw_results_plot()
@@ -134,6 +137,14 @@ class ResultsTabMixin:
                 f"{row['MedianSpeed']:.2f}", f"{row['Speed99']:.2f}",
                 f"{row['Straightness']:.2f}",
                 "" if row["NearWall"] != row["NearWall"] else f"{row['NearWall']:.1f}"))
+
+    def _exclusion_note(self) -> str:
+        left_out = results.excluded_fish(self.loaded_files)
+        if not left_out:
+            return ""
+        shown = "; ".join(left_out[:3]) + ("; ..." if len(left_out) > 3 else "")
+        return (f"  {len(left_out)} fish left out ({shown}); the export lists "
+                "them all.")
 
     def _draw_results_plot(self):
         """Draw whichever view is selected, from the current results."""
@@ -230,5 +241,6 @@ class ResultsTabMixin:
         path = ask_csv_save_path("Export results", "free_swim_results.csv")
         if path is None:
             return
-        self._results_table.to_csv(path, index=False)
+        results.results_export_table(
+            self.loaded_files, self.file_groups).to_csv(path, index=False)
         messagebox.showinfo("Exported", f"Results saved to:\n{path}")
