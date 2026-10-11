@@ -28,7 +28,8 @@ class ResultsTabMixin:
 
     RESULT_COLUMNS = (
         ("Group", "Group", 130), ("Session", "Session", 200), ("Fish", "Fish", 60),
-        ("Tracked_pct", "Tracked %", 80), ("Distance", "Distance", 100),
+        ("Tracked_pct", "Tracked %", 80), ("Jumps", "Jumps", 60),
+        ("Distance", "Distance", 100),
         ("MedianSpeed", "Median speed", 120), ("Speed99", "99th pct speed", 130),
         ("Straightness", "Straightness", 100), ("NearWall", "Near wall %", 100),
     )
@@ -133,7 +134,7 @@ class ResultsTabMixin:
         for _, row in table.iterrows():
             self.results_tree.insert("", "end", values=(
                 row["Group"], row["Session"], row["Fish"],
-                f"{row['Tracked_pct']:.1f}", f"{row['Distance']:.1f}",
+                f"{row['Tracked_pct']:.1f}", row["Jumps"], f"{row['Distance']:.1f}",
                 f"{row['MedianSpeed']:.2f}", f"{row['Speed99']:.2f}",
                 f"{row['Straightness']:.2f}",
                 "" if row["NearWall"] != row["NearWall"] else f"{row['NearWall']:.1f}"))
@@ -222,6 +223,8 @@ class ResultsTabMixin:
         for metric in results.METRICS:
             text.insert("end", metric.title + "\n", "title")
             text.insert("end", metric.meaning + "\n")
+        text.insert("end", "Jumps\n", "title")
+        text.insert("end", results.JUMPS_MEANING + "\n")
         text.insert("end", "Minute by minute\n", "title")
         text.insert("end", results.MINUTE_MEANING + "\n")
         text.insert("end", "Reading the plots\n", "title")

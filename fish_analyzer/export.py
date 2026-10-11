@@ -109,6 +109,7 @@ def _fish_rows(loaded_file, nickname: str, group: str) -> List[Dict]:
             'ValidFrames_pct': round(fish.valid_percentage * 100, 1),
             'ObservedDuration_s': round(m.get('observed_duration_s', nan), 2),
             'LongestGap_s': round(m.get('longest_gap_s', nan), 2),
+            'TrackingJumps': m.get('tracking_jumps', 0),
             'TotalDistance': round(m.get('total_distance', nan), 3),
             'DistancePerTrackedMin': round(m.get('distance_per_tracked_min', nan), 3),
             'NetDisplacement': round(m.get('net_displacement', nan), 3),

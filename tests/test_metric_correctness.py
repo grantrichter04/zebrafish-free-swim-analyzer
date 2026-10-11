@@ -82,10 +82,53 @@ def test_top_speed_is_not_set_by_a_single_teleport():
     the same question without being settable by one bad frame."""
     traj = straight_line(n=600, step_px=2.0)
     traj[300:, 0, 0] += 900.0  # identity swap across the arena
-    m = metrics_for(traj)
+    params = ProcessingParameters.default_for_fish()
+    params.max_plausible_speed = 0   # the percentile alone, without jump removal
+    m = metrics_for(traj, params)
     assert m["speed_p99"] == pytest.approx(2.0 / BODY_LENGTH_PX * FPS, rel=0.1)
     # The raw max is kept out of the export but retained for quality checks.
     assert m["speed_max_raw"] > 100
+
+
+def test_an_identity_swap_adds_no_distance_and_is_counted():
+    """A 900 px teleport is 540 BL/s: the tracker, not the fish. The frame it
+    lands on is dropped, so distance is the swimming either side of it, the
+    raw max is ordinary speed again, and the jump is counted."""
+    traj = straight_line(n=600, step_px=2.0)
+    traj[300:, 0, 0] += 900.0
+    m = metrics_for(traj)
+    assert m["tracking_jumps"] == 1
+    # 599 steps less the one into the jump and the one out of the dropped frame.
+    assert m["total_distance"] == pytest.approx(597 * 2.0 / BODY_LENGTH_PX)
+    assert m["speed_max_raw"] == pytest.approx(2.0 / BODY_LENGTH_PX * FPS, rel=0.01)
+
+
+def test_a_one_frame_misdetection_is_two_jumps():
+    """Out to a reflection and straight back: both steps are jumps, and only
+    the one wrong frame is lost."""
+    traj = straight_line(n=600, step_px=2.0)
+    traj[300, 0, 1] += 400.0
+    m = metrics_for(traj)
+    assert m["tracking_jumps"] == 2
+    assert m["speed_max_raw"] < 25
+
+
+def test_jump_detection_can_be_turned_off():
+    traj = straight_line(n=600, step_px=2.0)
+    traj[300:, 0, 0] += 900.0
+    params = ProcessingParameters.default_for_fish()
+    params.max_plausible_speed = 0
+    m = metrics_for(traj, params)
+    assert m["tracking_jumps"] == 0
+    assert m["speed_max_raw"] > 100
+
+
+def test_fast_real_swimming_is_not_a_jump():
+    """20 BL/s, a burst, stays below the 25 BL/s ceiling and is kept."""
+    step = 20.0 * BODY_LENGTH_PX / FPS
+    m = metrics_for(straight_line(n=28, step_px=step, x0=10.0))
+    assert m["tracking_jumps"] == 0
+    assert m["median_speed"] == pytest.approx(20.0)
 
 
 def test_speed_statistics_on_constant_velocity_swimmer():

@@ -11,7 +11,7 @@ import pytest
 
 from fish_analyzer.segments import (  # noqa: E402
     backward_speed_slices, contiguous_tracked_segments, forward_speed_slices,
-    longest_gap_frames, run_lengths, tracked_frame_count)
+    implausible_steps, longest_gap_frames, run_lengths, tracked_frame_count)
 
 NAN = np.nan
 
@@ -141,3 +141,24 @@ def test_tracked_frame_count():
 ])
 def test_longest_gap_frames(pattern, expected):
     assert longest_gap_frames(*xy(pattern)) == expected
+
+
+# -----------------------------------------------------------------------------
+# implausible_steps
+# -----------------------------------------------------------------------------
+
+def test_implausible_steps_marks_the_frame_a_jump_lands_on():
+    x = np.array([0.0, 1.0, 50.0, 51.0, 52.0])
+    assert implausible_steps(x, np.zeros(5), max_step=5.0).tolist() == [
+        False, False, True, False, False]
+
+
+def test_implausible_steps_ignores_steps_across_a_gap():
+    """Where the fish went while untracked is unknown, not a jump."""
+    x = np.array([0.0, NAN, 50.0])
+    assert not implausible_steps(x, np.zeros(3), max_step=5.0).any()
+
+
+def test_implausible_steps_off_at_zero():
+    x = np.array([0.0, 100.0])
+    assert not implausible_steps(x, np.zeros(2), max_step=0.0).any()

@@ -29,7 +29,7 @@ def test_table_has_one_row_per_fish_with_the_headline_metrics(two_groups):
 
     assert len(table) == 9
     assert list(table.columns) == [
-        "Group", "Session", "Fish", "Tracked_pct", "Distance", "MedianSpeed",
+        "Group", "Session", "Fish", "Tracked_pct", "Jumps", "Distance", "MedianSpeed",
         "Speed99", "Straightness", "NearWall", "WallZoneArea_pct",
         "DistancePerTrackedMin", "Unit", "PixelsPerUnit"]
     assert table["NearWall"].isna().all(), "no arena, so no wall time yet"

@@ -59,7 +59,8 @@ from traja import TrajaDataFrame
 # Import from our own package
 from .data_structures import LoadedTrajectoryFile
 from .segments import (backward_speed_slices, contiguous_tracked_segments,
-                       first_and_last_tracked, longest_gap_frames, run_lengths,
+                       first_and_last_tracked, implausible_steps,
+                       longest_gap_frames, run_lengths,
                        smooth_within_segments, tracked_frame_count)
 
 
@@ -79,6 +80,14 @@ class ProcessingParameters:
     SMOOTHING:
     smoothing_seconds of centred running mean on positions, never across a
     tracking gap. 0 turns it off. See the module docstring for why.
+
+    TRACKING JUMPS:
+    A frame-to-frame step faster than max_plausible_speed is not swimming but
+    the tracker moving to another fish (an identity swap) or to something
+    that is not a fish. The frame it lands on is treated as untracked, so the
+    jump adds nothing to speed or distance, and the jumps are counted per
+    fish. Checked on unsmoothed positions, before smoothing could spread a
+    jump over several frames. 0 turns it off.
 
     FREEZE DETECTION:
     Fish are considered "frozen" (immobile) when their speed stays below
@@ -108,6 +117,7 @@ class ProcessingParameters:
     straightness_window_seconds: float = 1.0  # Window for path straightness calculation
     straightness_min_speed: float = 1.0     # unit/s a window must average to count
     smoothing_seconds: float = 0.1          # Running mean on positions; 0 = off
+    max_plausible_speed: float = 25.0       # unit/s; a faster step is a tracking jump; 0 = off
 
     def validate(self):
         """Check that all parameters are valid. Raises ValueError if not."""
@@ -125,6 +135,8 @@ class ProcessingParameters:
             raise ValueError(f"Straightness speed must be non-negative, got {self.straightness_min_speed}")
         if self.smoothing_seconds < 0:
             raise ValueError(f"Smoothing must be zero or more, got {self.smoothing_seconds}")
+        if self.max_plausible_speed < 0:
+            raise ValueError(f"Jump speed must be zero or more, got {self.max_plausible_speed}")
 
     def freeze_frames(self, frame_rate: float) -> int:
         """min_freeze_seconds as a whole number of frames, at least 1."""
@@ -148,6 +160,7 @@ class ProcessingParameters:
             'Setting_FreezeMin_s': self.min_freeze_seconds,
             'Setting_FreezeBridgesGapsUpTo_s': self.freeze_bridge_seconds,
             'Setting_StraightnessMinSpeed': self.straightness_min_speed,
+            'Setting_JumpSpeed': self.max_plausible_speed,
         }
 
     @classmethod
@@ -175,6 +188,8 @@ class FishTrajectory:
     #: "the calculation crashed" — so the exporter reads this to tell them
     #: apart (finding B10).
     failed_metrics: List[str] = field(default_factory=list)
+    #: Frames dropped as tracking jumps (see ProcessingParameters).
+    n_jumps: int = 0
 
     @property
     def status(self) -> str:
@@ -257,13 +272,20 @@ class TrajectoryProcessor:
         """Process trajectory for a single fish."""
         raw_coords = self.file.trajectories[:, fish_idx, :]
         transformed_coords = self._transform_coordinates(raw_coords)
+        # The quality gate below is about how often idtracker.ai placed the
+        # fish, so it is counted before jumps are dropped.
+        n_placed = tracked_frame_count(transformed_coords[:, 0], transformed_coords[:, 1])
+        frame_rate = self.file.calibration.frame_rate
+        jumps = implausible_steps(
+            transformed_coords[:, 0], transformed_coords[:, 1],
+            self.params.max_plausible_speed / frame_rate if frame_rate else 0.0)
+        transformed_coords[jumps] = np.nan
         transformed_coords[:, 0], transformed_coords[:, 1] = smooth_within_segments(
             transformed_coords[:, 0], transformed_coords[:, 1],
             self.params.smoothing_frames(self.file.calibration.frame_rate))
         df = self._create_dataframe_with_time(transformed_coords)
 
-        valid_mask = ~(df['x'].isna() | df['y'].isna())
-        n_valid = valid_mask.sum()
+        n_valid = n_placed
         n_total = len(df)
         valid_pct = n_valid / n_total if n_total > 0 else 0
 
@@ -287,6 +309,7 @@ class TrajectoryProcessor:
             trajectory=trj,
             n_valid_frames=n_valid,
             n_total_frames=n_total,
+            n_jumps=int(jumps.sum()),
         )
 
     def _transform_coordinates(self, raw_coords: np.ndarray) -> np.ndarray:
@@ -368,6 +391,7 @@ class MetricsCalculator:
 
         # Tracking quality — the context every metric below has to be read in
         fish.metrics.update(self._calc_tracking_quality(x, y, frame_rate))
+        fish.metrics['tracking_jumps'] = fish.n_jumps
 
         # Freeze analysis
         fish.metrics.update(
@@ -441,9 +465,9 @@ class MetricsCalculator:
 
         `speed_p99` answers the same question -- how fast does this fish swim
         when it is going flat out -- without being settable by a single bad
-        frame. The count of implausible samples is reported separately as a
-        data-quality signal rather than being silently folded into a
-        behavioural number.
+        frame. Steps faster than max_plausible_speed are dropped before this
+        (see TRACKING JUMPS) and counted per fish as a data-quality signal
+        rather than being silently folded into a behavioural number.
         """
         speed = speed_series[np.isfinite(speed_series)]
 

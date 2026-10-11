@@ -71,6 +71,15 @@ METRICS: List[Metric] = [
            "use of the tank would give: the zone's share of the tank's area."),
 ]
 
+JUMPS_MEANING = (
+    "How many times the track moved faster than a fish can swim from one "
+    "frame to the next (25 BL/s by default, set on Sessions & Units). That is "
+    "the tracker, not the fish: an identity swap, or a detection of something "
+    "that is not a fish. Those steps are left out of speed and distance. A "
+    "fish with many jumps may also have swapped identity with another fish, "
+    "so its own numbers partly belong to that fish; check it in Video "
+    "Inspector.")
+
 #: Columns that describe a row without being a metric to plot.
 WALL_ZONE_SHARE = "WallZoneArea_pct"
 NO_OUTLINE = "No tank outline.\nDraw one with\n\"Tank outline...\" on\nSessions & Units."
@@ -98,6 +107,7 @@ def results_table(loaded_files: Dict, file_groups: Optional[Dict[str, str]] = No
                 "Session": name,
                 "Fish": fish.identity_label,
                 "Tracked_pct": round(fish.valid_percentage * 100, 1),
+                "Jumps": int(fish.metrics.get("tracking_jumps", 0)),
             }
             for metric in METRICS:
                 if metric.source is not None:
@@ -112,7 +122,7 @@ def results_table(loaded_files: Dict, file_groups: Optional[Dict[str, str]] = No
             row["Unit"] = loaded.calibration.unit_name
             row["PixelsPerUnit"] = round(loaded.calibration.pixels_per_unit, 4)
             rows.append(row)
-    columns = (["Group", "Session", "Fish", "Tracked_pct"]
+    columns = (["Group", "Session", "Fish", "Tracked_pct", "Jumps"]
                + [m.column for m in METRICS]
                + [WALL_ZONE_SHARE, "DistancePerTrackedMin", "Unit", "PixelsPerUnit"])
     return pd.DataFrame(rows, columns=columns)

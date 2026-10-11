@@ -409,6 +409,7 @@ def test_the_analysis_settings_reach_the_parameters_and_follow_the_unit(
     assert params.min_freeze_seconds == 2.0
     assert params.smoothing_seconds == 0.0
     assert params.straightness_min_speed == 1.0
+    assert params.max_plausible_speed == 25.0
 
     app.units_choice.set("cm")
     app.cm_pixels_var.set("680")
@@ -416,6 +417,8 @@ def test_the_analysis_settings_reach_the_parameters_and_follow_the_unit(
     app._apply_units()
     assert app.straight_unit_label["text"] == "cm/s."
     assert float(app.straight_speed_var.get()) == pytest.approx(1.176, abs=0.005)
+    assert app.jump_unit_label["text"].startswith("cm/s")
+    assert float(app.jump_speed_var.get()) == pytest.approx(29.4, abs=0.1)
 
 
 def test_a_setting_that_is_not_a_number_is_refused_by_name(

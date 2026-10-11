@@ -236,6 +236,11 @@ class DataTabMixin:
         self.smoothing_var = tk.StringVar(value="0.1")
         tk.Entry(more, textvariable=self.smoothing_var, width=5).pack(side="left", padx=5)
         tk.Label(more, text="s (0 = off).").pack(side="left")
+        tk.Label(more, text="   A step faster than").pack(side="left")
+        self.jump_speed_var = tk.StringVar(value="25")
+        tk.Entry(more, textvariable=self.jump_speed_var, width=5).pack(side="left", padx=5)
+        self.jump_unit_label = tk.Label(more, text="BL/s is a tracking jump (0 = off).")
+        self.jump_unit_label.pack(side="left")
 
         tk.Label(
             frame, justify=tk.LEFT, font=("Arial", 9), fg="gray",
@@ -243,7 +248,10 @@ class DataTabMixin:
                  "shoaling. The Results and Shoaling tabs fill in when it finishes.\n"
                  "Smoothing removes the tracker's frame-to-frame wobble, which "
                  "otherwise makes a still fish look slowly moving and a slow "
-                 "fish's path look wiggly."
+                 "fish's path look wiggly.\n"
+                 "A tracking jump (an identity swap, or the tracker landing on "
+                 "something that is not a fish) is left out of speed and "
+                 "distance, and counted in the Jumps column on Results."
         ).pack(anchor="w", padx=10, pady=(0, 8))
 
     # =========================================================================
@@ -694,6 +702,7 @@ class DataTabMixin:
         self._applied_units = (unit, pixels_per_unit)
         self.rest_unit_label.config(text=f"{unit}/s")
         self.straight_unit_label.config(text=f"{unit}/s.")
+        self.jump_unit_label.config(text=f"{unit}/s is a tracking jump (0 = off).")
         self._update_sessions_table()
         self._update_units_status()
         if cleared:
@@ -713,7 +722,8 @@ class DataTabMixin:
         0.5 BL/s and 0.5 cm/s are very different speeds; leaving the number
         alone when the unit changes would silently redefine "frozen".
         """
-        for var in (self.rest_threshold_var, self.straight_speed_var):
+        for var in (self.rest_threshold_var, self.straight_speed_var,
+                    self.jump_speed_var):
             try:
                 speed = float(var.get())
             except ValueError:
@@ -976,6 +986,7 @@ class DataTabMixin:
             straightness_min_speed=number(
                 self.straight_speed_var, "The straightness speed"),
             smoothing_seconds=number(self.smoothing_var, "The smoothing"),
+            max_plausible_speed=number(self.jump_speed_var, "The jump speed"),
         )
         params.validate()
         return params

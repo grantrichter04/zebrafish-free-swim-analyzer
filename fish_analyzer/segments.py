@@ -150,6 +150,29 @@ def first_and_last_tracked(x: np.ndarray, y: np.ndarray) -> Tuple[int, int]:
     return int(tracked[0]), int(tracked[-1])
 
 
+def implausible_steps(x: np.ndarray, y: np.ndarray, max_step: float) -> np.ndarray:
+    """Frames the fish reached by a step too long to have swum in one frame.
+
+    An identity swap or a misdetection moves a track to another fish, or to
+    something that is not a fish, in a single frame. That step is not
+    swimming, but frame-to-frame speed reads it as a sprint, distance adds
+    it, and a track that keeps jumping inflates the fast-speed percentile.
+
+    Returns a boolean mask, True on the frame each such step lands on. Only
+    steps between two tracked frames count; a step across a gap is already
+    excluded everywhere. ``max_step`` of 0 or less finds nothing.
+    """
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    mask = np.zeros(len(x), dtype=bool)
+    if max_step <= 0 or len(x) < 2:
+        return mask
+    step = np.hypot(np.diff(x), np.diff(y))
+    with np.errstate(invalid="ignore"):
+        mask[1:] = step > max_step
+    return mask
+
+
 def smooth_within_segments(x: np.ndarray, y: np.ndarray,
                            window_frames: int) -> Tuple[np.ndarray, np.ndarray]:
     """Centred running mean of positions, inside each tracked segment only.

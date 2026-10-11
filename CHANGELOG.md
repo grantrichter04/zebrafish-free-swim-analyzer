@@ -30,6 +30,11 @@ setting is a box on Sessions & Units and is written into every export as a
   scored near 0 from wobble alone, so a fish that rested a lot looked like
   it swam tortuously. `StraightnessSeconds_pct` is exported.
 - **`DistancePerTrackedMin`** is exported beside total distance.
+- **Tracking jumps are left out.** A frame-to-frame step faster than 25 BL/s
+  is the tracker moving to another fish (an identity swap) or to something
+  that is not a fish, not swimming. The frame it lands on is treated as
+  untracked, so the jump adds nothing to speed or distance. Each fish's count
+  is in a new Jumps column on Results and exported as `TrackingJumps`.
 
 ## 2.2.0 - one install, video to results
 
