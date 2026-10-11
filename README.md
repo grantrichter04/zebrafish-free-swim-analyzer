@@ -13,8 +13,9 @@ Built for the Morsch lab at Macquarie University.
 
 This is done once, by whoever looks after the laptop.
 
-1. Install [Miniconda](https://www.anaconda.com/download/success) and a current
-   NVIDIA driver, if they are not already there.
+1. Install [Miniconda](https://www.anaconda.com/download/success) and, on a
+   computer with an NVIDIA GPU, a current NVIDIA driver, if they are not
+   already there.
 2. Download or clone this repository to a folder that will not move, for
    example `C:\FreeSwimAnalyzer`.
 3. Double-click **`install.bat`**.
@@ -22,6 +23,10 @@ This is done once, by whoever looks after the laptop.
 It builds one conda environment, `freeswim`, holding both idtracker.ai and the
 analyzer, checks it, and puts a **Free Swim Analyzer** shortcut on the desktop.
 It downloads about 5 GB and is safe to run again.
+
+No NVIDIA GPU? `install.bat` still finishes, using the CPU build of PyTorch.
+That is fine on a computer used only to analyse sessions already tracked;
+tracking new videos without a GPU works but is very slow.
 
 The shortcut and the environment belong to the Windows account that ran
 `install.bat`, and the shortcut points into the repository folder, so do not

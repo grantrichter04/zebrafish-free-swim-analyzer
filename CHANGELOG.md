@@ -51,7 +51,9 @@ through idtracker.ai:
 **One environment, one installer.**
 
 - `install.bat` builds a single conda environment holding idtracker.ai and the
-  analyzer, from pinned versions, and adds a desktop shortcut.
+  analyzer, from pinned versions, and adds a desktop shortcut. On a computer
+  without an NVIDIA GPU it installs the CPU build of PyTorch instead of
+  stopping, so a computer used only for analysis can be set up too.
 - "Check Setup" in the status bar, and `fish-analyzer --check`, report whether
   the machine is ready: Python, analyzer, OpenCV, idtracker.ai, PyTorch, GPU.
 - The shortcut shows a "Starting" window while the app loads.

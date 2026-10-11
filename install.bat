@@ -6,8 +6,9 @@ rem  Double-click this file. It builds one conda environment holding both
 rem  idtracker.ai and the analyzer, checks it, and puts a shortcut on the
 rem  desktop. Safe to run again: it reuses the environment if it exists.
 rem
-rem  Needs: Miniconda or Anaconda, an NVIDIA GPU with a current driver, and
-rem  an internet connection (about 5 GB is downloaded).
+rem  Needs: Miniconda or Anaconda and an internet connection (about 5 GB is
+rem  downloaded). Tracking needs an NVIDIA GPU with a current driver; without
+rem  one, setup still finishes and the analysis tabs work normally.
 rem
 rem  For testing: set FREESWIM_ENV to use another environment name,
 rem  FREESWIM_NO_SHORTCUT=1 to skip the shortcut, FREESWIM_NO_PAUSE=1 to
@@ -38,14 +39,20 @@ if not defined CONDA (
 echo  [1/6] Found conda: %CONDA%
 
 rem --- 2. Check for an NVIDIA GPU -------------------------------------------
+rem Without one, install the CPU build of PyTorch instead of stopping: the
+rem analysis tabs do not need a GPU, only tracking does (and is very slow
+rem without one).
+set "TORCH_LABEL=the GPU"
 where nvidia-smi >nul 2>&1
 if errorlevel 1 (
-    echo  [STOP] No NVIDIA driver was found ^(nvidia-smi is missing^).
-    echo         Tracking needs an NVIDIA GPU. Install the current driver from
-    echo         https://www.nvidia.com/drivers then run this file again.
-    goto :fail
+    set "TORCH_INDEX=https://download.pytorch.org/whl/cpu"
+    set "TORCH_LABEL=the CPU"
+    echo  [2/6] No NVIDIA driver was found - installing without GPU support.
+    echo         Analysing tracked sessions works normally. Tracking new videos
+    echo         will be very slow; use a computer with an NVIDIA GPU for that.
+) else (
+    echo  [2/6] Found an NVIDIA driver.
 )
-echo  [2/6] Found an NVIDIA driver.
 
 rem --- 3. Create or reuse the environment -----------------------------------
 call "%CONDA%" env list | findstr /R /C:"^%FREESWIM_ENV% " >nul
@@ -63,8 +70,8 @@ if not defined PY (
     goto :fail
 )
 
-rem --- 4. GPU PyTorch -------------------------------------------------------
-echo  [4/6] Installing PyTorch for the GPU ^(the large download^)...
+rem --- 4. PyTorch -----------------------------------------------------------
+echo  [4/6] Installing PyTorch for %TORCH_LABEL% ^(the large download^)...
 "%PY%" -m pip install -q --no-warn-script-location torch torchvision --index-url %TORCH_INDEX% -c constraints-win-cu128.txt
 if errorlevel 1 goto :fail
 
