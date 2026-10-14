@@ -375,7 +375,7 @@ and outlines (I4); the ground-truth and still-object checks (I8, lab work).
 | I1 | open | | awaiting licence choice |
 | I2 | fixed (release is I7) | see `git log --grep "Audit I, I2"` | Version 2.3.0; `fish_analyzer/provenance.py` gives the version with the commit (and "modified") from a checkout, with or without git installed. Written to `results_per_tank.csv` and the shoaling summary (`AnalyzerVersion`) and to both export READMEs. Tests: `tests/test_provenance.py`, including that the CHANGELOG's top entry is the package version. |
 | I3 | fixed | see `git log --grep "Audit I, I3"` | `tracking_settings.csv` and `setups/` in the Results export; `freeswim_tracking.json` written by `tracking.run_tracking` after a successful run (app version, rolling background, setup and its text); early finish read from the session's `idtrackerai.log` ("Training interrupted by user"), so it is known for older sessions too. `Setting_` columns added to `results_per_tank.csv`. Checked on two real sessions: thresholds, ROI, intervals read correctly; both show "rolling not recorded", which is right, since they predate the record. Tests: `tests/test_tracking_settings.py`. |
-| I4 | open | | |
+| I4 | export part fixed; persistence left as a decision | see `git log --grep "Audit I, I4"` | `tank_outlines.csv`: corners in video pixels, source ("idtracker.ai region of interest" / "drawn in Free Swim Analyzer"), wall zone width. `ArenaDefinition.source` and `ThigmotaxisResults.arena` carry it. Checked on two real sessions: 22 and 19 corners, matching `session.json`. Saving names, groups and drawn outlines between runs of the app is not done. Test: `tests/test_tracking_settings.py`. |
 | I5 | open | | |
 | I6 | open | | |
 | I7 | open | | |

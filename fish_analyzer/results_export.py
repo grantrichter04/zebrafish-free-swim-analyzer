@@ -11,6 +11,7 @@ tab, holding enough to draw that view again in R, Prism or Excel.
     speed_histogram.csv     Speed distributions: frames in each speed bin
     position_density.csv    Where they swim: share of time in each square
     tracking_settings.csv   how idtracker.ai tracked each session
+    tank_outlines.csv       the outline time near the wall used, per session
     setups/                 the setup each session was tracked with
     README.txt             what each file and column is
     prism/                  the same numbers one value per tank, laid out to
@@ -201,6 +202,13 @@ tracking_settings.csv - how idtracker.ai tracked each session
   training now"; ReviewedOn, when last saved from idtracker.ai's validator;
   TrackedBy, the version of this app that ran the tracking; Setup, the
   setup file used.
+
+tank_outlines.csv - the outline time near the wall was measured against
+  One row per corner, X_px and Y_px in video pixels from the top left of
+  the frame. Source says whether it is idtracker.ai's region of interest
+  or was drawn in this app (a drawn outline is not saved anywhere else).
+  WallZoneWidth_pct is the wall zone's width as % of the tank's shorter
+  side. Sessions without an outline have no rows.
 
 setups/ - the setup each session was tracked with, as it was then (the
   file beside the videos may have changed since). Present for sessions
@@ -439,6 +447,29 @@ TRACKING_COLUMNS = ["IdtrackerVersion", "FishInTank", "IntensityThreshold",
                     "ReviewedOn", "TrackedBy", "Setup"]
 
 
+def tank_outlines(loaded_files: Dict,
+                  file_groups: Optional[Dict[str, str]] = None) -> pd.DataFrame:
+    """The outline each session's time near the wall was measured against:
+    one row per corner, in video pixels (y down from the top, as on the
+    frame). An outline drawn in the app is kept nowhere else."""
+    file_groups = file_groups or {}
+    columns = ["Group", "Session", "Source", "WallZoneWidth_pct", "Vertex",
+               "X_px", "Y_px"]
+    rows = []
+    for name, loaded in loaded_files.items():
+        wall = getattr(loaded, "thigmotaxis_results", None)
+        arena = getattr(wall, "arena", None)
+        if not loaded.processed_data or arena is None:
+            continue
+        for vertex, (x, y) in enumerate(np.asarray(arena.vertices_pixels), start=1):
+            rows.append({"Group": file_groups.get(name) or results.default_group(name),
+                         "Session": name, "Source": arena.source,
+                         "WallZoneWidth_pct": round(wall.border_zone_pct * 100, 3),
+                         "Vertex": vertex, "X_px": round(float(x), 2),
+                         "Y_px": round(float(y), 2)})
+    return pd.DataFrame(rows, columns=columns)
+
+
 def _save_setups(loaded_files: Dict, folder: Path) -> None:
     """Each session's setup, as tracked, into folder/setups/<session>.toml."""
     for name, loaded in loaded_files.items():
@@ -489,6 +520,8 @@ def export_results_folder(loaded_files: Dict, file_groups: Optional[Dict[str, st
     tracking_settings(loaded_files, file_groups).to_csv(
         folder / "tracking_settings.csv", index=False)
     _save_setups(loaded_files, folder)
+    tank_outlines(loaded_files, file_groups).to_csv(
+        folder / "tank_outlines.csv", index=False)
     (folder / "README.txt").write_text(
         README.format(when=datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
                       version=provenance.analyzer_version(),
@@ -504,4 +537,5 @@ def export_results_folder(loaded_files: Dict, file_groups: Optional[Dict[str, st
 FILES: List[str] = ["results_per_tank.csv", "results_per_fish.csv",
                     "results_by_minute.csv",
                     "speed_histogram.csv", "position_density.csv",
-                    "tracking_settings.csv", "README.txt", "prism"]
+                    "tracking_settings.csv", "tank_outlines.csv", "README.txt",
+                    "prism"]

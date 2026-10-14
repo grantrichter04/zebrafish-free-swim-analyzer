@@ -52,6 +52,10 @@ except ImportError:
     print("Note: shapely not installed. Install with 'pip install shapely' for thigmotaxis analysis.")
 
 
+DRAWN = "drawn in Free Swim Analyzer"
+IDTRACKERAI_ROI = "idtracker.ai region of interest"
+
+
 @dataclass
 class ArenaDefinition:
     """
@@ -66,6 +70,8 @@ class ArenaDefinition:
     """
     vertices_pixels: np.ndarray  # Shape: (n_vertices, 2) in pixel coordinates
     vertices_bl: np.ndarray      # Shape: (n_vertices, 2) in body length units
+    #: Where the outline came from, for the export (see DRAWN, IDTRACKERAI_ROI).
+    source: str = DRAWN
 
     def to_shapely(self, use_bl: bool = True) -> 'ShapelyPolygon':
         """
@@ -95,7 +101,8 @@ class ArenaDefinition:
         """Create a deep copy of this arena definition."""
         return ArenaDefinition(
             vertices_pixels=self.vertices_pixels.copy(),
-            vertices_bl=self.vertices_bl.copy()
+            vertices_bl=self.vertices_bl.copy(),
+            source=self.source,
         )
     
     def get_normalized_vertices(self, video_width: int, video_height: int,
@@ -214,6 +221,9 @@ class ThigmotaxisResults:
     #: denominator of time_in_border_pct. Pooling tracks recorded without
     #: identities weights each track by it.
     in_arena_frames: Optional[np.ndarray] = None
+    #: The outline these were measured against, kept so the export can
+    #: record it: a hand-drawn outline exists nowhere else.
+    arena: Optional[ArenaDefinition] = None
 
     def get_smoothed_group_timeseries(self, window_seconds: float = 5.0) -> np.ndarray:
         """
@@ -395,7 +405,9 @@ def idtrackerai_arena(loaded_file: LoadedTrajectoryFile) -> Optional['ArenaDefin
         return None
     if vertices.ndim != 2 or len(vertices) < 3:
         return None
-    return arena_in_units(vertices, loaded_file)
+    arena = arena_in_units(vertices, loaded_file)
+    arena.source = IDTRACKERAI_ROI
+    return arena
 
 
 class ThigmotaxisCalculator:
@@ -598,4 +610,5 @@ class ThigmotaxisCalculator:
             sample_interval=self.sample_interval,
             border_area_pct=100.0 * (1.0 - center_poly.area / arena_poly.area),
             in_arena_frames=frames_in_border + frames_in_center,
+            arena=self.arena,
         )

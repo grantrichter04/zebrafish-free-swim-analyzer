@@ -29,6 +29,13 @@ found that an export could not be traced to the code that made it.
   Sessions tracked earlier say "not recorded" where that is unknown.
   `results_per_tank.csv` now carries the `Setting_` columns too.
   (Audit I, finding I3.)
+- **The tank outline is in the export**: `tank_outlines.csv` gives, for
+  each session, the corners of the outline time near the wall was measured
+  against, in video pixels, whether it was idtracker.ai's region of
+  interest or drawn in this app, and the wall zone's width. An outline
+  drawn with "Tank outline..." is still not saved between runs of the app,
+  but the export now keeps it, so the measure can be recomputed.
+  (Audit I, finding I4.)
 
 ### Sessions without identities, resting time, and checking it on the video
 

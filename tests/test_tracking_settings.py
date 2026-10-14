@@ -22,7 +22,7 @@ SESSION_JSON = {
     "background_subtraction_stat": "median",
     "resolution_reduction": 0.8,
     "tracking_intervals": [[0, 600]],
-    "roi_list": ["+ Polygon [[10.0, 10.0], [500.0, 10.0], [500.0, 500.0]]"],
+    "roi_list": ["+ Polygon [[0.0, 0.0], [1024.0, 0.0], [1024.0, 1024.0], [0.0, 1024.0]]"],
     "track_wo_identities": False,
     "last_validated": "2026-10-12T09:30:00",
 }
@@ -78,7 +78,7 @@ def test_the_export_has_a_row_of_tracking_settings_per_session(two_sessions, tmp
     assert early["Background"] == "rolling median, 1 min"
     assert early["ResolutionReduction"] == 0.8
     assert early["TrackingIntervals"] == "0-600"
-    assert early["RegionOfInterest"].startswith("+ Polygon [[10.0, 10.0]")
+    assert early["RegionOfInterest"].startswith("+ Polygon [[0.0, 0.0], [1024.0, 0.0]")
     assert early["IdentityTraining"] == "finished early"
     assert early["ReviewedOn"] == "2026-10-12"
     assert early["TrackedBy"] == "Free Swim Analyzer 2.3.0 (commit abc1234)"
@@ -109,6 +109,32 @@ def test_the_tank_file_carries_the_analysis_settings(two_sessions, tmp_path):
     for column in settings:
         assert column in tanks.columns
         assert set(tanks[column]) == set(per_fish[column].dropna())
+
+
+def test_the_tank_outline_and_where_it_came_from_are_exported(two_sessions, tmp_path):
+    """Time near the wall can be recomputed only if the outline is kept
+    (Audit I, I4): "early" uses idtracker.ai's region of interest, "plain"
+    one drawn in this app."""
+    from fish_analyzer.spatial import (ThigmotaxisCalculator, arena_in_units,
+                                       idtrackerai_arena)
+    roi = idtrackerai_arena(two_sessions["early"])
+    drawn = arena_in_units(np.array([[0, 0], [800, 0], [800, 800], [0, 800]]),
+                           two_sessions["plain"])
+    for name, arena in (("early", roi), ("plain", drawn)):
+        two_sessions[name].thigmotaxis_results = ThigmotaxisCalculator(
+            two_sessions[name], arena).calculate()
+
+    folder = results_export.export_results_folder(two_sessions, None, tmp_path)
+    outlines = pd.read_csv(folder / "tank_outlines.csv")
+
+    early = outlines[outlines["Session"] == "early"]
+    assert set(early["Source"]) == {"idtracker.ai region of interest"}
+    assert early[["X_px", "Y_px"]].to_numpy().tolist() == [
+        [0.0, 0.0], [1024.0, 0.0], [1024.0, 1024.0], [0.0, 1024.0]]
+    plain = outlines[outlines["Session"] == "plain"]
+    assert set(plain["Source"]) == {"drawn in Free Swim Analyzer"}
+    assert len(plain) == 4
+    assert set(outlines["WallZoneWidth_pct"]) == {15.0}
 
 
 def test_tracking_records_how_the_app_ran_it(tmp_path, monkeypatch):
