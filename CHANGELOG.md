@@ -17,6 +17,18 @@ found that an export could not be traced to the code that made it.
   the version names the commit, and says "modified" if the code differed
   from it: `2.3.0 (commit 6e84edf, modified)`. git need not be installed.
   (Audit I, finding I2.)
+- **How each session was tracked is in the export**: `tracking_settings.csv`,
+  one row per session, with idtracker.ai's version, the number of animals,
+  intensity and area thresholds, background, resolution reduction,
+  tracking intervals, region of interest, whether identity training was
+  finished early, when the session was last reviewed, and which version of
+  this app tracked it. A `setups` folder holds each session's setup file as
+  it was when tracked. Tracking now leaves `freeswim_tracking.json` in each
+  new session folder for this, since idtracker.ai's own record cannot show a
+  rolling background, and the setup beside the videos may change later.
+  Sessions tracked earlier say "not recorded" where that is unknown.
+  `results_per_tank.csv` now carries the `Setting_` columns too.
+  (Audit I, finding I3.)
 
 ### Sessions without identities, resting time, and checking it on the video
 

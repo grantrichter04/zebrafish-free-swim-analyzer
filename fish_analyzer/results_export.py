@@ -10,7 +10,9 @@ tab, holding enough to draw that view again in R, Prism or Excel.
     results_by_minute.csv   Minute by minute: one row per fish per minute
     speed_histogram.csv     Speed distributions: frames in each speed bin
     position_density.csv    Where they swim: share of time in each square
-    README.txt              what each file and column is
+    tracking_settings.csv   how idtracker.ai tracked each session
+    setups/                 the setup each session was tracked with
+    README.txt             what each file and column is
     prism/                  the same numbers one value per tank, laid out to
                             paste into GraphPad Prism (see PRISM_README)
 
@@ -19,13 +21,15 @@ its session was tracked (Tracking: "identities" or "no identities"), so the
 two kinds cannot be mixed up once the files leave the app.
 """
 import datetime
+import json
+import re
 from pathlib import Path
 from typing import Dict, List, Optional
 
 import numpy as np
 import pandas as pd
 
-from . import provenance, results
+from . import provenance, results, tracking
 
 IDENTITIES = "identities"
 NO_IDENTITIES = "no identities"
@@ -150,6 +154,7 @@ results_per_tank.csv - every measure for each tank
   AnalyzerVersion    the version of this app that made the numbers, with
                      its git commit when run from a checkout ("modified"
                      if the code differed from that commit)
+  Setting_*          the analysis settings, as in results_per_fish.csv
 
 results_per_fish.csv - "Group comparison"
   One row per fish (or tank), then one row per fish left out and why.
@@ -184,6 +189,22 @@ speed_histogram.csv - "Speed distributions"
 position_density.csv - "Where they swim"
   The % of a session's tracked positions in each square, XFrom-XTo by
   YFrom-YTo, in Unit, y measured up from the bottom of the video.
+
+tracking_settings.csv - how idtracker.ai tracked each session
+  Read from the session folder. IdtrackerVersion; FishInTank, the number
+  of animals it was given; IntensityThreshold and AreaThreshold (pixels),
+  low-high; Background, the background subtracted ("rolling ..., 1 min"
+  when each minute had its own; "rolling not recorded" for sessions
+  tracked outside this app or before it kept a record); ResolutionReduction;
+  TrackingIntervals in frames; RegionOfInterest as idtracker.ai wrote it;
+  IdentityTraining, "finished early" when stopped with "Finish identity
+  training now"; ReviewedOn, when last saved from idtracker.ai's validator;
+  TrackedBy, the version of this app that ran the tracking; Setup, the
+  setup file used.
+
+setups/ - the setup each session was tracked with, as it was then (the
+  file beside the videos may have changed since). Present for sessions
+  tracked by this app from version 2.3.0.
 
 prism/ - the group comparison and minute-by-minute numbers, one value per
   tank, laid out to paste straight into GraphPad Prism. PRISM_README.txt
@@ -318,8 +339,117 @@ def results_per_tank(loaded_files: Dict,
                                       if with_ids else np.nan),
             "Video": Path(str(video)).name if video else "",
             "AnalyzerVersion": version,
+            **_settings_of(loaded),
         })
     return pd.DataFrame(rows)
+
+
+def _settings_of(loaded) -> Dict[str, float]:
+    """The Setting_ columns a session was analysed with, or none."""
+    params = getattr(loaded, "processing_params", None)
+    return params.export_columns() if params is not None else {}
+
+
+def _session_folder(loaded) -> Optional[Path]:
+    """The idtracker.ai session folder a session was loaded from, or None.
+    (.../session_X/trajectories/trajectories.npy -> .../session_X)"""
+    if not getattr(loaded, "file_path", None):
+        return None
+    folder = Path(loaded.file_path).parent.parent
+    return folder if (folder / "session.json").exists() else None
+
+
+def _read_json(path: Path) -> Optional[Dict]:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def _span(values) -> str:
+    """[36, 255] -> "36-255"; inf is written "inf"."""
+    return "-".join(f"{float(v):g}" for v in values)
+
+
+def _tracking_row(loaded) -> Dict:
+    """How one session was tracked, from what idtracker.ai and the Tracking
+    tab left in its session folder."""
+    folder = _session_folder(loaded)
+    session = _read_json(folder / "session.json") if folder else None
+    if session is None:
+        return {"TrackedBy": "not recorded"}
+    own = _read_json(folder / tracking.TRACKED_WITH_FILE)
+    try:
+        log = (folder / "idtrackerai.log").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        log = ""
+
+    stat = session.get("background_subtraction_stat") or ""
+    if not session.get("use_bkg"):
+        background = "none"
+    elif own is None:
+        background = f"{stat} (rolling not recorded)"
+    elif own.get("rolling_background"):
+        background = f"rolling {stat}, 1 min"
+    else:
+        background = stat
+
+    if session.get("track_wo_identities"):
+        training = "none (no identities)"
+    elif "Training interrupted by user" in log:
+        training = "finished early"
+    else:
+        training = "ran to the end"
+
+    intervals = session.get("tracking_intervals")
+    return {
+        "IdtrackerVersion": session.get("version"),
+        "FishInTank": loaded.fish_in_tank,
+        "IntensityThreshold": _span(session.get("intensity_ths") or []),
+        "AreaThreshold": _span(session.get("area_ths") or []),
+        "Background": background,
+        "ResolutionReduction": session.get("resolution_reduction"),
+        "TrackingIntervals": ("; ".join(_span(i) for i in intervals)
+                              if intervals else "all"),
+        "RegionOfInterest": "; ".join(session.get("roi_list") or []),
+        "IdentityTraining": training,
+        "ReviewedOn": tracking.session_reviewed_on(folder),
+        "TrackedBy": (f"Free Swim Analyzer {own['analyzer_version']}"
+                      if own and own.get("analyzer_version") else "not recorded"),
+        "Setup": own.get("setup") if own else None,
+    }
+
+
+def tracking_settings(loaded_files: Dict,
+                      file_groups: Optional[Dict[str, str]] = None) -> pd.DataFrame:
+    """One row per session: how idtracker.ai tracked it."""
+    file_groups = file_groups or {}
+    rows = [{"Group": file_groups.get(name) or results.default_group(name),
+             "Session": name, "Tracking": _tracking(loaded_files, name),
+             **_tracking_row(loaded)}
+            for name, loaded in loaded_files.items() if loaded.processed_data]
+    return pd.DataFrame(rows, columns=list(dict.fromkeys(
+        ["Group", "Session", "Tracking", *TRACKING_COLUMNS,
+         *(k for row in rows for k in row)])))
+
+
+TRACKING_COLUMNS = ["IdtrackerVersion", "FishInTank", "IntensityThreshold",
+                    "AreaThreshold", "Background", "ResolutionReduction",
+                    "TrackingIntervals", "RegionOfInterest", "IdentityTraining",
+                    "ReviewedOn", "TrackedBy", "Setup"]
+
+
+def _save_setups(loaded_files: Dict, folder: Path) -> None:
+    """Each session's setup, as tracked, into folder/setups/<session>.toml."""
+    for name, loaded in loaded_files.items():
+        session = _session_folder(loaded)
+        own = _read_json(session / tracking.TRACKED_WITH_FILE) if session else None
+        if not loaded.processed_data or not own or own.get("setup_text") is None:
+            continue
+        (folder / "setups").mkdir(exist_ok=True)
+        safe = re.sub(r'[<>:"/\\|?*]', "_", name)
+        (folder / "setups" / f"{safe}.toml").write_text(own["setup_text"],
+                                                         encoding="utf-8")
 
 
 def _n_line(per_tank: pd.DataFrame) -> str:
@@ -356,6 +486,9 @@ def export_results_folder(loaded_files: Dict, file_groups: Optional[Dict[str, st
         folder / "speed_histogram.csv", index=False)
     position_density_table(loaded_files, file_groups, squares_across).to_csv(
         folder / "position_density.csv", index=False)
+    tracking_settings(loaded_files, file_groups).to_csv(
+        folder / "tracking_settings.csv", index=False)
+    _save_setups(loaded_files, folder)
     (folder / "README.txt").write_text(
         README.format(when=datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
                       version=provenance.analyzer_version(),
@@ -370,5 +503,5 @@ def export_results_folder(loaded_files: Dict, file_groups: Optional[Dict[str, st
 
 FILES: List[str] = ["results_per_tank.csv", "results_per_fish.csv",
                     "results_by_minute.csv",
-                    "speed_histogram.csv", "position_density.csv", "README.txt",
-                    "prism"]
+                    "speed_histogram.csv", "position_density.csv",
+                    "tracking_settings.csv", "README.txt", "prism"]

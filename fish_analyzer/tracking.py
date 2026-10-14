@@ -35,7 +35,13 @@ from importlib import util
 from pathlib import Path
 from typing import Callable, List, Optional
 
-from . import idtrackerai_rolling
+from . import idtrackerai_rolling, provenance
+
+#: Written into a session folder after tracking: what idtracker.ai's own
+#: session.json cannot say about the run. The rolling background is passed
+#: to idtracker.ai as a plain statistic, and the setup beside the videos may
+#: be changed later, so both are kept here, with this app's version.
+TRACKED_WITH_FILE = "freeswim_tracking.json"
 
 VIDEO_EXTENSIONS = {".avi", ".mp4", ".mov", ".mkv", ".mpg", ".mpeg"}
 
@@ -310,9 +316,29 @@ def run_tracking(video: Path, setup: Path,
         finish_flag = Path(folder) / "finish_training"
         run_process(build_track_command(video, setup, finish_flag),
                     video.parent, line, stop)
+    ok = not stopped[0] and tracking_status(video) == TRACKED
+    if ok:
+        _record_how_it_was_tracked(video, setup)
     return TrackOutcome(
         video=video,
-        ok=not stopped[0] and tracking_status(video) == TRACKED,
+        ok=ok,
         stopped=stopped[0],
         seconds=time.monotonic() - started,
         last_lines=list(tail))
+
+
+def _record_how_it_was_tracked(video: Path, setup: Path) -> None:
+    """Write TRACKED_WITH_FILE into the video's new session folder."""
+    try:
+        setup_text = Path(setup).read_text(encoding="utf-8")
+    except OSError:
+        setup_text = None
+    record = {"analyzer_version": provenance.analyzer_version(),
+              "rolling_background": idtrackerai_rolling.setup_statistic(setup)[0],
+              "setup": Path(setup).name,
+              "setup_text": setup_text}
+    try:
+        (session_folder_for(video) / TRACKED_WITH_FILE).write_text(
+            json.dumps(record, indent=2), encoding="utf-8")
+    except OSError:
+        pass  # the tracking itself succeeded; the export will say "not recorded"
