@@ -469,9 +469,15 @@ class MetricsCalculator:
         supplied sessions gave 32-321 BL/s against a physiological ceiling near
         25 BL/s, 2.4-7.9x each fish's own 99.9th percentile (finding B17).
 
-        `speed_p99` answers the same question -- how fast does this fish swim
-        when it is going flat out -- without being settable by a single bad
-        frame. Steps faster than max_plausible_speed are dropped before this
+        `speed_p95` answers the same question -- how fast does this fish swim
+        when it gets going -- without being settable by a single bad frame.
+        The 95th percentile, not the 99th (2026-10-14): on three sessions
+        tracked with and without identities from the same setup, the artifacts
+        that survive jump removal (small handovers, a centre point shifting
+        as two fish merge) moved the 99th percentile up 2.2-4.4% and the 95th
+        0.7-1.8%, while both told fish in a tank apart equally (13-22% spread).
+        Over ten minutes the 95th is a fish's fastest 30 seconds of swimming,
+        the 99th its fastest 6, closer to single bursts. Steps faster than max_plausible_speed are dropped before this
         (see TRACKING JUMPS) and counted per fish as a data-quality signal
         rather than being silently folded into a behavioural number.
         """
@@ -480,7 +486,7 @@ class MetricsCalculator:
         if len(speed) == 0:
             return {
                 'mean_speed': np.nan,
-                'speed_p99': np.nan,
+                'speed_p95': np.nan,
                 'std_speed': np.nan,
                 'median_speed': np.nan,
                 'speed_max_raw': np.nan,
@@ -488,7 +494,7 @@ class MetricsCalculator:
 
         return {
             'mean_speed': float(np.mean(speed)),
-            'speed_p99': float(np.percentile(speed, 99)),
+            'speed_p95': float(np.percentile(speed, 95)),
             'std_speed': float(np.std(speed)),
             'median_speed': float(np.median(speed)),
             # Kept out of the export: useful for spotting a bad recording,

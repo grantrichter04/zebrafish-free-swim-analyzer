@@ -83,8 +83,8 @@ def speed_histogram(loaded_files: Dict, file_groups: Optional[Dict[str, str]] = 
 
 
 def position_density_table(loaded_files: Dict,
-                           file_groups: Optional[Dict[str, str]] = None
-                           ) -> pd.DataFrame:
+                           file_groups: Optional[Dict[str, str]] = None,
+                           squares_across: int = 48) -> pd.DataFrame:
     """The share of each session's tracked positions in each square cell,
     the numbers behind "Where they swim". y runs up from the bottom of the
     video, as drawn."""
@@ -94,7 +94,7 @@ def position_density_table(loaded_files: Dict,
                "YTo", "Time_pct"]
     if not sessions:
         return pd.DataFrame(columns=columns)
-    cell = results.density_cell(loaded_files, sessions)
+    cell = results.density_cell(loaded_files, sessions, squares_across)
     rows = []
     for name in sessions:
         loaded = loaded_files[name]
@@ -131,7 +131,7 @@ results_per_fish.csv - "Group comparison"
   DistancePerTrackedMin  distance divided by the minutes the fish was seen
                      (shown instead of Distance when any session has no
                      identities, because those are seen less of the time)
-  MedianSpeed, Speed99   median and 99th percentile speed, Unit per second
+  MedianSpeed, Speed95   median and 95th percentile speed, Unit per second
   Straightness       straight-line distance / distance swum, per second of
                      swimming, averaged (0 to 1)
   NearWall           % of time in the zone along the walls; WallZoneArea_pct
@@ -251,7 +251,7 @@ def prism_tables(loaded_files: Dict, file_groups: Optional[Dict[str, str]],
 
 
 def export_results_folder(loaded_files: Dict, file_groups: Optional[Dict[str, str]],
-                          parent: Path) -> Path:
+                          parent: Path, squares_across: int = 48) -> Path:
     """Write the export into a new folder inside `parent` and return it.
 
     The folder is named free_swim_results_<date>, with _2, _3... added if
@@ -271,7 +271,7 @@ def export_results_folder(loaded_files: Dict, file_groups: Optional[Dict[str, st
                    loaded_files).to_csv(folder / "results_by_minute.csv", index=False)
     speed_histogram(loaded_files, file_groups).to_csv(
         folder / "speed_histogram.csv", index=False)
-    position_density_table(loaded_files, file_groups).to_csv(
+    position_density_table(loaded_files, file_groups, squares_across).to_csv(
         folder / "position_density.csv", index=False)
     (folder / "README.txt").write_text(
         README.format(when=datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),

@@ -102,7 +102,7 @@ with the videos: they are the tracking results.
      Save there (Ctrl+S) and the session is ticked as **Reviewed** and
      reloaded with the corrections.
 2. **Results** shows the headline measures: total distance, median speed,
-   99th percentile speed, path straightness and time near the wall. Small dots are fish,
+   95th percentile speed, path straightness, time near the wall and time resting. Small dots are fish,
    large markers are session means. Fish sharing a tank are not independent,
    so the session is the unit to compare, and a group needs several sessions
    to be tested. **Minute by minute** shows each measure on every minute of

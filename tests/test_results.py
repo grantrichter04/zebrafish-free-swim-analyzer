@@ -30,7 +30,7 @@ def test_table_has_one_row_per_fish_with_the_headline_metrics(two_groups):
     assert len(table) == 9
     assert list(table.columns) == [
         "Group", "Session", "Fish", "Tracked_pct", "Jumps", "Distance", "MedianSpeed",
-        "Speed99", "Straightness", "NearWall", "RestingTime", "WallZoneArea_pct",
+        "Speed95", "Straightness", "NearWall", "RestingTime", "WallZoneArea_pct",
         "DistancePerTrackedMin", "Unit", "PixelsPerUnit"]
     assert table["NearWall"].isna().all(), "no arena, so no wall time yet"
     assert set(table["Group"]) == {"control", "treated"}, \
@@ -39,8 +39,8 @@ def test_table_has_one_row_per_fish_with_the_headline_metrics(two_groups):
     row = table.iloc[0]
     assert row["Distance"] == first.metrics["total_distance"]
     assert row["MedianSpeed"] == first.metrics["median_speed"]
-    assert row["Speed99"] == first.metrics["speed_p99"]
-    assert row["Speed99"] >= row["MedianSpeed"]
+    assert row["Speed95"] == first.metrics["speed_p95"]
+    assert row["Speed95"] >= row["MedianSpeed"]
     assert 0 <= row["Straightness"] <= 1
 
 
@@ -62,7 +62,7 @@ def test_the_group_line_is_the_mean_of_session_means_not_of_fish():
         "Group": ["g"] * 5, "Session": ["a", "a", "a", "a", "b"],
         "Fish": list("12345"), "Tracked_pct": [100.0] * 5,
         "Distance": [10.0, 10.0, 10.0, 10.0, 50.0],
-        "MedianSpeed": [1.0] * 5, "Speed99": [2.0] * 5,
+        "MedianSpeed": [1.0] * 5, "Speed95": [2.0] * 5,
         "Straightness": [0.5] * 5, "NearWall": [60.0] * 5,
         "RestingTime": [5.0] * 5,
         "WallZoneArea_pct": [51.0] * 5, "Unit": ["cm"] * 5,
@@ -88,7 +88,7 @@ def test_the_group_line_is_the_mean_of_session_means_not_of_fish():
 def test_speeds_are_labelled_per_second_and_straightness_has_no_unit():
     labels = {m.column: m.axis_label("BL") for m in results.METRICS}
     assert labels == {"Distance": "BL", "MedianSpeed": "BL/s",
-                      "Speed99": "BL/s", "Straightness": "0 to 1",
+                      "Speed95": "BL/s", "Straightness": "0 to 1",
                       "NearWall": "% of time", "RestingTime": "% of time"}
     assert all(len(m.meaning) > 40 for m in results.METRICS), \
         "every measure says what it is"
@@ -222,7 +222,7 @@ def test_minute_table_has_one_row_per_fish_per_minute(two_groups):
 
     assert list(minutes.columns) == [
         "Group", "Session", "Fish", "Minute", "Distance", "MedianSpeed",
-        "Speed99", "Straightness", "NearWall", "RestingTime",
+        "Speed95", "Straightness", "NearWall", "RestingTime",
         "DistancePerTrackedMin", "Unit"]
     one = minutes[minutes["Session"] == "control_1"]
     assert len(one) == expected * 3
@@ -569,7 +569,7 @@ def test_measures_are_explained_in_the_app(app):
         shown = next(w for w in window.winfo_children()
                      if isinstance(w, tk.Text)).get("1.0", "end")
         assert "divided by the" in shown and "Path straightness" in shown
-        assert "99th percentile" in shown and "even" in shown
+        assert "95th percentile" in shown and "even" in shown
     finally:
         window.destroy()
 

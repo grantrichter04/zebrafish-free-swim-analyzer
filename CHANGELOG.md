@@ -27,8 +27,15 @@
   three or more sessions. "Each fish" adds the fish back.
 - **Speed distributions** can show ridges per fish, tank or group (a group's
   ridge is the mean of its tanks', each tank counting the same), have a
-  median tick, and a box to set where the speed axis ends.
+  median tick, and a box to set where the speed axis ends. The
+  cumulative curves follow the same fish / tank / group choice.
 - **Panels** on Group comparison and Minute by minute can be ticked on and off.
+- **Top speed is the 95th percentile** (was the 99th). On three sessions
+  tracked with and without identities from one setup, the artifacts left
+  after jump removal moved the 99th up 2.2-4.4% and the 95th 0.7-1.8%;
+  both tell fish in a tank apart equally. Column `Speed95`.
+- **Where they swim** has a "Squares across" box (48 by default) for the
+  heatmap grid, also used by the export.
 - **Export results** writes a folder: a CSV for each view on Results, a
   `prism` folder of tank-level tables laid out to paste into GraphPad Prism
   (a Column table per measure, an XY table per measure by minute), a

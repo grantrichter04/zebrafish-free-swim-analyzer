@@ -9,7 +9,7 @@ needs a threshold:
 
     Distance        how much the fish swam
     MedianSpeed     the median speed: how fast it usually goes
-    Speed99         the 99th percentile of speed: how fast its fast moments are
+    Speed95         the 95th percentile of speed: how fast it goes when it gets going
     Straightness    how direct its path is, second by second (see METRICS)
     NearWall        the share of its time spent in the zone along the walls
 
@@ -60,8 +60,8 @@ METRICS: List[Metric] = [
     Metric("MedianSpeed", "median_speed", "Median speed", "speed",
            "The median of its frame-by-frame speed: half the time it was "
            "slower than this, half the time faster."),
-    Metric("Speed99", "speed_p99", "99th percentile speed", "speed",
-           "The 99th percentile of its speed: it was faster than this for only "
+    Metric("Speed95", "speed_p95", "95th percentile speed", "speed",
+           "The 95th percentile of its speed: it was faster than this for only "
            "1% of the time. A percentile, not the maximum, so a few tracking "
            "errors cannot set it."),
     Metric("Straightness", "mean_path_straightness", "Path straightness", "ratio",
@@ -212,7 +212,7 @@ def _pooled_row(loaded) -> Dict:
         "Jumps": int(sum(fish.metrics.get("tracking_jumps", 0) for fish in tracks)),
         "Distance": distance / fish_in_tank,
         "MedianSpeed": float(np.median(speeds)) if len(speeds) else np.nan,
-        "Speed99": float(np.percentile(speeds, 99)) if len(speeds) else np.nan,
+        "Speed95": float(np.percentile(speeds, 95)) if len(speeds) else np.nan,
         "Straightness": float(straight.mean()) if len(straight) else np.nan,
         "NearWall": near,
         "RestingTime": (sum(fish.metrics.get("freeze_total_duration_s", 0.0)
@@ -482,28 +482,39 @@ def _density(speeds: np.ndarray, bins: np.ndarray) -> np.ndarray:
 
 def plot_session_speed_ecdf(ax, samples: List[SpeedSample],
                             session_colors: Dict[str, tuple],
-                            top: Optional[float] = None) -> None:
+                            top: Optional[float] = None,
+                            each_fish: bool = False) -> None:
     """One cumulative curve per session, all its fish pooled: the comparison.
+    With `each_fish`, a thinner curve per fish instead, coloured by session,
+    to match ridges drawn per fish.
 
     A cumulative curve needs no bins and no smoothing, so nothing about it is
     a choice, and the two speed metrics can be read straight off it: where a
-    curve crosses 50% is that session's median speed, where it crosses 99%
-    its 99th percentile. A session that is faster overall sits to the right.
+    curve crosses 50% is that session's median speed, where it crosses 95%
+    its 95th percentile. A session that is faster overall sits to the right.
     """
     bins = _speed_bins(samples, top=top)
     levels = np.linspace(0.0, 1.0, 501)
     sessions = list(dict.fromkeys(sample.session for sample in samples))
     for session in sessions:
         in_session = [sample for sample in samples if sample.session == session]
+        label = f"{session}  ({in_session[0].group})"
+        if each_fish:
+            for index, sample in enumerate(in_session):
+                ax.plot(np.quantile(sample.speeds, levels), levels * 100,
+                        color=session_colors[session], linewidth=1.1, alpha=0.8,
+                        label=label if index == 0 else None)
+            continue
         pooled = np.concatenate([sample.speeds for sample in in_session])
         ax.plot(np.quantile(pooled, levels), levels * 100,
-                color=session_colors[session], linewidth=2,
-                label=f"{session}  ({in_session[0].group})")
-    for level, text in ((50, "median"), (99, "99th percentile")):
+                color=session_colors[session], linewidth=2, label=label)
+    for level, text in ((50, "median"), (95, "95th percentile")):
         ax.axhline(level, color="gray", linestyle=":", linewidth=1)
         ax.text(bins[-1], level - 1.5, f"{text} ", fontsize=8, color="gray",
                 ha="right", va="top")
-    ax.set_title("Each session, all fish together", fontsize=11, fontweight="bold")
+    pooled_only = all(sample.fish == POOLED for sample in samples)
+    ax.set_title("Each fish" if each_fish and not pooled_only else
+                 "Each tank, all fish together", fontsize=11, fontweight="bold")
     ax.set_xlabel(f"Speed ({samples[0].unit}/s)")
     ax.set_ylabel("% of time at or below this speed")
     ax.set_xlim(bins[0], bins[-1])
@@ -562,7 +573,7 @@ ALL_FISH = "all fish"
 
 def tank_samples(samples: List[SpeedSample]) -> List[SpeedSample]:
     """One sample per session: every frame of all its fish together, which
-    is what "Each session, all fish together" on the left draws."""
+    is what "Each tank, all fish together" on the left draws."""
     out = []
     for session in dict.fromkeys(sample.session for sample in samples):
         own = [sample for sample in samples if sample.session == session]
@@ -595,7 +606,7 @@ def plot_group_speed_ecdf(ax, samples: List[SpeedSample],
             ax.plot(speeds, curve, color=color, linewidth=1.0, alpha=0.5)
         ax.plot(speeds, curves.mean(axis=0), color=color, linewidth=2.6,
                 label=f"{group}  ({len(tanks)} tank{'s' if len(tanks) != 1 else ''})")
-    for level, text in ((50, "median"), (99, "99th percentile")):
+    for level, text in ((50, "median"), (95, "95th percentile")):
         ax.axhline(level, color="gray", linestyle=":", linewidth=1)
         ax.text(bins[-1], level - 1.5, f"{text} ", fontsize=8, color="gray",
                 ha="right", va="top")
@@ -820,7 +831,7 @@ def minute_table(loaded_files: Dict, file_groups: Optional[Dict[str, str]] = Non
                     "DistancePerTrackedMin": (tracked.mean() * 60
                                               if len(tracked) else np.nan),
                     "MedianSpeed": np.median(tracked) if len(tracked) else np.nan,
-                    "Speed99": np.percentile(tracked, 99) if len(tracked) else np.nan,
+                    "Speed95": np.percentile(tracked, 95) if len(tracked) else np.nan,
                     "Straightness": in_bin.mean() if len(in_bin) else np.nan,
                     "NearWall": near,
                     "RestingTime": rest.mean() * 100 if len(rest) else np.nan,

@@ -114,7 +114,7 @@ def _fish_rows(loaded_file, nickname: str, group: str) -> List[Dict]:
             'DistancePerTrackedMin': round(m.get('distance_per_tracked_min', nan), 3),
             'NetDisplacement': round(m.get('net_displacement', nan), 3),
             'MeanSpeed': round(m.get('mean_speed', nan), 4),
-            'SpeedP99': round(m.get('speed_p99', nan), 4),
+            'SpeedP95': round(m.get('speed_p95', nan), 4),
             'MedianSpeed': round(m.get('median_speed', nan), 4),
             'PathStraightness': round(m.get('mean_path_straightness', nan), 4),
             'StraightnessSeconds_pct': round(m.get('straightness_windows_used_pct', nan), 1),
@@ -173,7 +173,7 @@ def export_individual_metrics_csv(
 
     Columns: Group, File, FishID, Label, Unit, ValidFrames_pct, TotalDistance,
              DistancePerTrackedMin, ObservedDuration_s, LongestGap_s,
-             NetDisplacement, MeanSpeed, SpeedP99, MedianSpeed,
+             NetDisplacement, MeanSpeed, SpeedP95, MedianSpeed,
              PathStraightness, StraightnessSeconds_pct,
              FreezeEpisodes_Complete, FreezeEpisodes_Censored,
              FreezeTotalDuration_s, FreezeMeanDuration_s, FreezeFraction_pct,

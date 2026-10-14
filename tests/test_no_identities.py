@@ -90,7 +90,7 @@ def test_a_handover_adds_no_distance_and_no_speed(tmp_path):
 
     assert row["Jumps"] == 2, "one jump on each track"
     # 2 px a frame at 50 px per BL and 30 fps is 1.2 BL/s, every frame.
-    assert row["Speed99"] == pytest.approx(1.2, abs=0.01)
+    assert row["Speed95"] == pytest.approx(1.2, abs=0.01)
     assert row["DistancePerTrackedMin"] == pytest.approx(72.0, abs=0.5)
 
 

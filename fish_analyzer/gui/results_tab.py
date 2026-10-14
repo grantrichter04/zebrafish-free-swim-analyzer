@@ -33,7 +33,7 @@ class ResultsTabMixin:
         ("Group", "Group", 130), ("Session", "Session", 200), ("Fish", "Fish", 60),
         ("Tracked_pct", "Tracked %", 80), ("Jumps", "Jumps", 60),
         ("Distance", "Distance", 100),
-        ("MedianSpeed", "Median speed", 120), ("Speed99", "99th pct speed", 130),
+        ("MedianSpeed", "Median speed", 120), ("Speed95", "95th pct speed", 130),
         ("Straightness", "Straightness", 100), ("NearWall", "Near wall %", 100),
         ("RestingTime", "Resting %", 80),
     )
@@ -105,6 +105,16 @@ class ResultsTabMixin:
         self.results_speed_top_box.pack(side="left")
         for event in ("<Return>", "<FocusOut>"):
             self.results_speed_top_box.bind(event, lambda e: self._draw_results_plot())
+        # The heatmaps' grid: the widest side of the video in this many
+        # squares, the same size for every session. Fewer reads smoother.
+        tk.Label(view_row, text="Squares across:").pack(side="left", padx=(14, 3))
+        self.results_squares_var = tk.StringVar(value="48")
+        self.results_squares_box = tk.Spinbox(
+            view_row, from_=8, to=200, increment=8, width=4, state="disabled",
+            textvariable=self.results_squares_var, command=self._draw_results_plot)
+        self.results_squares_box.pack(side="left")
+        for event in ("<Return>", "<FocusOut>"):
+            self.results_squares_box.bind(event, lambda e: self._draw_results_plot())
         tk.Button(view_row, text="What do these measures mean?",
                   command=self._explain_measures).pack(side="right")
 
@@ -184,12 +194,12 @@ class ResultsTabMixin:
             "Distance", text=(f"Distance ({unit})" if distance.column == "Distance"
                               else f"Distance per tracked min ({unit})"))
         self.results_tree.heading("MedianSpeed", text=f"Median speed ({unit}/s)")
-        self.results_tree.heading("Speed99", text=f"99th pct speed ({unit}/s)")
+        self.results_tree.heading("Speed95", text=f"95th pct speed ({unit}/s)")
         for _, row in table.iterrows():
             self.results_tree.insert("", "end", values=(
                 row["Group"], row["Session"], row["Fish"],
                 f"{row['Tracked_pct']:.1f}", row["Jumps"], f"{row[distance.column]:.1f}",
-                f"{row['MedianSpeed']:.2f}", f"{row['Speed99']:.2f}",
+                f"{row['MedianSpeed']:.2f}", f"{row['Speed95']:.2f}",
                 f"{row['Straightness']:.2f}",
                 "" if row["NearWall"] != row["NearWall"] else f"{row['NearWall']:.1f}",
                 "" if row["RestingTime"] != row["RestingTime"]
@@ -217,6 +227,8 @@ class ResultsTabMixin:
         self.results_speed_top_box.config(
             state="normal" if self.results_view.get() == "distributions"
             else "disabled")
+        self.results_squares_box.config(
+            state="normal" if self.results_view.get() == "density" else "disabled")
         table = self._results_table
         if table is None or table.empty:
             return
@@ -241,14 +253,16 @@ class ResultsTabMixin:
                 results.plot_group_speed_ecdf(left, samples, colors, top)
                 results.plot_group_speed_ridges(right, samples, colors, top)
             else:
-                results.plot_session_speed_ecdf(left, samples, session_colors, top)
+                results.plot_session_speed_ecdf(left, samples, session_colors, top,
+                                                each_fish=level == "fish")
                 results.plot_fish_speed_ridges(
                     right, results.tank_samples(samples) if level == "tanks"
                     else samples, session_colors, top)
             figure.tight_layout()
         elif self.results_view.get() == "density":
             figure.set_layout_engine("constrained")
-            cell = results.density_cell(self.loaded_files, sessions)
+            cell = results.density_cell(self.loaded_files, sessions,
+                                        self._results_squares_across())
             maps = [results.position_density(self.loaded_files[name], cell)
                     for name in sessions]
             ceiling = results.shared_density_ceiling([m[0] for m in maps])
@@ -303,6 +317,14 @@ class ResultsTabMixin:
             figure.tight_layout(rect=(0, 0.13, 1, 0.95 if smooth > 1 else 1))
         embed_figure_with_toolbar(figure, self.results_plot_frame)
 
+    def _results_squares_across(self) -> int:
+        """The heatmap grid box; anything that is not a sensible whole
+        number is the default, 48."""
+        try:
+            return min(200, max(4, int(float(self.results_squares_var.get()))))
+        except (ValueError, tk.TclError):
+            return 48
+
     def _results_params(self):
         """The settings the results on show were made with, or None. One run
         of the analysis uses one set for every session."""
@@ -356,7 +378,8 @@ class ResultsTabMixin:
         if not parent:
             return
         folder = results_export.export_results_folder(
-            self.loaded_files, self.file_groups, Path(parent))
+            self.loaded_files, self.file_groups, Path(parent),
+            self._results_squares_across())
         messagebox.showinfo(
             "Exported",
             f"Results saved in:\n{folder}\n\nOne CSV for each view on this tab, "

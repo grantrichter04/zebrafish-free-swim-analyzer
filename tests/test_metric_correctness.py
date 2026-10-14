@@ -78,14 +78,14 @@ def test_net_displacement_is_nan_when_nothing_can_be_measured():
 
 def test_top_speed_is_not_set_by_a_single_teleport():
     """B17: a raw max reports the worst tracking glitch in the recording —
-    32-321 BL/s on real sessions against a ceiling near 25. speed_p99 answers
+    32-321 BL/s on real sessions against a ceiling near 25. speed_p95 answers
     the same question without being settable by one bad frame."""
     traj = straight_line(n=600, step_px=2.0)
     traj[300:, 0, 0] += 900.0  # identity swap across the arena
     params = ProcessingParameters.default_for_fish()
     params.max_plausible_speed = 0   # the percentile alone, without jump removal
     m = metrics_for(traj, params)
-    assert m["speed_p99"] == pytest.approx(2.0 / BODY_LENGTH_PX * FPS, rel=0.1)
+    assert m["speed_p95"] == pytest.approx(2.0 / BODY_LENGTH_PX * FPS, rel=0.1)
     # The raw max is kept out of the export but retained for quality checks.
     assert m["speed_max_raw"] > 100
 
@@ -137,7 +137,7 @@ def test_speed_statistics_on_constant_velocity_swimmer():
     expected = 2.0 / BODY_LENGTH_PX * FPS
     assert m["mean_speed"] == pytest.approx(expected)
     assert m["median_speed"] == pytest.approx(expected)
-    assert m["speed_p99"] == pytest.approx(expected)
+    assert m["speed_p95"] == pytest.approx(expected)
     assert m["std_speed"] == pytest.approx(0.0, abs=1e-9)
 
 
