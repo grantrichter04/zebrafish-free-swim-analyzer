@@ -54,7 +54,7 @@ minute-by-minute data and mixed models, is in each export's `STATISTICS.txt`.
 
 ## What has been validated
 
-See [VALIDATION.md](VALIDATION.md) once it exists (Audit I, finding I8).
+See [VALIDATION.md](VALIDATION.md): what has been checked, and what has not.
 
 ## References
 

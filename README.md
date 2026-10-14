@@ -322,7 +322,9 @@ Version history is in [CHANGELOG.md](CHANGELOG.md).
 
 Every Results export holds a `METHODS.txt`: a draft methods paragraph and
 references, filled in with that export's versions, settings, scale and n.
-[docs/METHODS.md](docs/METHODS.md) explains why each setting has its value.
+[docs/METHODS.md](docs/METHODS.md) explains why each setting has its value,
+and [docs/VALIDATION.md](docs/VALIDATION.md) says what has been checked and
+what has not.
 
 Please cite idtracker.ai, which does the tracking:
 

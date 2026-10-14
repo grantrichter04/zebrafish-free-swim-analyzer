@@ -57,6 +57,10 @@ found that an export could not be traced to the code that made it.
   for sessions without identities. `results_by_minute_per_tank.csv` gives
   the tank values by minute in long form for jamovi or R, and the Prism
   README says how to test minute by minute. (Audit I, finding I9.)
+- **`docs/VALIDATION.md`** says in one place what has been checked and what
+  has not, with where the evidence is. Not yet checked: idtracker.ai's
+  positions against hand-marked frames, and the resting speed against this
+  rig's noise floor. (Audit I, finding I8.)
 - The explanation of 95th percentile speed said "faster than this for only
   1% of the time"; it is 5%.
 
