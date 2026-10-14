@@ -9,6 +9,8 @@ tab, holding enough to draw that view again in R, Prism or Excel.
     speed_histogram.csv     Speed distributions: frames in each speed bin
     position_density.csv    Where they swim: share of time in each square
     README.txt              what each file and column is
+    prism/                  the same numbers one value per tank, laid out to
+                            paste into GraphPad Prism (see PRISM_README)
 
 Every file is long format, one observation per row, and every row says how
 its session was tracked (Tracking: "identities" or "no identities"), so the
@@ -153,7 +155,99 @@ speed_histogram.csv - "Speed distributions"
 position_density.csv - "Where they swim"
   The % of a session's tracked positions in each square, XFrom-XTo by
   YFrom-YTo, in Unit, y measured up from the bottom of the video.
+
+prism/ - the group comparison and minute-by-minute numbers, one value per
+  tank, laid out to paste straight into GraphPad Prism. PRISM_README.txt
+  there says which table type to make and how.
 """
+
+
+PRISM_README = """\
+Tables for GraphPad Prism, exported {when}
+
+Every number here is a tank (session) value: the mean of its fish, or for a
+session tracked without identities the value for the whole tank. That is
+the unit to plot and test, so nothing needs averaging first.
+
+group_comparison_<measure>.csv  -> a Column table
+  One column per group, one row per session. In Prism: New table, Column,
+  "Enter replicate values, stacked into columns". Open the CSV in Excel,
+  copy everything including the group names in the first row, and paste
+  into the table's first cell. Prism draws the dot plot; a t-test or
+  one-way ANOVA from Analyze compares the groups.
+  Which session is in which row: sessions_in_each_row.csv.
+
+by_minute_<measure>.csv  -> an XY table
+  Minute in the first column, then each group's sessions side by side,
+  headed "group: session". Every group has {width} column(s); a group with
+  fewer sessions has blank ones. In Prism: New table, XY, X as numbers, Y
+  "Enter {width} replicate values in side-by-side subcolumns". Paste the
+  numbers (not the header row) into the first X cell, then type the group
+  names as the data set titles. Prism draws each group's mean with its
+  spread (choose SD, SEM or each replicate under Format graph).
+
+The measures:
+{measures}
+{note}"""
+
+
+def prism_tables(loaded_files: Dict, file_groups: Optional[Dict[str, str]],
+                 folder: Path) -> List[str]:
+    """Write the Prism tables into `folder` and return their names."""
+    folder.mkdir(exist_ok=True)
+    written = []
+    metrics = results.metrics_for(loaded_files)
+    means = results.session_means(results.results_table(loaded_files, file_groups),
+                                  [m.column for m in metrics])
+    groups = list(dict.fromkeys(means["Group"]))
+    sessions = {g: list(means.loc[means["Group"] == g, "Session"]) for g in groups}
+    rows = max(len(names) for names in sessions.values())
+
+    order = [{"Row": row + 1, **{g: (sessions[g][row] if row < len(sessions[g]) else "")
+                                 for g in groups}} for row in range(rows)]
+    pd.DataFrame(order, columns=["Row"] + groups).to_csv(
+        folder / "sessions_in_each_row.csv", index=False)
+    written.append("sessions_in_each_row.csv")
+
+    minutes = results.minute_table(loaded_files, file_groups)
+    unit = results.shared_unit(results.results_table(loaded_files, file_groups))
+    lines = []
+    for metric in metrics:
+        comparison = pd.DataFrame({
+            g: pd.Series(means.loc[means["Group"] == g, metric.column].to_list())
+            for g in groups})
+        name = f"group_comparison_{metric.column}.csv"
+        comparison.to_csv(folder / name, index=False, float_format="%.5g")
+        written.append(name)
+
+        # A session's minute is the mean of its fish in that minute.
+        per_session = (minutes.groupby(["Group", "Session", "Minute"], sort=False)
+                       [metric.column].mean().reset_index())
+        wide = pd.DataFrame({"Minute": sorted(per_session["Minute"].unique())})
+        for g in groups:
+            for index in range(rows):
+                if index < len(sessions[g]):
+                    session = sessions[g][index]
+                    values = (per_session[per_session["Session"] == session]
+                              .set_index("Minute")[metric.column])
+                    wide[f"{g}: {session}"] = wide["Minute"].map(values)
+                else:
+                    wide[f"{g}: (none)"] = np.nan
+        name = f"by_minute_{metric.column}.csv"
+        wide.to_csv(folder / name, index=False, float_format="%.5g")
+        written.append(name)
+        lines.append(f"  {metric.column:22s} {metric.title}, {metric.axis_label(unit)}")
+
+    params = next((getattr(l, "processing_params", None) for l in loaded_files.values()
+                   if l.processed_data and getattr(l, "processing_params", None)), None)
+    note = ("\nRestingTime counts a fish resting when slower than "
+            f"{params.rest_speed_threshold:g} {unit}/s for at least "
+            f"{params.min_freeze_seconds:g} s.\n" if params is not None else "")
+    (folder / "PRISM_README.txt").write_text(PRISM_README.format(
+        when=datetime.datetime.now().strftime("%Y-%m-%d %H:%M"), width=rows,
+        measures="\n".join(lines), note=note), encoding="utf-8")
+    written.append("PRISM_README.txt")
+    return written
 
 
 def export_results_folder(loaded_files: Dict, file_groups: Optional[Dict[str, str]],
@@ -182,8 +276,11 @@ def export_results_folder(loaded_files: Dict, file_groups: Optional[Dict[str, st
     (folder / "README.txt").write_text(
         README.format(when=datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
                       pooled=results.POOLED), encoding="utf-8")
+    if not results.results_table(loaded_files, file_groups).empty:
+        prism_tables(loaded_files, file_groups, folder / "prism")
     return folder
 
 
 FILES: List[str] = ["results_per_fish.csv", "results_by_minute.csv",
-                    "speed_histogram.csv", "position_density.csv", "README.txt"]
+                    "speed_histogram.csv", "position_density.csv", "README.txt",
+                    "prism"]

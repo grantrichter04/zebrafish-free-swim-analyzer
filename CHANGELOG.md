@@ -30,6 +30,8 @@
   median tick, and a box to set where the speed axis ends.
 - **Panels** on Group comparison and Minute by minute can be ticked on and off.
 - **Export results** writes a folder: a CSV for each view on Results, a
+  `prism` folder of tank-level tables laid out to paste into GraphPad Prism
+  (a Column table per measure, an XY table per measure by minute), a
   Tracking column on every row, and a README saying what each column is.
 - **Tracking tab** draws idtracker.ai's identity training as it runs.
 

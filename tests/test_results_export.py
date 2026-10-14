@@ -48,3 +48,29 @@ def test_bin_widths_are_round_numbers():
     assert results_export.nice_bin_width(6.0) == 0.1
     assert results_export.nice_bin_width(4.3) == 0.05
     assert results_export.nice_bin_width(30.0) == 0.5
+
+
+def test_the_prism_comparison_table_is_one_column_per_group_of_tank_means(
+        two_groups, exported):  # noqa: F811
+    prism = exported / "prism"
+    table = pd.read_csv(prism / "group_comparison_MedianSpeed.csv")
+    means = results.session_means(results.results_table(two_groups), ["MedianSpeed"])
+
+    assert list(table.columns) == ["control", "treated"]
+    assert table["control"].dropna().to_list() == pytest.approx(
+        means.loc[means["Group"] == "control", "MedianSpeed"].to_list(), rel=1e-4)
+    assert table["treated"].isna().sum() == 1, "the one treated tank, then a blank"
+    rows = pd.read_csv(prism / "sessions_in_each_row.csv")
+    assert rows["control"].to_list() == ["control_1", "control_2"]
+
+
+def test_the_prism_minute_table_gives_every_group_the_same_number_of_columns(
+        exported):
+    table = pd.read_csv(exported / "prism" / "by_minute_MedianSpeed.csv")
+
+    assert list(table.columns) == ["Minute", "control: control_1",
+                                   "control: control_2", "treated: treated_1",
+                                   "treated: (none)"]
+    assert table["treated: (none)"].isna().all()
+    assert table["Minute"].to_list() == list(range(1, len(table) + 1))
+    assert (exported / "prism" / "PRISM_README.txt").is_file()
