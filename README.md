@@ -2,8 +2,8 @@
 
 A desktop app that takes free-swim videos of zebrafish from recording to
 results: it tracks the fish with [idtracker.ai](https://idtracker.ai/), then
-measures swimming speed, distance, freezing, path straightness, turning bias,
-shoaling and thigmotaxis.
+measures distance, speed, path straightness, time resting, time near the
+wall and shoaling, with the tank as the unit of analysis.
 
 Built for the Morsch lab at Macquarie University.
 
@@ -113,6 +113,12 @@ with the videos: they are the tracking results.
      window, so nothing needs redrawing. If a session has none, or it is
      wrong, **Tank outline...** on **Sessions & Units** draws one on a video
      frame.
+   - **Export results** writes a folder of CSV files. Its `README.txt` says
+     where to start (`results_per_tank.csv`, one row per tank), its
+     `STATISTICS.txt` how to test the numbers, and its `METHODS.txt` gives
+     a draft methods paragraph with references. It also records the
+     version of this app, how each session was tracked and the tank
+     outlines, so the numbers can be traced later.
 3. **Shoaling** shows how close the fish keep to each other: nearest-neighbour
    distance, inter-individual distance and the area the shoal covers, against
    what fish placed at random in the tank would give, and minute by minute.
@@ -134,24 +140,41 @@ folder containing several and loads them all.
 
 ## What is measured
 
-| Analysis | Metrics |
+Results shows six measures for each fish, and each tank's mean of them:
+
+| Measure | What it is |
 |---|---|
-| Individual | Speed, distance, freezing, path straightness, turning bias |
-| Shoaling | Nearest neighbour distance (NND), inter-individual distance (IID), convex hull area |
-| Position | Time near the walls, where the fish spend their time |
+| Distance per tracked minute | Distance swum, divided by the time the fish was tracked |
+| Median speed | Half the time slower, half the time faster |
+| 95th percentile speed | Faster than this only 5% of the time; a percentile, so a few tracking errors cannot set it |
+| Path straightness | Over each second of swimming, straight-line distance / distance swum (0 to 1) |
+| Time near the wall | Share of time in a zone along the walls (thigmotaxis) |
+| Time resting | Share of tracked time spent slower than the resting speed for at least the shortest rest |
+
+**What do these measures mean?** on Results explains each in full.
+**Shoaling** adds nearest-neighbour distance (NND, from each fish to its
+closest neighbour), inter-individual distance (IID, the mean over all pairs)
+and the area of the polygon enclosing all fish, each against what fish
+placed at random in the tank would give.
 
 All distances and areas are in the unit you chose; the `Unit` and
 `PixelsPerUnit` columns in each export say which and at what scale, so results
 can be converted later.
 
 Frames where idtracker.ai lost a fish are treated as *unobserved*, not as the
-fish being still. Freezes are counted within stretches of continuous
-tracking; one cut short by lost tracking is reported as *censored* rather
-than counted, and rates are per unit of observed time. A gap of up to 0.5 s
-does not end a freeze if the fish is in the same place on both sides of it.
+fish being still: speeds and rests are measured only within stretches of
+continuous tracking. A gap of up to 0.5 s does not end a rest if the fish is
+in the same place on both sides of it.
+
+**Sessions tracked without identities** (idtracker.ai's "track without
+identities") are recognised. Their tracks pass from fish to fish, so each
+such session is reported as one row for the whole tank, marked "no
+identities" in every export, and is left out of shoaling. Do not compare
+them with sessions tracked with identities in one analysis.
 
 **Settings that decide what the numbers mean** are on Sessions & Units, next
-to Run All Analysis, and every export records them in its `Setting_` columns:
+to Run All Analysis, and every export records them in its `Setting_` columns.
+[docs/METHODS.md](docs/METHODS.md) gives the basis for each.
 
 - **Leave out fish tracked less than 80% of the time.** A fish seen only part
   of the time is listed in the export as excluded, with its tracked share,
@@ -159,35 +182,34 @@ to Run All Analysis, and every export records them in its `Setting_` columns:
 - **Smooth positions over 0.1 s** (three frames at 30 fps; 0 turns it off).
   idtracker.ai's position for a fish wobbles by about a pixel from frame to
   frame. Without smoothing that wobble reads as movement: a still fish looks
-  like it is swimming slowly (and almost never freezes), and a slow fish's
+  like it is swimming slowly (and almost never rests), and a slow fish's
   distance comes out 20-70% too long. Smoothing removes most of it. On real
-  recordings it changes distance by under 2% and the 99th-percentile speed by
-  about 6%, the same for every fish. It never reaches across a gap.
+  recordings it changes distance by under 2%. It never reaches across a gap.
   0.1 s is enough while the wobble is under about 0.01 body lengths; it
   measured 0.003-0.005 on this lab's recordings. Fish that are small in the
   frame, or tracked less steadily, need 0.17 s, or a resting fish will not be
-  counted as frozen.
-- **Frozen while slower than 0.5 BL/s for at least 1 s.**
+  counted as resting.
+- **Resting: slower than 0.5 BL/s for at least 1 s.** Check it on the video:
+  the Video Inspector's "Check the analysis" rings every fish counted as
+  resting.
 - **Straightness uses seconds faster than 1 BL/s.** In slower seconds the
-  remaining wobble is much of the path, so they are left out;
-  `StraightnessSeconds_pct` says how many seconds were used.
+  remaining wobble is much of the path, so they are left out.
+- **A step faster than 25 BL/s is a tracking jump** (the tracker moving to
+  another fish, or to something that is not a fish), not swimming. The frame
+  it lands on is treated as untracked; each fish's count is in the `Jumps`
+  column.
 
-**Distance** is what was swum while the fish was tracked, so a fish tracked
-less of the time reads lower. `DistancePerTrackedMin` in the exports
-corrects for that; either way, check `Tracked_pct` is similar between groups.
-The same applies to shoaling, which uses only frames in which every fish is
-tracked (`FramesUsed_pct`): fish are most often lost when they overlap, so a
-group tracked less well there will look slightly less tight.
+**Distance** in total is what was swum while the fish was tracked, so a fish
+tracked less of the time reads lower. That is why Results shows distance per
+tracked minute; total distance is still in the export. Either way, check
+`Tracked_pct` is similar between groups. The same applies to shoaling, which
+uses only frames in which every fish is tracked (`FramesUsed_pct`): fish are
+most often lost when they overlap, so a group tracked less well there will
+look slightly less tight.
 
 **Time near the wall** (thigmotaxis) is the share of time spent in a zone
 along the walls, a measure of anxiety-like behaviour. The zone is 15% of the
 tank's shorter side wide, measured in from the tank outline.
-
-**Shoaling:**
-
-- **NND**: distance from each fish to its closest neighbour.
-- **IID**: mean distance over all pairs of fish.
-- **Convex hull**: area of the polygon enclosing all fish.
 
 Some turning and burst metrics from version 2.1.0 were withdrawn because they
 measured tracking noise rather than behaviour. See
@@ -303,13 +325,20 @@ fish_analyzer/
 ├── processing.py                # individual metrics
 ├── segments.py                  # tracking-gap boundaries, shared by episode metrics
 ├── shoaling.py                  # NND, IID, convex hull
+├── shoal_summary.py             # the shoaling results as the Shoaling tab shows them
 ├── spatial.py                   # tank outline and time near the wall
-├── export.py                    # CSV exports
-├── video_utils.py, overlay_render.py, media_export.py   # video and clip export
+├── results.py                   # the six measures, per fish and per tank, and their plots
+├── results_export.py            # the Results export folder
+├── methods.py                   # METHODS.txt and STATISTICS.txt in that folder
+├── provenance.py                # the version and commit every export records
+├── export.py                    # the shoaling CSVs, and older per-fish CSV writers
+├── data_structures.py           # sessions, metadata and calibration
+├── fish_outlines.py, video_utils.py, overlay_render.py, media_export.py   # video and clip export
 └── gui/                         # one file per tab
 install.bat                      # one-time laptop setup
 launch.pyw                       # what the desktop shortcut runs
-docs/audit/                      # the correctness audit and its findings
+docs/METHODS.md, docs/VALIDATION.md   # why each setting, and what has been checked
+docs/audit/                      # the audits and their findings
 docs/superpowers/                # design specs and implementation plans
 extras/                          # standalone scripts, not part of the app
 ```

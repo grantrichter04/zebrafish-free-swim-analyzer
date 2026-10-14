@@ -25,3 +25,5 @@ env/
 *.pickle
 session_*/
 
+# idtracker.ai writes its log wherever it is run from
+idtrackerai.log

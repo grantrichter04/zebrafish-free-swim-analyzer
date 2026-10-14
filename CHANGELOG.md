@@ -61,6 +61,13 @@ found that an export could not be traced to the code that made it.
   has not, with where the evidence is. Not yet checked: idtracker.ai's
   positions against hand-marked frames, and the resting speed against this
   rig's noise floor. (Audit I, finding I8.)
+- **README brought up to date**: the measures as Results shows them (no
+  more turning bias, freeze rates or freezing), tracking jumps and sessions
+  without identities explained, the Export results folder described, and
+  the file layout current. `scripts/verify_on_session.py`, which crashed
+  on the renamed top speed, is repaired, checks the Results export rather
+  than the old per-fish one, and is now run by the tests.
+  (Audit I, findings I5 and I10.)
 - The explanation of 95th percentile speed said "faster than this for only
   1% of the time"; it is 5%.
 

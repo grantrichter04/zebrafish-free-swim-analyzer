@@ -21,13 +21,14 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 
 REPO = Path(__file__).resolve().parent.parent
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
+from fish_analyzer import results_export
 from fish_analyzer.data_structures import CalibrationSettings
-from fish_analyzer.export import export_combined_summary_csv
 from fish_analyzer.file_loading import TrajectoryFileLoader
 from fish_analyzer.processing import ProcessingParameters, process_and_analyze_file
 from fish_analyzer.shoaling import ShoalingCalculator, ShoalingParameters
@@ -106,10 +107,10 @@ def verify_session(session: Path, report: Report) -> dict:
                  f"{len(fish_list) - n_nan}/{len(fish_list)} fish")
 
     # --- B17: top speed must not be set by a teleport ---
-    tops = [f.metrics["speed_p99"] for f in fish_list]
+    tops = [f.metrics["speed_p95"] for f in fish_list]
     raws = [f.metrics["speed_max_raw"] for f in fish_list]
     report.check(max(tops) < PLAUSIBLE_TOP_SPEED_BL_S,
-                 "B17 SpeedP99 is physiologically plausible",
+                 "B17 Speed95 is physiologically plausible",
                  f"{min(tops):.1f}–{max(tops):.1f} BL/s "
                  f"(raw max would be {min(raws):.0f}–{max(raws):.0f})")
 
@@ -129,32 +130,36 @@ def verify_session(session: Path, report: Report) -> dict:
 
 
 def verify_export(sessions: dict, report: Report, tmp: Path):
-    """The exported CSV is the artefact that leaves the building."""
+    """The Results export is the artefact that leaves the building."""
     files = {n: d["loaded"] for n, d in sessions.items()}
-    out = tmp / "combined_summary.csv"
-    n_rows = export_combined_summary_csv(files, {}, out)
+    folder = results_export.export_results_folder(files, None, tmp)
+    per_fish = pd.read_csv(folder / "results_per_fish.csv")
+    per_tank = pd.read_csv(folder / "results_per_tank.csv")
 
-    lines = out.read_text(encoding="utf-8").splitlines()
-    header = lines[0].split(",")
-    rows = [dict(zip(header, line.split(","))) for line in lines[1:]]
-
-    print("\nExported CSV")
-    report.check(not WITHDRAWN & set(header),
-                 "withdrawn columns absent",
-                 f"{len(header)} columns, {n_rows} rows")
+    print("\nResults export")
+    header = set(per_fish.columns) | set(per_tank.columns)
+    report.check(not WITHDRAWN & header, "withdrawn columns absent",
+                 f"{len(per_fish.columns)} columns, {len(per_fish)} fish rows")
 
     expected_fish = sum(d["loaded"].n_fish for d in sessions.values())
-    report.check(n_rows == expected_fish,
+    report.check(len(per_fish) == expected_fish,
                  "every fish in every recording has a row",
-                 f"{n_rows} rows for {expected_fish} fish")
+                 f"{len(per_fish)} rows for {expected_fish} fish")
 
-    statuses = sorted({r["Status"] for r in rows})
-    report.check(all(s == "ok" for s in statuses),
-                 "no fish failed or was excluded", f"statuses: {statuses}")
+    # Leaving out a fish tracked too little is the analysis working, not a
+    # fault, but the reason must be stated.
+    statuses = sorted(set(per_fish["Status"]))
+    report.check(all(s == "ok" or s.startswith("excluded: ") for s in statuses),
+                 "every row is analysed or says why it was left out",
+                 f"statuses: {statuses}")
 
-    for column in ("Unit", "ObservedDuration_s", "LongestGap_s", "Status",
-                   "FreezeEpisodes_Censored"):
-        report.check(column in header, f"{column} is exported")
+    for column in ("Unit", "PixelsPerUnit", "Tracked_pct", "Status",
+                   "Setting_Smoothing_s"):
+        report.check(column in per_fish.columns, f"{column} is exported")
+    report.check("AnalyzerVersion" in per_tank.columns,
+                 "the export says which version made it")
+    for name in ("tracking_settings.csv", "METHODS.txt", "STATISTICS.txt"):
+        report.check((folder / name).exists(), f"{name} is written")
 
 
 def main(argv) -> int:

@@ -876,8 +876,8 @@ class DataTabMixin:
             messagebox.showerror("Invalid Parameters", str(e))
             return False
 
-        # Record the parameters actually used — the Methods tab reads these to
-        # describe the run, so they must not stay at the constructor defaults.
+        # Record the parameters actually used: the Results tab and the
+        # export read these, so they must not stay at the constructor defaults.
         self.processing_params = params
 
         total = len(self.loaded_files)
