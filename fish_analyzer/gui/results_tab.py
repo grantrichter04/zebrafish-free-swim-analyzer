@@ -32,7 +32,7 @@ class ResultsTabMixin:
     RESULT_COLUMNS = (
         ("Group", "Group", 130), ("Session", "Session", 200), ("Fish", "Fish", 60),
         ("Tracked_pct", "Tracked %", 80), ("Jumps", "Jumps", 60),
-        ("Distance", "Distance", 100),
+        ("DistancePerTrackedMin", "Distance per tracked min", 150),
         ("MedianSpeed", "Median speed", 120), ("Speed95", "95th pct speed", 130),
         ("Straightness", "Straightness", 100), ("NearWall", "Near wall %", 100),
         ("RestingTime", "Resting %", 80),
@@ -122,8 +122,7 @@ class ResultsTabMixin:
         panel_row.pack(fill="x", padx=20, pady=(4, 0))
         tk.Label(panel_row, text="Panels:").pack(side="left")
         #: Metric column -> whether it gets a panel in the comparison and the
-        #: minute-by-minute views. Distance stands for whichever distance is
-        #: shown (see results.metrics_for).
+        #: minute-by-minute views.
         self.results_panel_vars = {}
         for metric in results.METRICS:
             var = tk.BooleanVar(value=True)
@@ -179,8 +178,7 @@ class ResultsTabMixin:
             "independent, so compare the large markers."
             + ("" if not pooled.any() else
                "  A session tracked without identities cannot tell its fish "
-               "apart, so it has one value for the whole tank, and distance "
-               "is shown per tracked minute for every session.")
+               "apart, so it has one value for the whole tank.")
             + ("" if per_group.min() > 1 else
                "  A group with one session cannot be tested against another.")
             + self._exclusion_note())
@@ -189,16 +187,14 @@ class ResultsTabMixin:
         self._draw_results_plot()
 
         unit = table["Unit"].iloc[0]
-        distance = results.metrics_for(self.loaded_files)[0]
         self.results_tree.heading(
-            "Distance", text=(f"Distance ({unit})" if distance.column == "Distance"
-                              else f"Distance per tracked min ({unit})"))
+            "DistancePerTrackedMin", text=f"Distance per tracked min ({unit})")
         self.results_tree.heading("MedianSpeed", text=f"Median speed ({unit}/s)")
         self.results_tree.heading("Speed95", text=f"95th pct speed ({unit}/s)")
         for _, row in table.iterrows():
             self.results_tree.insert("", "end", values=(
                 row["Group"], row["Session"], row["Fish"],
-                f"{row['Tracked_pct']:.1f}", row["Jumps"], f"{row[distance.column]:.1f}",
+                f"{row['Tracked_pct']:.1f}", row["Jumps"], f"{row['DistancePerTrackedMin']:.1f}",
                 f"{row['MedianSpeed']:.2f}", f"{row['Speed95']:.2f}",
                 f"{row['Straightness']:.2f}",
                 "" if row["NearWall"] != row["NearWall"] else f"{row['NearWall']:.1f}",
@@ -285,8 +281,7 @@ class ResultsTabMixin:
             if by_minute:
                 minutes = results.minute_table(self.loaded_files, self.file_groups)
                 colors = results.group_colors(minutes)
-            metrics = [shown for shown, metric
-                       in zip(results.metrics_for(self.loaded_files), results.METRICS)
+            metrics = [metric for metric in results.METRICS
                        if self.results_panel_vars[metric.column].get()]
             if not metrics:
                 tk.Label(self.results_plot_frame, text="No panels ticked.",
@@ -342,7 +337,7 @@ class ResultsTabMixin:
         text = tk.Text(window, wrap="word", font=("Arial", 10), padx=14, pady=12)
         text.pack(fill="both", expand=True)
         text.tag_configure("title", font=("Arial", 11, "bold"), spacing1=10)
-        for metric in results.METRICS + [results.DISTANCE_PER_TRACKED_MIN]:
+        for metric in results.METRICS:
             text.insert("end", metric.title + "\n", "title")
             text.insert("end", metric.meaning + "\n")
         text.insert("end", "Jumps\n", "title")

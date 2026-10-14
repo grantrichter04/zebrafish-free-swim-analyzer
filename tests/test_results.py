@@ -29,9 +29,9 @@ def test_table_has_one_row_per_fish_with_the_headline_metrics(two_groups):
 
     assert len(table) == 9
     assert list(table.columns) == [
-        "Group", "Session", "Fish", "Tracked_pct", "Jumps", "Distance", "MedianSpeed",
-        "Speed95", "Straightness", "NearWall", "RestingTime", "WallZoneArea_pct",
-        "DistancePerTrackedMin", "Unit", "PixelsPerUnit"]
+        "Group", "Session", "Fish", "Tracked_pct", "Jumps", "DistancePerTrackedMin",
+        "MedianSpeed", "Speed95", "Straightness", "NearWall", "RestingTime",
+        "WallZoneArea_pct", "Distance", "Unit", "PixelsPerUnit"]
     assert table["NearWall"].isna().all(), "no arena, so no wall time yet"
     assert set(table["Group"]) == {"control", "treated"}, \
         "ungrouped sessions fall into the group their name implies"
@@ -61,7 +61,7 @@ def test_the_group_line_is_the_mean_of_session_means_not_of_fish():
     table = pd.DataFrame({
         "Group": ["g"] * 5, "Session": ["a", "a", "a", "a", "b"],
         "Fish": list("12345"), "Tracked_pct": [100.0] * 5,
-        "Distance": [10.0, 10.0, 10.0, 10.0, 50.0],
+        "DistancePerTrackedMin": [10.0, 10.0, 10.0, 10.0, 50.0],
         "MedianSpeed": [1.0] * 5, "Speed95": [2.0] * 5,
         "Straightness": [0.5] * 5, "NearWall": [60.0] * 5,
         "RestingTime": [5.0] * 5,
@@ -69,7 +69,7 @@ def test_the_group_line_is_the_mean_of_session_means_not_of_fish():
         "PixelsPerUnit": [30.0] * 5,
     })
     means = results.session_means(table)
-    assert list(means["Distance"]) == [10.0, 50.0]
+    assert list(means["DistancePerTrackedMin"]) == [10.0, 50.0]
 
     ax = Figure().subplots()
     results.superplot(ax, table, results.METRICS[0],
@@ -81,13 +81,14 @@ def test_the_group_line_is_the_mean_of_session_means_not_of_fish():
     dots = [c for c in ax.collections if type(c).__name__ == "PathCollection"]
     assert sorted(len(c.get_offsets()) for c in dots) == [1, 1, 1, 4], \
         "fish dots for each session, plus one large marker per session"
-    assert ax.get_ylabel() == "cm"
+    assert ax.get_ylabel() == "cm per tracked min"
     assert [t.get_text() for t in ax.get_xticklabels()] == ["g"]
 
 
 def test_speeds_are_labelled_per_second_and_straightness_has_no_unit():
     labels = {m.column: m.axis_label("BL") for m in results.METRICS}
-    assert labels == {"Distance": "BL", "MedianSpeed": "BL/s",
+    assert labels == {"DistancePerTrackedMin": "BL per tracked min",
+                      "MedianSpeed": "BL/s",
                       "Speed95": "BL/s", "Straightness": "0 to 1",
                       "NearWall": "% of time", "RestingTime": "% of time"}
     assert all(len(m.meaning) > 40 for m in results.METRICS), \
@@ -119,7 +120,8 @@ def test_results_tab_fills_after_run_all_analysis(
     assert {r[0] for r in rows} == {"control", "treated"}
     assert "6 fish in 2 session(s), 2 group(s)" in app.results_note_var.get()
     assert "one session cannot be tested" in app.results_note_var.get()
-    assert app.results_tree.heading("Distance")["text"] == "Distance (BL)"
+    assert (app.results_tree.heading("DistancePerTrackedMin")["text"]
+            == "Distance per tracked min (BL)")
     assert app.results_export_button["state"] == "normal"
 
     out = tmp_path / "exports"
@@ -221,9 +223,9 @@ def test_minute_table_has_one_row_per_fish_per_minute(two_groups):
     expected = results.bin_count(loaded.n_frames / loaded.calibration.frame_rate)
 
     assert list(minutes.columns) == [
-        "Group", "Session", "Fish", "Minute", "Distance", "MedianSpeed",
-        "Speed95", "Straightness", "NearWall", "RestingTime",
-        "DistancePerTrackedMin", "Unit"]
+        "Group", "Session", "Fish", "Minute", "DistancePerTrackedMin",
+        "MedianSpeed", "Speed95", "Straightness", "NearWall", "RestingTime",
+        "Distance", "Unit"]
     one = minutes[minutes["Session"] == "control_1"]
     assert len(one) == expected * 3
     assert sorted(set(one["Minute"])) == list(range(1, expected + 1))

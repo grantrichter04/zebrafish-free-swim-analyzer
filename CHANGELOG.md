@@ -7,9 +7,7 @@
   that pass from fish to fish, so every track is pooled into one row
   ("all fish (no identities)"). The fish count is read from the setup
   printed in idtracker.ai's log, because without identities idtracker.ai
-  overwrites it with the most blobs it saw in a frame. On Results, distance
-  is then shown per tracked minute for every session, since these sessions
-  are seen less of the time. Shoaling leaves them out and says why: fish go
+  overwrites it with the most blobs it saw in a frame. Shoaling leaves them out and says why: fish go
   missing mostly while touching (median 0.6-0.7 BL from another fish in the
   frame before, against 1.1-1.3 BL overall), so close contact is lost.
   Sessions & Units shows "no identities" in place of idtracker.ai's
@@ -30,6 +28,9 @@
   median tick, and a box to set where the speed axis ends. The
   cumulative curves follow the same fish / tank / group choice.
 - **Panels** on Group comparison and Minute by minute can be ticked on and off.
+- **Distance is shown per tracked minute** for every session, in place of
+  total distance, which reads lower for a fish tracked less of the time.
+  Total distance stays in the export.
 - **Top speed is the 95th percentile** (was the 99th). On three sessions
   tracked with and without identities from one setup, the artifacts left
   after jump removal moved the 99th up 2.2-4.4% and the 95th 0.7-1.8%;

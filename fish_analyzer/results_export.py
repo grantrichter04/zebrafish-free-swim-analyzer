@@ -127,10 +127,10 @@ not independent. Average a session's rows first, then compare sessions.
 
 results_per_fish.csv - "Group comparison"
   One row per fish (or tank), then one row per fish left out and why.
-  Distance           total distance swum, in Unit
-  DistancePerTrackedMin  distance divided by the minutes the fish was seen
-                     (shown instead of Distance when any session has no
-                     identities, because those are seen less of the time)
+  DistancePerTrackedMin  distance swum per minute the fish was seen, in
+                     Unit; fair between fish tracked more or less of the time
+  Distance           total distance swum, in Unit (lower for a fish tracked
+                     less of the time; the app shows the per-minute figure)
   MedianSpeed, Speed95   median and 95th percentile speed, Unit per second
   Straightness       straight-line distance / distance swum, per second of
                      swimming, averaged (0 to 1)
@@ -196,7 +196,7 @@ def prism_tables(loaded_files: Dict, file_groups: Optional[Dict[str, str]],
     """Write the Prism tables into `folder` and return their names."""
     folder.mkdir(exist_ok=True)
     written = []
-    metrics = results.metrics_for(loaded_files)
+    metrics = results.METRICS
     means = results.session_means(results.results_table(loaded_files, file_groups),
                                   [m.column for m in metrics])
     groups = list(dict.fromkeys(means["Group"]))

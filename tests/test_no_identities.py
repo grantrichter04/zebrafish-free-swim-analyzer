@@ -125,16 +125,20 @@ def test_the_tank_gets_one_speed_curve_and_one_line_per_minute(tmp_path):
     assert len(minutes) == results.bin_count(900 / FPS)
 
 
-def test_distance_is_shown_per_tracked_minute_once_a_tank_is_pooled(
-        tmp_path, synthetic_npy):
-    with_ids = TrajectoryFileLoader.load_file(synthetic_npy, "fish")
-    with_ids.processed_data = process_and_analyze_file(with_ids)
-    assert results.metrics_for({"fish": with_ids})[0].column == "Distance"
+def test_distance_is_per_tracked_minute_so_a_tracking_gap_costs_nothing(tmp_path):
+    positions = _swimmers()
+    gappy = positions.copy()
+    gappy[300:600] = np.nan              # both tracks lost for ten seconds
+    rows = []
+    for name, data in (("full", positions), ("gappy", gappy)):
+        folder = tmp_path / name
+        folder.mkdir()
+        loaded = TrajectoryFileLoader.load_from_session_folder(
+            _session(folder, data), name)
+        loaded.processed_data = process_and_analyze_file(loaded)
+        rows.append(results.results_table({name: loaded}).iloc[0])
 
-    tank = TrajectoryFileLoader.load_from_session_folder(
-        _session(tmp_path, _swimmers()), "tank")
-    tank.processed_data = process_and_analyze_file(tank)
-
-    shown = results.metrics_for({"fish": with_ids, "tank": tank})
-    assert shown[0].column == "DistancePerTrackedMin"
-    assert [m.column for m in shown[1:]] == [m.column for m in results.METRICS[1:]]
+    assert results.METRICS[0].column == "DistancePerTrackedMin"
+    assert rows[1]["Distance"] < 0.7 * rows[0]["Distance"], "the total drops"
+    assert rows[1]["DistancePerTrackedMin"] == pytest.approx(
+        rows[0]["DistancePerTrackedMin"], rel=0.01), "per tracked minute does not"

@@ -7,7 +7,7 @@ the experimental unit in view.
 The metrics answer "is one group more active than another?" and none of them
 needs a threshold:
 
-    Distance        how much the fish swam
+    DistancePerTrackedMin  how much the fish swam, per minute it was seen
     MedianSpeed     the median speed: how fast it usually goes
     Speed95         the 95th percentile of speed: how fast it goes when it gets going
     Straightness    how direct its path is, second by second (see METRICS)
@@ -52,11 +52,20 @@ class Metric:
 
 
 METRICS: List[Metric] = [
-    Metric("Distance", "total_distance", "Total distance", "length",
-           "How far the fish swam: every frame-to-frame step added up. Frames "
-           "where the fish was not tracked add nothing, so a fish tracked less "
-           "of the time reads lower; the exported DistancePerTrackedMin "
-           "corrects for that. Compare Tracked % between groups."),
+    # Per tracked minute, not in total: a total falls with every moment the
+    # fish was not tracked, so a group that was harder to track would look
+    # less active for that reason alone. Total distance is still exported.
+    Metric("DistancePerTrackedMin", "distance_per_tracked_min",
+           "Distance per tracked minute", "rate",
+           "How far the fish swam in each minute it was tracked: every "
+           "frame-to-frame step added up, divided by the time it was seen. "
+           "A total would read lower for a fish tracked less of the time; "
+           "this does not. (Total distance is in the export.) In \"Minute by "
+           "minute\" (titled \"Distance per minute\") each point is the "
+           "distance swum in that minute divided by the part of the minute the "
+           "fish were tracked: tracked for 45 of the 60 seconds and swimming "
+           "60 BL in them reads 80 BL, what a whole minute at that pace would "
+           "give."),
     Metric("MedianSpeed", "median_speed", "Median speed", "speed",
            "The median of its frame-by-frame speed: half the time it was "
            "slower than this, half the time faster."),
@@ -103,35 +112,6 @@ JUMPS_MEANING = (
     "fish with many jumps may also have swapped identity with another fish, "
     "so its own numbers partly belong to that fish; check it in Video "
     "Inspector.")
-
-#: Shown in place of Distance whenever a session tracked without identities
-#: is among the results. Their tracks miss more of the time than fish tracked
-#: with identities (70-87% tracked against 92-99% on the first sessions
-#: compared), and total distance falls with every untracked moment; per
-#: tracked minute it does not. It is the mean speed, per minute.
-DISTANCE_PER_TRACKED_MIN = Metric(
-    "DistancePerTrackedMin", "distance_per_tracked_min",
-    "Distance per tracked minute", "rate",
-    "How far the fish swam in each minute it was tracked: total distance "
-    "divided by the time it was seen. Shown instead of total distance when "
-    "a session tracked without identities is loaded, because those miss more "
-    "of the time and total distance would read lower for that reason alone. "
-    "In \"Minute by minute\" (titled \"Distance per minute\") each point is "
-    "the distance swum in that minute divided by the part of the minute the "
-    "fish were tracked: tracked for 45 of the 60 seconds and swimming 60 BL "
-    "in them reads 80 BL, what a whole minute at that pace would give.")
-
-
-def metrics_for(loaded_files: Dict) -> List[Metric]:
-    """The metrics to show: METRICS, with distance per tracked minute in
-    place of total distance if any analysed session was tracked without
-    identities, so every session is measured the same way."""
-    if any(pooled(loaded) and loaded.processed_data
-           for loaded in loaded_files.values()):
-        return [DISTANCE_PER_TRACKED_MIN if m.column == "Distance" else m
-                for m in METRICS]
-    return list(METRICS)
-
 
 #: Columns that describe a row without being a metric to plot.
 WALL_ZONE_SHARE = "WallZoneArea_pct"
@@ -258,14 +238,13 @@ def results_table(loaded_files: Dict, file_groups: Optional[Dict[str, str]] = No
                                if wall is not None else np.nan)
             row[WALL_ZONE_SHARE] = (round(float(wall.border_area_pct), 1)
                                     if wall is not None else np.nan)
-            row["DistancePerTrackedMin"] = fish.metrics.get(
-                "distance_per_tracked_min", np.nan)
+            row["Distance"] = fish.metrics.get("total_distance", np.nan)
             row["Unit"] = loaded.calibration.unit_name
             row["PixelsPerUnit"] = round(loaded.calibration.pixels_per_unit, 4)
             rows.append(row)
     columns = (["Group", "Session", "Fish", "Tracked_pct", "Jumps"]
                + [m.column for m in METRICS]
-               + [WALL_ZONE_SHARE, "DistancePerTrackedMin", "Unit", "PixelsPerUnit"])
+               + [WALL_ZONE_SHARE, "Distance", "Unit", "PixelsPerUnit"])
     return pd.DataFrame(rows, columns=columns)
 
 
@@ -839,7 +818,7 @@ def minute_table(loaded_files: Dict, file_groups: Optional[Dict[str, str]] = Non
                 })
     return pd.DataFrame(rows, columns=["Group", "Session", "Fish", "Minute"]
                         + [m.column for m in METRICS]
-                        + ["DistancePerTrackedMin", "Unit"])
+                        + ["Distance", "Unit"])
 
 
 def _nanmean(values) -> float:
@@ -924,8 +903,7 @@ def minute_plot(ax, table: pd.DataFrame, metric: Metric,
                 group_colors: Dict[str, tuple], smooth_minutes: int = 1,
                 show_fish: bool = False, title: Optional[str] = None) -> None:
     """One of the headline metrics, minute by minute, by group."""
-    title = title or {"Distance": "Distance in each minute",
-                      "DistancePerTrackedMin": "Distance per minute"
+    title = title or {"DistancePerTrackedMin": "Distance per minute"
                       }.get(metric.column, metric.title)
     drawn = draw_minute_lines(
         ax, table, metric.column, title, metric.axis_label(shared_unit(table)),
