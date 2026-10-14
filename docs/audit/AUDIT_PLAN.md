@@ -21,6 +21,7 @@ Every prompt carries the same shared rules: **report don't fix**, **verify don't
 | **H** | [PASS_H_approach.md](PASS_H_approach.md) | Is this the right approach at all | ✅ **done** → [AUDIT_H_APPROACH.md](AUDIT_H_APPROACH.md), verdict: build, don't rewrite |
 | **D** | [PASS_D_gui_architecture.md](PASS_D_gui_architecture.md) | GUI structure, failure visibility | ✅ **done** → [AUDIT_D_GUI.md](AUDIT_D_GUI.md), 8 fixes applied + 15 regression tests |
 | **B** | [PASS_B_correctness.md](PASS_B_correctness.md) | Are the exported numbers right | ✅ **done** → [AUDIT_B_CORRECTNESS.md](AUDIT_B_CORRECTNESS.md), 17 findings + 113 tests; **fully remediated** — 8 columns withdrawn, all 10 code findings fixed, no xfail left |
+| **I** | — | Publication readiness: provenance, methods, citation, validation, statistics | 📝 **audited 2026-10-14** → [AUDIT_I_PUBLICATION.md](AUDIT_I_PUBLICATION.md), fixes pending agreement |
 | **E** | [PASS_E_integration.md](PASS_E_integration.md) | Where head_detection / posture belong | ⏳ re-scoped — see amendment in the prompt |
 | **C** | [PASS_C_cleanliness.md](PASS_C_cleanliness.md) | One source of truth + code cleanliness | 🔀 **folded** — see below |
 | **F** | [PASS_F_performance.md](PASS_F_performance.md) | Speed, memory, hot paths | 🔀 **folded** — see below |
