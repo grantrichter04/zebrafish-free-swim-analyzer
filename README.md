@@ -318,6 +318,28 @@ Version history is in [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## Citing
+
+Every Results export holds a `METHODS.txt`: a draft methods paragraph and
+references, filled in with that export's versions, settings, scale and n.
+[docs/METHODS.md](docs/METHODS.md) explains why each setting has its value.
+
+Please cite idtracker.ai, which does the tracking:
+
+- Torrents J, Costa T, de Polavieja GG (2026). New idtracker.ai rethinks
+  multi-animal tracking as a representation learning problem to increase
+  accuracy and reduce tracking time. *eLife* 14:RP107602.
+  https://doi.org/10.7554/eLife.107602
+- Romero-Ferrero F, Bergomi MG, Hinz RC, Heras FJH, de Polavieja GG (2019).
+  idtracker.ai: tracking all individuals in small or large collectives of
+  unmarked animals. *Nat Methods* 16(2):179-182.
+  https://doi.org/10.1038/s41592-018-0295-5
+
+and this software by its version (every export records it). A DOI for this
+software is to follow.
+
+---
+
 ## License
 
 [Add license here]

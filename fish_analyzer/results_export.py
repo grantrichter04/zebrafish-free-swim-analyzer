@@ -12,6 +12,7 @@ tab, holding enough to draw that view again in R, Prism or Excel.
     position_density.csv    Where they swim: share of time in each square
     tracking_settings.csv   how idtracker.ai tracked each session
     tank_outlines.csv       the outline time near the wall used, per session
+    METHODS.txt             a draft methods paragraph, with references
     setups/                 the setup each session was tracked with
     README.txt             what each file and column is
     prism/                  the same numbers one value per tank, laid out to
@@ -30,7 +31,7 @@ from typing import Dict, List, Optional
 import numpy as np
 import pandas as pd
 
-from . import provenance, results, tracking
+from . import methods, provenance, results, tracking
 
 IDENTITIES = "identities"
 NO_IDENTITIES = "no identities"
@@ -202,6 +203,9 @@ tracking_settings.csv - how idtracker.ai tracked each session
   training now"; ReviewedOn, when last saved from idtracker.ai's validator;
   TrackedBy, the version of this app that ran the tracking; Setup, the
   setup file used.
+
+METHODS.txt - a draft methods paragraph and references for a paper,
+  filled in with this export's versions, settings, scale and n.
 
 tank_outlines.csv - the outline time near the wall was measured against
   One row per corner, X_px and Y_px in video pixels from the top left of
@@ -517,8 +521,13 @@ def export_results_folder(loaded_files: Dict, file_groups: Optional[Dict[str, st
         folder / "speed_histogram.csv", index=False)
     position_density_table(loaded_files, file_groups, squares_across).to_csv(
         folder / "position_density.csv", index=False)
-    tracking_settings(loaded_files, file_groups).to_csv(
-        folder / "tracking_settings.csv", index=False)
+    tracked = tracking_settings(loaded_files, file_groups)
+    tracked.to_csv(folder / "tracking_settings.csv", index=False)
+    walls = [l.thigmotaxis_results.border_zone_pct * 100 for l in loaded_files.values()
+             if getattr(l, "thigmotaxis_results", None) is not None]
+    (folder / "METHODS.txt").write_text(methods.methods_text(
+        loaded_files, per_tank, tracked, walls[0] if walls else 15.0),
+        encoding="utf-8")
     _save_setups(loaded_files, folder)
     tank_outlines(loaded_files, file_groups).to_csv(
         folder / "tank_outlines.csv", index=False)
@@ -537,5 +546,6 @@ def export_results_folder(loaded_files: Dict, file_groups: Optional[Dict[str, st
 FILES: List[str] = ["results_per_tank.csv", "results_per_fish.csv",
                     "results_by_minute.csv",
                     "speed_histogram.csv", "position_density.csv",
-                    "tracking_settings.csv", "tank_outlines.csv", "README.txt",
+                    "tracking_settings.csv", "tank_outlines.csv", "METHODS.txt",
+                    "README.txt",
                     "prism"]

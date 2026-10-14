@@ -36,6 +36,19 @@ found that an export could not be traced to the code that made it.
   drawn with "Tank outline..." is still not saved between runs of the app,
   but the export now keeps it, so the measure can be recomputed.
   (Audit I, finding I4.)
+- **A draft methods paragraph is in the export**: `METHODS.txt`, filled in
+  with the export's own idtracker.ai and analyzer versions, frame rate,
+  recording length, fish per tank, scale, settings, fish left out, whether
+  identity training was finished early or sessions were reviewed, and n per
+  group, followed by the references (idtracker.ai 2026 and 2019, SuperPlots,
+  traja, each checked against Crossref). What it cannot know, such as the
+  statistical test, is left in [square brackets]. Sessions on different
+  scales are flagged for checking, not described as one scale.
+  `docs/METHODS.md` gives the basis for every default, and says where no
+  published source has been found yet (the 15% wall zone, 25 BL/s jumps,
+  1 s rests). The README gains a "Citing" section. (Audit I, finding I6.)
+- The explanation of 95th percentile speed said "faster than this for only
+  1% of the time"; it is 5%.
 
 ### Sessions without identities, resting time, and checking it on the video
 
