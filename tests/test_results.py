@@ -657,3 +657,9 @@ def test_a_group_ridge_is_the_mean_of_its_tanks_each_counting_the_same():
     results.plot_group_speed_ecdf(curves, samples, {"g": (1, 0, 0), "h": (0, 0, 1)})
     thick = [line for line in curves.lines if line.get_linewidth() > 2]
     assert len(thick) == 2, "a curve per group, over thin ones for its tanks"
+
+
+def test_the_top_speed_explanation_matches_its_percentile():
+    """It said "1% of the time", left over from the 99th percentile."""
+    speed95 = next(m for m in results.METRICS if m.column == "Speed95")
+    assert "faster than this for only 5% of the time" in speed95.meaning

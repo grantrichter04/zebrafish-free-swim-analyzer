@@ -71,7 +71,7 @@ METRICS: List[Metric] = [
            "slower than this, half the time faster."),
     Metric("Speed95", "speed_p95", "95th percentile speed", "speed",
            "The 95th percentile of its speed: it was faster than this for only "
-           "1% of the time. A percentile, not the maximum, so a few tracking "
+           "5% of the time. A percentile, not the maximum, so a few tracking "
            "errors cannot set it."),
     Metric("Straightness", "mean_path_straightness", "Path straightness", "ratio",
            "For each second of swimming: the straight-line distance from where "
