@@ -1,6 +1,24 @@
 # Changelog
 
-## Unreleased - sessions without identities, resting time, and checking it on the video
+## 2.3.0 - numbers that resist tracker noise, and exports that say where they came from
+
+Not yet tagged. Everything below changes exported numbers relative to
+2.2.0, so it carries a new version: before this, exports made with this
+code still said 2.2.0.
+
+### Exports say which code made them
+
+Audit I ([docs/audit/AUDIT_I_PUBLICATION.md](docs/audit/AUDIT_I_PUBLICATION.md))
+found that an export could not be traced to the code that made it.
+
+- **The analyzer version is in every export**: an `AnalyzerVersion` column in
+  `results_per_tank.csv` and the shoaling summary, and a line at the top of
+  both READMEs. When the app runs from a git checkout, as on the lab laptop,
+  the version names the commit, and says "modified" if the code differed
+  from it: `2.3.0 (commit 6e84edf, modified)`. git need not be installed.
+  (Audit I, finding I2.)
+
+### Sessions without identities, resting time, and checking it on the video
 
 - **Sessions tracked without identities are recognised** from their
   session.json and reported per tank, not per fish: their columns are tracks
@@ -47,7 +65,7 @@
   by naming it as the file for statistics and giving n per group.
 - **Tracking tab** draws idtracker.ai's identity training as it runs.
 
-## Unreleased - measures that tracker wobble and dropout cannot move
+### Measures that tracker wobble and dropout cannot move
 
 A review against simulated fish found that the tracker's ~1 px frame-to-frame
 wobble and gaps in tracking could bias the measures whenever groups differ in

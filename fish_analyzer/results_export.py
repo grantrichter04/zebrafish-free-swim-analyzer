@@ -25,7 +25,7 @@ from typing import Dict, List, Optional
 import numpy as np
 import pandas as pd
 
-from . import results
+from . import provenance, results
 
 IDENTITIES = "identities"
 NO_IDENTITIES = "no identities"
@@ -117,6 +117,7 @@ def position_density_table(loaded_files: Dict,
 
 README = """\
 Free swim results, exported {when}
+by Free Swim Analyzer {version}
 
 START HERE: results_per_tank.csv, one row per tank (session). The tank, not
 the fish, is the experimental unit: fish sharing a tank are not independent,
@@ -146,6 +147,9 @@ results_per_tank.csv - every measure for each tank
   IdtrackerAccuracy_pct  idtracker.ai's estimate of correct identities
                      (blank without identities)
   Video              the video the session was tracked from
+  AnalyzerVersion    the version of this app that made the numbers, with
+                     its git commit when run from a checkout ("modified"
+                     if the code differed from that commit)
 
 results_per_fish.csv - "Group comparison"
   One row per fish (or tank), then one row per fish left out and why.
@@ -189,6 +193,7 @@ prism/ - the group comparison and minute-by-minute numbers, one value per
 
 PRISM_README = """\
 Tables for GraphPad Prism, exported {when}
+by Free Swim Analyzer {version}
 
 Every number here is a tank (session) value: the mean of its fish, or for a
 session tracked without identities the value for the whole tank. That is
@@ -269,7 +274,8 @@ def prism_tables(loaded_files: Dict, file_groups: Optional[Dict[str, str]],
             f"{params.rest_speed_threshold:g} {unit}/s for at least "
             f"{params.min_freeze_seconds:g} s.\n" if params is not None else "")
     (folder / "PRISM_README.txt").write_text(PRISM_README.format(
-        when=datetime.datetime.now().strftime("%Y-%m-%d %H:%M"), width=rows,
+        when=datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
+        version=provenance.analyzer_version(), width=rows,
         measures="\n".join(lines), note=note), encoding="utf-8")
     written.append("PRISM_README.txt")
     return written
@@ -281,6 +287,7 @@ def results_per_tank(loaded_files: Dict,
     its analysed fish, or the pooled row of a session without identities)
     and what the session was. The table to run statistics on."""
     table = results.results_table(loaded_files, file_groups)
+    version = provenance.analyzer_version()
     columns = ["Tracked_pct", "Jumps"] + [m.column for m in results.METRICS] + [
         results.WALL_ZONE_SHARE, "Distance"]
     means = results.session_means(table, columns)
@@ -310,6 +317,7 @@ def results_per_tank(loaded_files: Dict,
             "IdtrackerAccuracy_pct": (round(loaded.metadata.estimated_accuracy * 100, 1)
                                       if with_ids else np.nan),
             "Video": Path(str(video)).name if video else "",
+            "AnalyzerVersion": version,
         })
     return pd.DataFrame(rows)
 
@@ -350,6 +358,7 @@ def export_results_folder(loaded_files: Dict, file_groups: Optional[Dict[str, st
         folder / "position_density.csv", index=False)
     (folder / "README.txt").write_text(
         README.format(when=datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
+                      version=provenance.analyzer_version(),
                       pooled=results.POOLED, n_line=_n_line(per_tank),
                       pixels=", ".join(f"{p:g}" for p in dict.fromkeys(
                           per_tank["PixelsPerUnit"])) if not per_tank.empty else "-"),

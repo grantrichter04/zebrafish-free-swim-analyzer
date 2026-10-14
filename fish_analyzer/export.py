@@ -30,6 +30,8 @@ from typing import Dict, List, Optional
 import csv
 import numpy as np
 
+from . import provenance
+
 
 def export_combined_summary_csv(
     loaded_files: Dict,
@@ -289,6 +291,7 @@ def export_shoaling_summary_csv(loaded_files: Dict, output_path: Path) -> int:
     int
         Number of file rows exported
     """
+    version = provenance.analyzer_version()
     rows = []
     for nickname, loaded_file in loaded_files.items():
         results = getattr(loaded_file, 'shoaling_results', None)
@@ -307,6 +310,7 @@ def export_shoaling_summary_csv(loaded_files: Dict, output_path: Path) -> int:
             'MeanHullArea': round(results.mean_hull_area, 3),
             'StdHullArea': round(results.std_hull_area, 3),
             'Completeness_pct': round(results.completeness_percentage, 1),
+            'AnalyzerVersion': version,
         })
 
     if not rows:

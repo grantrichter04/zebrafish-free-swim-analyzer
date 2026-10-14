@@ -373,7 +373,7 @@ and outlines (I4); the ground-truth and still-object checks (I8, lab work).
 | Finding | Status | Commit | Notes |
 |---|---|---|---|
 | I1 | open | | awaiting licence choice |
-| I2 | open | | |
+| I2 | fixed (release is I7) | see `git log --grep "Audit I, I2"` | Version 2.3.0; `fish_analyzer/provenance.py` gives the version with the commit (and "modified") from a checkout, with or without git installed. Written to `results_per_tank.csv` and the shoaling summary (`AnalyzerVersion`) and to both export READMEs. Tests: `tests/test_provenance.py`, including that the CHANGELOG's top entry is the package version. |
 | I3 | open | | |
 | I4 | open | | |
 | I5 | open | | |

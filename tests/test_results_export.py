@@ -3,7 +3,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from fish_analyzer import results, results_export
+from fish_analyzer import provenance, results, results_export
 
 from test_results import two_groups  # noqa: F401  (fixture)
 
@@ -87,6 +87,14 @@ def test_the_tank_file_has_one_row_per_session_with_its_means(two_groups, export
     assert tanks["FishAnalysed"].to_list() == [3, 3, 3]
     assert set(tanks["Tracking"]) == {"identities"}
     assert {"Minutes", "FrameRate", "BodyLength_px", "Video"} <= set(tanks.columns)
+
+
+def test_every_export_says_which_analyzer_made_it(exported):
+    version = provenance.analyzer_version()
+    tanks = pd.read_csv(exported / "results_per_tank.csv")
+    assert set(tanks["AnalyzerVersion"]) == {version}
+    for readme in (exported / "README.txt", exported / "prism" / "PRISM_README.txt"):
+        assert f"Free Swim Analyzer {version}" in readme.read_text(encoding="utf-8")
 
 
 def test_the_readme_says_where_to_start_and_how_many_tanks(exported):
