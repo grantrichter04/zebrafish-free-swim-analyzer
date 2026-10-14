@@ -49,8 +49,8 @@ depend on the others'. **The tank is the experimental unit.** Every measure
 is averaged over a tank's analysed fish, and groups are compared on these
 tank means. Plots are SuperPlots (Lord et al. 2020): each fish a small point,
 each tank's mean a large one, so the spread between fish is shown without
-being counted as replication. Statistical guidance for the export, including
-minute-by-minute data and mixed models, is in its README.
+being counted as replication. Statistical guidance, including
+minute-by-minute data and mixed models, is in each export's `STATISTICS.txt`.
 
 ## What has been validated
 

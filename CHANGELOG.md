@@ -47,6 +47,16 @@ found that an export could not be traced to the code that made it.
   `docs/METHODS.md` gives the basis for every default, and says where no
   published source has been found yet (the 15% wall zone, 25 BL/s jumps,
   1 s rests). The README gains a "Citing" section. (Audit I, finding I6.)
+- **Guidance on the statistics is in the export**: `STATISTICS.txt` covers
+  the tank as the unit (Welch's t-test or ANOVA on tank values, with a
+  warning for any group of one tank), distance per tracked minute as the
+  one primary measure with the other five corrected (Holm) or descriptive,
+  minute by minute as repeated measures (in Prism and in jamovi), and when a
+  mixed model on the fish rows in jamovi (GAMLj, Session as the cluster)
+  helps and when it misleads: a singular fit with few tanks, and no fish rows
+  for sessions without identities. `results_by_minute_per_tank.csv` gives
+  the tank values by minute in long form for jamovi or R, and the Prism
+  README says how to test minute by minute. (Audit I, finding I9.)
 - The explanation of 95th percentile speed said "faster than this for only
   1% of the time"; it is 5%.
 

@@ -1,9 +1,12 @@
 """
 fish_analyzer/methods.py
 ========================
-METHODS.txt in the Results export: a draft methods paragraph and its
-references, filled in with that export's own versions, settings, scale and
-n, so the text in a paper matches the numbers it describes.
+METHODS.txt and STATISTICS.txt in the Results export.
+
+METHODS.txt is a draft methods paragraph and its references, filled in with
+that export's own versions, settings, scale and n, so the text in a paper
+matches the numbers it describes. STATISTICS.txt is guidance on testing
+them, with the export's n per group.
 
 It states only what the export knows. Anything else (the statistical test,
 the recording set-up) is left in [square brackets] for the author, and
@@ -164,8 +167,90 @@ def _statistics(per_tank: pd.DataFrame) -> str:
         "experimental unit: each measure was averaged over the analysed fish "
         "in a tank, and groups were compared on these tank means (tanks per "
         f"group: {n}) [test, and correction for the number of measures "
-        "tested]. Results are plotted as SuperPlots (Lord et al., 2020), each "
+        "tested; STATISTICS.txt has guidance]. Results are plotted as SuperPlots (Lord et al., 2020), each "
         "fish a small point and each tank's mean a large one.")
+
+
+STATISTICS = """\
+Statistics for these results, exported {when}
+by Free Swim Analyzer {version}
+
+Guidance, not a prescription: check it with a statistician for your design.
+
+1. THE UNIT IS THE TANK
+   Fish sharing a tank are not independent: each one's speed and position
+   depend on the others'. Test on results_per_tank.csv, one value per tank.
+   {n_line}{one_tank}
+   Two groups: Welch's t-test on the tank values. More groups: Welch's
+   one-way ANOVA. Show every tank (the SuperPlot does), since with few tanks
+   a reader should see them all.
+   Never run a plain t-test or ANOVA on the fish rows: that counts each fish
+   as an independent replicate, which they are not.
+
+2. CHOOSE ONE PRIMARY MEASURE BEFORE LOOKING
+   Six measures tested at p < 0.05 make a false positive likely. These
+   measures were chosen to ask "is one group more active than another?",
+   which DistancePerTrackedMin answers: make it the primary outcome.
+   Treat MedianSpeed, Speed95, Straightness, NearWall and RestingTime as
+   secondary: correct them for multiple testing (Holm's method is simple and
+   not too strict) or report them descriptively.
+
+3. MINUTE BY MINUTE IS REPEATED MEASURES
+   Each tank is measured in every minute, so its minutes are
+   repeated measures of one tank, not independent values.
+   results_by_minute_per_tank.csv has one row per tank per minute,
+   each value the mean of the tank's fish in that minute.
+   - Prism: the by_minute tables in prism/ -> two-way repeated-measures
+     ANOVA, or Prism's mixed-effects model if some minutes are missing.
+   - jamovi or R: the long file with GAMLj's Mixed Model (below):
+     dependent = the measure, factors = Group and Minute, cluster = Session.
+   The usual question is the Group x Minute interaction: whether the groups
+   change differently over the recording, for example as they settle.
+
+4. MIXED MODELS ON THE FISH ROWS
+   A mixed model on results_per_fish.csv with a random intercept for each
+   tank is a valid alternative to tank means. In jamovi: install GAMLj from
+   the jamovi library, then Linear Models > Mixed Model; dependent = the
+   measure, factor = Group, cluster = Session, random effect = Intercept
+   | Session. Use the rows with Status "ok" only.
+   It helps when:
+   - tanks hold different numbers of analysed fish (FishAnalysed in
+     results_per_tank.csv: fish tracked under the minimum are left out), or
+   - you want a covariate measured on each fish.
+   It does not help, or misleads, when:
+   - every tank has the same number of fish: it then gives essentially the
+     same group test as the t-test on tank means;
+   - there are only two or three tanks per group: the variation between
+     tanks is poorly estimated and often comes out as zero (a "singular fit"
+     warning). The model then treats fish as independent, the very mistake
+     tank means avoid. Report the tank-means test instead;
+   - sessions were tracked without identities: they have one row per tank,
+     so there are no fish to model.
+   A covariate that belongs to the tank (sex ratio, day, rig) works in either
+   analysis as one value per tank.
+
+5. HOW MANY TANKS
+   More fish in a tank do not add replication; more tanks do. To size an
+   experiment, take the standard deviation of the tank means of the primary
+   measure from a pilot and run a power calculation on it (G*Power, or the
+   power tools in Prism or jamovi).
+"""
+
+
+def statistics_text(per_tank: pd.DataFrame) -> str:
+    """The text of STATISTICS.txt."""
+    counts = (per_tank.groupby("Group", sort=False).size() if not per_tank.empty
+              else pd.Series(dtype=int))
+    n_line = ("Tanks per group: " + ", ".join(
+        f"{group} {count}" for group, count in counts.items()) + "."
+        if len(counts) else "No tanks were analysed.")
+    single = [str(group) for group, count in counts.items() if count < 2]
+    one_tank = ("".join(f"\n   {group} has 1 tank." for group in single)
+                + "\n   With one tank a group can be described, not tested."
+                if single else "")
+    return STATISTICS.format(
+        when=datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
+        version=provenance.analyzer_version(), n_line=n_line, one_tank=one_tank)
 
 
 def methods_text(loaded_files: Dict, per_tank: pd.DataFrame,

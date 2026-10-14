@@ -101,4 +101,4 @@ def test_the_readme_says_where_to_start_and_how_many_tanks(exported):
     readme = (exported / "README.txt").read_text(encoding="utf-8")
     assert readme.index("results_per_tank.csv") < readme.index("results_per_fish.csv")
     assert "n per group (tanks): control 2, treated 1." in readme
-    assert "Do not run tests on the fish rows" in readme
+    assert "Do not run a t-test or ANOVA on the fish" in readme

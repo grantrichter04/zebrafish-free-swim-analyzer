@@ -8,6 +8,8 @@ tab, holding enough to draw that view again in R, Prism or Excel.
                             and what the session was. The file to analyse.
     results_per_fish.csv    Group comparison: one row per fish (or tank)
     results_by_minute.csv   Minute by minute: one row per fish per minute
+    results_by_minute_per_tank.csv   the same, one row per tank per minute
+    STATISTICS.txt          which tests to use, and why
     speed_histogram.csv     Speed distributions: frames in each speed bin
     position_density.csv    Where they swim: share of time in each square
     tracking_settings.csv   how idtracker.ai tracked each session
@@ -127,7 +129,9 @@ by Free Swim Analyzer {version}
 
 START HERE: results_per_tank.csv, one row per tank (session). The tank, not
 the fish, is the experimental unit: fish sharing a tank are not independent,
-so statistics belong on that file. Do not run tests on the fish rows.
+so statistics belong on that file. Do not run a t-test or ANOVA on the fish
+rows. STATISTICS.txt says which tests to use, which measure to make primary,
+how to test minute by minute, and when a mixed model may use the fish rows.
   {n_line}
 
 Every file has one observation per row (long format). Group, Session and
@@ -182,6 +186,13 @@ results_by_minute.csv - "Minute by minute"
   first). Plot each session as the mean of its fish, and each group as the
   mean of its sessions. A last minute shorter than a full one is kept if it
   is at least half a minute; its Distance is scaled up to a full minute.
+
+results_by_minute_per_tank.csv - the same, one row per tank per minute
+  Each measure is the mean of the tank's fish in that minute: the values
+  to test minute by minute (see STATISTICS.txt), laid out for jamovi or R.
+
+STATISTICS.txt - which tests to use, the primary measure, minute by minute
+  as repeated measures, and when a mixed model helps.
 
 speed_histogram.csv - "Speed distributions"
   Frames whose speed fell in [SpeedFrom, SpeedTo), per fish (or tank).
@@ -247,7 +258,9 @@ by_minute_<measure>.csv  -> an XY table
   "Enter {width} replicate values in side-by-side subcolumns". Paste the
   numbers (not the header row) into the first X cell, then type the group
   names as the data set titles. Prism draws each group's mean with its
-  spread (choose SD, SEM or each replicate under Format graph).
+  spread (choose SD, SEM or each replicate under Format graph). To test it:
+  Analyze, two-way repeated-measures ANOVA (Group x Minute), or Prism's
+  mixed-effects model if some minutes are missing. See STATISTICS.txt.
 
 The measures:
 {measures}
@@ -451,6 +464,18 @@ TRACKING_COLUMNS = ["IdtrackerVersion", "FishInTank", "IntensityThreshold",
                     "ReviewedOn", "TrackedBy", "Setup"]
 
 
+def minute_table_per_tank(loaded_files: Dict,
+                          file_groups: Optional[Dict[str, str]] = None) -> pd.DataFrame:
+    """One row per tank per minute: each measure the mean of the tank's fish
+    in that minute, as on the Minute by minute plot. Long, for jamovi or R."""
+    minutes = results.minute_table(loaded_files, file_groups)
+    measures = [m.column for m in results.METRICS] + ["Distance"]
+    table = (minutes.groupby(["Group", "Session", "Minute", "Unit"], sort=False)
+             [measures].mean().reset_index())
+    return _with_tracking(table, loaded_files)[
+        ["Group", "Session", "Tracking", "Minute", *measures, "Unit"]]
+
+
 def tank_outlines(loaded_files: Dict,
                   file_groups: Optional[Dict[str, str]] = None) -> pd.DataFrame:
     """The outline each session's time near the wall was measured against:
@@ -521,6 +546,10 @@ def export_results_folder(loaded_files: Dict, file_groups: Optional[Dict[str, st
         folder / "speed_histogram.csv", index=False)
     position_density_table(loaded_files, file_groups, squares_across).to_csv(
         folder / "position_density.csv", index=False)
+    minute_table_per_tank(loaded_files, file_groups).to_csv(
+        folder / "results_by_minute_per_tank.csv", index=False, float_format="%.6g")
+    (folder / "STATISTICS.txt").write_text(methods.statistics_text(per_tank),
+                                           encoding="utf-8")
     tracked = tracking_settings(loaded_files, file_groups)
     tracked.to_csv(folder / "tracking_settings.csv", index=False)
     walls = [l.thigmotaxis_results.border_zone_pct * 100 for l in loaded_files.values()
@@ -546,6 +575,7 @@ def export_results_folder(loaded_files: Dict, file_groups: Optional[Dict[str, st
 FILES: List[str] = ["results_per_tank.csv", "results_per_fish.csv",
                     "results_by_minute.csv",
                     "speed_histogram.csv", "position_density.csv",
+                    "results_by_minute_per_tank.csv", "STATISTICS.txt",
                     "tracking_settings.csv", "tank_outlines.csv", "METHODS.txt",
                     "README.txt",
                     "prism"]
