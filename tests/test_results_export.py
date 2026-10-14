@@ -74,3 +74,23 @@ def test_the_prism_minute_table_gives_every_group_the_same_number_of_columns(
     assert table["treated: (none)"].isna().all()
     assert table["Minute"].to_list() == list(range(1, len(table) + 1))
     assert (exported / "prism" / "PRISM_README.txt").is_file()
+
+
+def test_the_tank_file_has_one_row_per_session_with_its_means(two_groups, exported):  # noqa: F811
+    tanks = pd.read_csv(exported / "results_per_tank.csv")
+    means = results.session_means(results.results_table(two_groups))
+
+    assert list(tanks["Session"]) == ["control_1", "control_2", "treated_1"]
+    assert tanks["MedianSpeed"].to_list() == pytest.approx(
+        means["MedianSpeed"].to_list(), rel=1e-5)
+    assert tanks["FishInTank"].to_list() == [3, 3, 3]
+    assert tanks["FishAnalysed"].to_list() == [3, 3, 3]
+    assert set(tanks["Tracking"]) == {"identities"}
+    assert {"Minutes", "FrameRate", "BodyLength_px", "Video"} <= set(tanks.columns)
+
+
+def test_the_readme_says_where_to_start_and_how_many_tanks(exported):
+    readme = (exported / "README.txt").read_text(encoding="utf-8")
+    assert readme.index("results_per_tank.csv") < readme.index("results_per_fish.csv")
+    assert "n per group (tanks): control 2, treated 1." in readme
+    assert "Do not run tests on the fish rows" in readme

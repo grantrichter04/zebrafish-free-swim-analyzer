@@ -4,6 +4,8 @@ fish_analyzer/results_export.py
 The Results tab's export: a folder of CSV files, one for each view on the
 tab, holding enough to draw that view again in R, Prism or Excel.
 
+    results_per_tank.csv    one row per session: every measure for the tank,
+                            and what the session was. The file to analyse.
     results_per_fish.csv    Group comparison: one row per fish (or tank)
     results_by_minute.csv   Minute by minute: one row per fish per minute
     speed_histogram.csv     Speed distributions: frames in each speed bin
@@ -116,14 +118,34 @@ def position_density_table(loaded_files: Dict,
 README = """\
 Free swim results, exported {when}
 
+START HERE: results_per_tank.csv, one row per tank (session). The tank, not
+the fish, is the experimental unit: fish sharing a tank are not independent,
+so statistics belong on that file. Do not run tests on the fish rows.
+  {n_line}
+
 Every file has one observation per row (long format). Group, Session and
 Tracking are on every row. Tracking is "identities" when idtracker.ai told
 the fish apart, "no identities" when it did not; then a session has one row
 for the whole tank (Fish: "{pooled}") instead of one per fish.
 Do not compare the two kinds in one analysis.
 
-The tank, not the fish, is the experimental unit: fish sharing a tank are
-not independent. Average a session's rows first, then compare sessions.
+Units. Unit is the length unit of every distance and speed; speeds are Unit
+per second. "BL" is body lengths, measured from idtracker.ai's median body
+length. PixelsPerUnit is how many video pixels made one Unit (here
+{pixels}); the app puts every session on one scale unless told otherwise.
+
+results_per_tank.csv - every measure for each tank
+  The measures below, each the mean of the tank's analysed fish (or, for a
+  session tracked without identities, made from all its tracks together),
+  and what the session was:
+  FishInTank         fish in the tank, as given to idtracker.ai
+  FishAnalysed       fish whose rows went into the means; FishLeftOut, the
+                     rest (results_per_fish.csv says why)
+  Minutes, FrameRate the recording
+  BodyLength_px      this session's own median body length, in pixels
+  IdtrackerAccuracy_pct  idtracker.ai's estimate of correct identities
+                     (blank without identities)
+  Video              the video the session was tracked from
 
 results_per_fish.csv - "Group comparison"
   One row per fish (or tank), then one row per fish left out and why.
@@ -134,8 +156,10 @@ results_per_fish.csv - "Group comparison"
   MedianSpeed, Speed95   median and 95th percentile speed, Unit per second
   Straightness       straight-line distance / distance swum, per second of
                      swimming, averaged (0 to 1)
-  NearWall           % of time in the zone along the walls; WallZoneArea_pct
-                     is that zone's share of the tank (the "even use" line)
+  NearWall           % of time in the zone along the walls, a band 15% of
+                     the tank's shorter side wide; WallZoneArea_pct is that
+                     zone's share of the tank (the "even use" line). Blank
+                     when no tank outline was drawn.
   RestingTime        % of tracked time spent resting: slower than
                      Setting_FreezeSpeed for at least Setting_FreezeMin_s
   Tracked_pct        % of frames the fish (or the tank's fish) was seen
@@ -145,7 +169,8 @@ results_per_fish.csv - "Group comparison"
 results_by_minute.csv - "Minute by minute"
   The same measures worked out on each minute alone (Minute 1 is the
   first). Plot each session as the mean of its fish, and each group as the
-  mean of its sessions.
+  mean of its sessions. A last minute shorter than a full one is kept if it
+  is at least half a minute; its Distance is scaled up to a full minute.
 
 speed_histogram.csv - "Speed distributions"
   Frames whose speed fell in [SpeedFrom, SpeedTo), per fish (or tank).
@@ -250,6 +275,54 @@ def prism_tables(loaded_files: Dict, file_groups: Optional[Dict[str, str]],
     return written
 
 
+def results_per_tank(loaded_files: Dict,
+                     file_groups: Optional[Dict[str, str]] = None) -> pd.DataFrame:
+    """One row per session: the tank's value of every measure (the mean of
+    its analysed fish, or the pooled row of a session without identities)
+    and what the session was. The table to run statistics on."""
+    table = results.results_table(loaded_files, file_groups)
+    columns = ["Tracked_pct", "Jumps"] + [m.column for m in results.METRICS] + [
+        results.WALL_ZONE_SHARE, "Distance"]
+    means = results.session_means(table, columns)
+    rows = []
+    for _, mean in means.iterrows():
+        loaded = loaded_files[mean["Session"]]
+        fish_rows = table[table["Session"] == mean["Session"]]
+        # The video idtracker.ai tracked, as the session recorded it; the
+        # file may since have moved.
+        recorded = loaded.metadata.raw_metadata.get("video_paths") or []
+        video = (recorded[0] if len(recorded) else
+                 getattr(loaded, "video_file_path", None))
+        with_ids = not results.pooled(loaded)
+        rows.append({
+            "Group": mean["Group"], "Session": mean["Session"],
+            "Tracking": _tracking(loaded_files, mean["Session"]),
+            "FishInTank": loaded.fish_in_tank,
+            "FishAnalysed": len(fish_rows) if with_ids else loaded.fish_in_tank,
+            "FishLeftOut": len(getattr(loaded, "excluded_fish", {})) if with_ids else 0,
+            "Minutes": round(loaded.duration_minutes, 2),
+            "FrameRate": round(loaded.calibration.frame_rate, 3),
+            **{column: mean[column] for column in columns},
+            "Jumps": int(fish_rows["Jumps"].sum()),
+            "Unit": loaded.calibration.unit_name,
+            "PixelsPerUnit": round(loaded.calibration.pixels_per_unit, 4),
+            "BodyLength_px": round(loaded.metadata.body_length, 1),
+            "IdtrackerAccuracy_pct": (round(loaded.metadata.estimated_accuracy * 100, 1)
+                                      if with_ids else np.nan),
+            "Video": Path(str(video)).name if video else "",
+        })
+    return pd.DataFrame(rows)
+
+
+def _n_line(per_tank: pd.DataFrame) -> str:
+    """"n per group (tanks): a 2, b 2" for the README."""
+    if per_tank.empty:
+        return "No tanks were analysed."
+    counts = per_tank.groupby("Group", sort=False).size()
+    return ("n per group (tanks): "
+            + ", ".join(f"{group} {n}" for group, n in counts.items()) + ".")
+
+
 def export_results_folder(loaded_files: Dict, file_groups: Optional[Dict[str, str]],
                           parent: Path, squares_across: int = 48) -> Path:
     """Write the export into a new folder inside `parent` and return it.
@@ -265,6 +338,8 @@ def export_results_folder(loaded_files: Dict, file_groups: Optional[Dict[str, st
         number += 1
     folder.mkdir(parents=True)
 
+    per_tank = results_per_tank(loaded_files, file_groups)
+    per_tank.to_csv(folder / "results_per_tank.csv", index=False, float_format="%.6g")
     _with_tracking(results.results_export_table(loaded_files, file_groups),
                    loaded_files).to_csv(folder / "results_per_fish.csv", index=False)
     _with_tracking(results.minute_table(loaded_files, file_groups),
@@ -275,12 +350,16 @@ def export_results_folder(loaded_files: Dict, file_groups: Optional[Dict[str, st
         folder / "position_density.csv", index=False)
     (folder / "README.txt").write_text(
         README.format(when=datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
-                      pooled=results.POOLED), encoding="utf-8")
+                      pooled=results.POOLED, n_line=_n_line(per_tank),
+                      pixels=", ".join(f"{p:g}" for p in dict.fromkeys(
+                          per_tank["PixelsPerUnit"])) if not per_tank.empty else "-"),
+        encoding="utf-8")
     if not results.results_table(loaded_files, file_groups).empty:
         prism_tables(loaded_files, file_groups, folder / "prism")
     return folder
 
 
-FILES: List[str] = ["results_per_fish.csv", "results_by_minute.csv",
+FILES: List[str] = ["results_per_tank.csv", "results_per_fish.csv",
+                    "results_by_minute.csv",
                     "speed_histogram.csv", "position_density.csv", "README.txt",
                     "prism"]

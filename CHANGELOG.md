@@ -41,6 +41,10 @@
   `prism` folder of tank-level tables laid out to paste into GraphPad Prism
   (a Column table per measure, an XY table per measure by minute), a
   Tracking column on every row, and a README saying what each column is.
+  `results_per_tank.csv` leads it: one row per session with every measure
+  for the tank and what the session was (fish in the tank, minutes, frame
+  rate, body length, idtracker.ai accuracy, video), and the README opens
+  by naming it as the file for statistics and giving n per group.
 - **Tracking tab** draws idtracker.ai's identity training as it runs.
 
 ## Unreleased - measures that tracker wobble and dropout cannot move
