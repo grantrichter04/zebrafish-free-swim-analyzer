@@ -16,9 +16,84 @@ import time
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog, ttk
-from typing import Any, Callable, Dict, List, Optional, Set
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
+
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from matplotlib.figure import Figure
 
 from .. import tracking
+from .utils import install_canvas_error_handler
+
+#: The silhouette score idtracker.ai 6.0 trains towards (its
+#: CONTRASTIVE_SILHOUETTE_TARGET). install.bat pins idtracker.ai to 6.0.x.
+SILHOUETTE_TARGET = 0.91
+
+#: One line of idtracker.ai's training table: training batches so far, the
+#: silhouette score, and the share of same-fish and different-fish image
+#: pairs the network still gets wrong, in percent.
+TrainingRow = Tuple[int, float, float, float]
+
+
+def draw_training_progress(figure: Figure, rows: List[TrainingRow],
+                           video_name: str = "") -> None:
+    """Draw idtracker.ai's identity training as it goes: the silhouette score
+    against training batches, and below it the pairs still got wrong.
+
+    Every check idtracker.ai prints is a point; nothing is smoothed.
+    """
+    figure.clear()
+    if not rows:
+        figure.text(0.5, 0.5, "A chart of the training appears here\nwhile "
+                    "idtracker.ai is learning\nto tell the fish apart.",
+                    ha="center", va="center", fontsize=9, color="gray")
+        return
+    batches = [row[0] for row in rows]
+    score, pairs = figure.subplots(
+        2, 1, sharex=True, gridspec_kw={"height_ratios": [3, 2]})
+
+    scores = [row[1] for row in rows]
+    best = max(range(len(rows)), key=lambda i: scores[i])
+    score.plot(batches, scores, color="#1f1f1e", linewidth=1.5, marker="o",
+               markersize=2.5)
+    score.plot(batches[best], scores[best], marker="o", markersize=7,
+               color="#2a78d6", linestyle="")
+    score.axhline(SILHOUETTE_TARGET, color="gray", linestyle="--", linewidth=1)
+    # Scores start at about 0.5 or above, so the axis begins at 0.4 unless a
+    # run goes lower. It is fixed rather than fitted so the line does not
+    # jump while training runs and videos can be compared.
+    bottom = min(0.4, round(min(scores) - 0.05, 1))
+    score.set_yticks([bottom, 0.6, SILHOUETTE_TARGET])
+    score.set_yticklabels([f"{bottom:g}", "0.6", f"target\n{SILHOUETTE_TARGET}"])
+    score.set_ylim(bottom, 1.0)
+    score.set_ylabel("Silhouette score", fontsize=9)
+    score.set_title("Learning to tell the fish apart", fontsize=9, loc="left")
+    # Bottom right is free: the score starts low and climbs.
+    since = len(rows) - 1 - best
+    score.text(0.99, 0.06, f"best so far {scores[best]:.3f}, "
+               + ("at the latest check" if since == 0 else
+                  f"{since} check{'s' if since > 1 else ''} ago"),
+               transform=score.transAxes, ha="right", fontsize=8.5,
+               color="#2a78d6")
+    if video_name:
+        score.text(0.99, 0.2, video_name, transform=score.transAxes,
+                   ha="right", fontsize=7.5, color="gray")
+
+    pairs.plot(batches, [row[2] for row in rows], color="#2a78d6",
+               linewidth=1.5, label="same fish, placed apart")
+    pairs.plot(batches, [row[3] for row in rows], color="#eb6834",
+               linewidth=1.5, label="different fish, placed together")
+    pairs.set_ylim(0, 100)
+    pairs.set_ylabel("Pairs still\nwrong (%)", fontsize=9)
+    pairs.set_xlabel("Training batches", fontsize=9)
+    pairs.legend(fontsize=7.5, frameon=False, loc="lower center", ncol=2,
+                 bbox_to_anchor=(0.5, 0.98), columnspacing=1.2, handlelength=1.4)
+    for ax in (score, pairs):
+        ax.tick_params(labelsize=8)
+        if ax is pairs:
+            ax.grid(axis="y", color="#e6e5df", linewidth=0.8)
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+    figure.tight_layout()
 
 
 class TrackingTabMixin:
@@ -32,9 +107,12 @@ class TrackingTabMixin:
     """
 
     LOG_LINES_KEPT = 2000
-    # A row of idtracker.ai's identity-training table:
-    # batch | batches per second | silhouette score | ...
-    TRAINING_ROW = re.compile(r"\d+ \|\s*\d+\.\d+\s*\|\s*(\d\.\d{4})")
+    # A row of idtracker.ai's identity-training table: batch | batches per
+    # second | silhouette score | same-fish pairs too far apart | different-
+    # fish pairs too close.
+    TRAINING_ROW = re.compile(
+        r"(\d+) \|\s*\d+\.\d+\s*\|\s*(\d\.\d{4})!?\s*\|"
+        r"\s*(\d+\.\d+)%\s*\|\s*(\d+\.\d+)%")
 
     def _create_tracking_tab(self):
         """Create the tracking tab: videos, setup, tracking, and the output."""
@@ -58,6 +136,9 @@ class TrackingTabMixin:
         # identities, else None; and whether it was asked to finish early.
         self._tracking_silhouette: Optional[str] = None
         self._tracking_finish_training = False
+        # The training table so far for the video being tracked, kept on show
+        # after training ends until the next video starts.
+        self._tracking_training_rows: List[TrainingRow] = []
         self._tracking_queue: "queue.Queue" = queue.Queue()
 
         tk.Label(
@@ -187,6 +268,13 @@ class TrackingTabMixin:
         frame = tk.LabelFrame(parent, text="idtracker.ai output",
                               font=("Arial", 12, "bold"))
         frame.pack(fill="both", expand=True, padx=20, pady=(5, 10))
+
+        self.tracking_training_figure = Figure(figsize=(4.4, 2.6), dpi=100)
+        self.tracking_training_canvas = install_canvas_error_handler(
+            FigureCanvasTkAgg(self.tracking_training_figure, master=frame))
+        self.tracking_training_canvas.get_tk_widget().pack(
+            side="right", fill="y", padx=(6, 4), pady=4)
+        self._tracking_draw_training()
 
         scroll = tk.Scrollbar(frame)
         scroll.pack(side="right", fill="y")
@@ -551,6 +639,8 @@ class TrackingTabMixin:
         self._tracking_progress = (index, total, video, time.monotonic())
         self._tracking_silhouette = None
         self._tracking_finish_training = False
+        self._tracking_training_rows = []
+        self._tracking_draw_training()
         self._tracking_refresh()
         self._tracking_show_progress()
 
@@ -615,7 +705,11 @@ class TrackingTabMixin:
         identities, read from the table it prints."""
         row = self.TRAINING_ROW.search(line)
         if row:
-            self._tracking_silhouette = row.group(1)
+            self._tracking_silhouette = row.group(2)
+            self._tracking_training_rows.append(
+                (int(row.group(1)), float(row.group(2)),
+                 float(row.group(3)), float(row.group(4))))
+            self._tracking_draw_training()
         elif self._tracking_silhouette is not None and (
                 "Loading best model weights" in line
                 or "Training interrupted" in line):
@@ -623,6 +717,12 @@ class TrackingTabMixin:
         else:
             return
         self._tracking_update_buttons()
+
+    def _tracking_draw_training(self):
+        video = self._tracking_progress[2].name if self._tracking_progress else ""
+        draw_training_progress(self.tracking_training_figure,
+                               self._tracking_training_rows, video)
+        self.tracking_training_canvas.draw_idle()
 
     def _tracking_batch_done(self, todo: List[Path],
                              outcomes: Optional[List["tracking.TrackOutcome"]]):

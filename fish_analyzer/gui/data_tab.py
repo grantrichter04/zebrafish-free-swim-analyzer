@@ -464,14 +464,24 @@ class DataTabMixin:
             metadata = loaded_file.metadata
             tracked = 100.0 * np.mean(
                 ~np.isnan(loaded_file.trajectories[..., 0]), axis=0)
+            if loaded_file.with_identities:
+                tracked_text = f"{tracked.mean():.1f}%  ({tracked.min():.1f}%)"
+                accuracy = f"{metadata.estimated_accuracy * 100:.1f}%"
+            else:
+                # Tracks are not fish, so there is no lowest fish, and
+                # idtracker.ai reports 100% accuracy for identities it never
+                # assigned. What is left to say is how much fish-time was seen.
+                tracked_text = (f"{tracked.sum() / loaded_file.fish_in_tank:.1f}%"
+                                "  (no identities)")
+                accuracy = "no identities"
             tree.insert("", "end", iid=nickname, values=(
                 nickname,
                 self._group_of(nickname),
                 self._reviewed_mark(loaded_file),
-                loaded_file.n_fish,
+                loaded_file.fish_in_tank,
                 f"{loaded_file.duration_minutes:.1f}",
-                f"{tracked.mean():.1f}%  ({tracked.min():.1f}%)",
-                f"{metadata.estimated_accuracy * 100:.1f}%",
+                tracked_text,
+                accuracy,
                 f"{metadata.body_length:.1f}",
                 f"{metadata.frames_per_second:.2f} fps",
             ))
@@ -885,7 +895,9 @@ class DataTabMixin:
                 loaded_file.processed_data = fish_list
                 succeeded.append(nickname)
 
-                if len(fish_list) < loaded_file.n_fish:
+                # Without identities an empty track is not a missing fish and
+                # is not listed, so ask the list rather than count columns.
+                if loaded_file.excluded_fish:
                     why = "; ".join(
                         f"fish {loaded_file.metadata.identity_labels[i]} {reason}"
                         for i, reason in sorted(loaded_file.excluded_fish.items()))
@@ -927,7 +939,12 @@ class DataTabMixin:
         or None. A lone fish has no neighbours, so it is simply skipped."""
         loaded_file = self.loaded_files[nickname]
         loaded_file.shoaling_results = None
-        if loaded_file.n_fish < 2:
+        if loaded_file.n_fish < 2 or not loaded_file.with_identities:
+            # Without identities fish mostly go missing when they touch
+            # another fish (median 0.6-0.7 BL from it in the frame before,
+            # against 1.1-1.3 BL overall on the first sessions checked), so
+            # the frames with every fish found leave out close contact: the
+            # thing shoaling measures. The Shoaling tab says so.
             return None
         # One sample a second, whatever the frame rate.
         params = ShoalingParameters(sample_interval_frames=max(

@@ -190,6 +190,8 @@ class FishTrajectory:
     failed_metrics: List[str] = field(default_factory=list)
     #: Frames dropped as tracking jumps (see ProcessingParameters).
     n_jumps: int = 0
+    #: Which frames those were, for the Video Inspector to show.
+    jump_frames: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=int))
 
     @property
     def status(self) -> str:
@@ -257,7 +259,7 @@ class TrajectoryProcessor:
                 if fish_traj is not None:
                     processed_fish.append(fish_traj)
                     print(f"  Fish {fish_idx}: [ok] ({fish_traj.valid_percentage:.1%} valid data)")
-                else:
+                elif self.file.with_identities:
                     self.excluded[fish_idx] = self._last_exclusion
                     print(f"  Fish {fish_idx}: [skip] ({self._last_exclusion})")
             except Exception as e:
@@ -292,7 +294,10 @@ class TrajectoryProcessor:
         if n_valid < self.params.min_valid_points:
             self._last_exclusion = f"only {n_valid} tracked frames"
             return None
-        if valid_pct < self.params.min_valid_percentage:
+        # Without identities a column is a track, not a fish, and the tank's
+        # results pool every track, so a short one is not an unreliable fish.
+        if (self.file.with_identities
+                and valid_pct < self.params.min_valid_percentage):
             self._last_exclusion = (
                 f"tracked {valid_pct:.0%} of frames, below the "
                 f"{self.params.min_valid_percentage:.0%} minimum")
@@ -310,6 +315,7 @@ class TrajectoryProcessor:
             n_valid_frames=n_valid,
             n_total_frames=n_total,
             n_jumps=int(jumps.sum()),
+            jump_frames=np.flatnonzero(jumps),
         )
 
     def _transform_coordinates(self, raw_coords: np.ndarray) -> np.ndarray:
@@ -394,9 +400,9 @@ class MetricsCalculator:
         fish.metrics['tracking_jumps'] = fish.n_jumps
 
         # Freeze analysis
-        fish.metrics.update(
-            self._calc_freeze_metrics(speed_series, frame_rate, segments, x, y)
-        )
+        freeze = self._calc_freeze_metrics(speed_series, frame_rate, segments, x, y)
+        freeze.pop('_frozen_frames')
+        fish.metrics.update(freeze)
 
         # Distance as a rate over the time the fish was actually seen, so a
         # fish tracked 85% of the time is not read as 15% less active than
@@ -609,6 +615,9 @@ class MetricsCalculator:
         censored: List[int] = []
         total_freeze_frames = 0
         n_observed = 0
+        # The frames counted as frozen, for the Video Inspector: speed[i]
+        # spans frames [i-1, i), so it marks frame i.
+        frozen_frames = np.zeros(n_frames, dtype=bool)
 
         for chain in chains:
             seg_start, seg_stop = chain[0][0], chain[-1][1]
@@ -644,6 +653,7 @@ class MetricsCalculator:
                     or (b == stop - start and not closes_at_recording_end)
                 )
                 total_freeze_frames += frozen
+                frozen_frames[start + a:start + b] |= is_slow[a:b]
                 (censored if touches_gap else complete).append(b - a)
 
         return {
@@ -659,6 +669,7 @@ class MetricsCalculator:
             # Returned from here, not recomputed elsewhere, so the identity
             # above cannot drift.
             'observed_duration_s': n_observed / frame_rate if frame_rate else np.nan,
+            '_frozen_frames': frozen_frames,
         }
 
     # =========================================================================
@@ -845,6 +856,27 @@ def straightness_windows(x: np.ndarray, y: np.ndarray, window_frames: int,
             starts.append(start)
             values.append(net_disp / path_dist)
     return np.asarray(starts, dtype=int), np.asarray(values, dtype=float), n_tracked
+
+
+def resting_frames(fish: FishTrajectory, params: ProcessingParameters
+                   ) -> np.ndarray:
+    """One bool per frame: True where `fish` counts as resting (frozen) under
+    `params`, by exactly the rule the freeze metrics use.
+
+    For the Video Inspector, which recolours resting fish so the threshold
+    can be checked against the video. Works from the speeds already
+    computed, so trying another threshold needs no new analysis.
+    """
+    series = fish.metrics.get("speed_time_series")
+    if series is None:
+        return np.zeros(fish.n_total_frames, dtype=bool)
+    speed = np.asarray(series["speed"], dtype=float)
+    x = fish.trajectory["x"].to_numpy()
+    y = fish.trajectory["y"].to_numpy()
+    frame_rate = fish.trajectory.fps if getattr(fish.trajectory, "fps", None) else 30.0
+    result = MetricsCalculator(params)._calc_freeze_metrics(
+        speed, frame_rate, contiguous_tracked_segments(x, y), x, y)
+    return result['_frozen_frames']
 
 
 def process_and_analyze_file(

@@ -206,3 +206,4 @@ def smooth_within_segments(x: np.ndarray, y: np.ndarray,
             hi = idx - a + h + 1
             values[a:b] = (csum[hi] - csum[lo]) / (hi - lo)
     return x, y
+

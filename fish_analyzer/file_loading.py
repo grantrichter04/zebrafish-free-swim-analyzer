@@ -8,6 +8,8 @@ files is an I/O operation that might fail in various ways. Keeping it separate
 makes testing and error handling cleaner.
 """
 
+import json
+import re
 from pathlib import Path
 from typing import Optional
 import numpy as np
@@ -18,6 +20,33 @@ from .data_structures import (
     CalibrationSettings,
     LoadedTrajectoryFile
 )
+
+
+def tracked_without_identities(session_folder: Path) -> bool:
+    """Whether idtracker.ai tracked this session without identities, as its
+    session.json records. False when there is no session.json to ask."""
+    try:
+        with open(Path(session_folder) / "session.json", encoding="utf-8") as file:
+            return bool(json.load(file).get("track_wo_identities"))
+    except (OSError, ValueError):
+        return False
+
+
+def fish_count_set_for_tracking(session_folder: Path) -> Optional[int]:
+    """The number of fish the setup gave idtracker.ai, or None.
+
+    Without identities idtracker.ai overwrites number_of_animals in
+    session.json with the most blobs it found in a frame (8 for a tank of 6).
+    The number it was given survives only in the settings printed at the top
+    of its log.
+    """
+    try:
+        text = (Path(session_folder) / "idtrackerai.log").read_text(
+            encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    match = re.search(r"number_of_animals=(\d+)", text)
+    return int(match.group(1)) if match and int(match.group(1)) > 0 else None
 
 
 class TrajectoryFileLoader:
@@ -193,6 +222,11 @@ class TrajectoryFileLoader:
                 f"Available fields: {list(metadata_dict.keys())}"
             )
         trajectories = metadata_dict['trajectories']
+
+        session_folder = file_path.parent.parent
+        if tracked_without_identities(session_folder):
+            metadata.with_identities = False
+            metadata.fish_in_tank = fish_count_set_for_tracking(session_folder)
 
         # Use default calibration if not specified
         if calibration is None:

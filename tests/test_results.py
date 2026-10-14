@@ -30,7 +30,7 @@ def test_table_has_one_row_per_fish_with_the_headline_metrics(two_groups):
     assert len(table) == 9
     assert list(table.columns) == [
         "Group", "Session", "Fish", "Tracked_pct", "Jumps", "Distance", "MedianSpeed",
-        "Speed99", "Straightness", "NearWall", "WallZoneArea_pct",
+        "Speed99", "Straightness", "NearWall", "RestingTime", "WallZoneArea_pct",
         "DistancePerTrackedMin", "Unit", "PixelsPerUnit"]
     assert table["NearWall"].isna().all(), "no arena, so no wall time yet"
     assert set(table["Group"]) == {"control", "treated"}, \
@@ -64,6 +64,7 @@ def test_the_group_line_is_the_mean_of_session_means_not_of_fish():
         "Distance": [10.0, 10.0, 10.0, 10.0, 50.0],
         "MedianSpeed": [1.0] * 5, "Speed99": [2.0] * 5,
         "Straightness": [0.5] * 5, "NearWall": [60.0] * 5,
+        "RestingTime": [5.0] * 5,
         "WallZoneArea_pct": [51.0] * 5, "Unit": ["cm"] * 5,
         "PixelsPerUnit": [30.0] * 5,
     })
@@ -88,7 +89,7 @@ def test_speeds_are_labelled_per_second_and_straightness_has_no_unit():
     labels = {m.column: m.axis_label("BL") for m in results.METRICS}
     assert labels == {"Distance": "BL", "MedianSpeed": "BL/s",
                       "Speed99": "BL/s", "Straightness": "0 to 1",
-                      "NearWall": "% of time"}
+                      "NearWall": "% of time", "RestingTime": "% of time"}
     assert all(len(m.meaning) > 40 for m in results.METRICS), \
         "every measure says what it is"
 
@@ -121,14 +122,19 @@ def test_results_tab_fills_after_run_all_analysis(
     assert app.results_tree.heading("Distance")["text"] == "Distance (BL)"
     assert app.results_export_button["state"] == "normal"
 
-    out = tmp_path / "out.csv"
-    monkeypatch.setattr("fish_analyzer.gui.results_tab.ask_csv_save_path",
-                        lambda *a: out)
+    out = tmp_path / "exports"
+    out.mkdir()
+    monkeypatch.setattr("fish_analyzer.gui.results_tab.filedialog.askdirectory",
+                        lambda **k: str(out))
     monkeypatch.setattr("fish_analyzer.gui.results_tab.messagebox.showinfo",
                         lambda *a, **k: None)
     app._export_results()
-    exported = pd.read_csv(out)
+    app._export_results()
+    folders = sorted(out.iterdir())
+    assert len(folders) == 2, "a second export makes a new folder, never overwrites"
+    exported = pd.read_csv(folders[0] / "results_per_fish.csv")
     assert len(exported) == 6 and "PixelsPerUnit" in exported.columns
+    assert set(exported["Tracking"]) == {"identities"}
     assert np.allclose(exported["Distance"], app._results_table["Distance"])
 
     # Changing units throws the results away, and the tab says so.
@@ -196,7 +202,7 @@ def test_results_tab_switches_to_speed_distributions(
     app._run_analysis()
     drawn = []
     monkeypatch.setattr(results, "plot_fish_speed_ridges",
-                        lambda ax, samples, colors: drawn.append(len(samples)))
+                        lambda ax, samples, colors, top=None: drawn.append(len(samples)))
 
     app.results_view.set("distributions")
     app._draw_results_plot()
@@ -216,7 +222,8 @@ def test_minute_table_has_one_row_per_fish_per_minute(two_groups):
 
     assert list(minutes.columns) == [
         "Group", "Session", "Fish", "Minute", "Distance", "MedianSpeed",
-        "Speed99", "Straightness", "NearWall", "Unit"]
+        "Speed99", "Straightness", "NearWall", "RestingTime",
+        "DistancePerTrackedMin", "Unit"]
     one = minutes[minutes["Session"] == "control_1"]
     assert len(one) == expected * 3
     assert sorted(set(one["Minute"])) == list(range(1, expected + 1))
@@ -278,26 +285,38 @@ def test_wall_time_is_read_minute_by_minute(two_groups):
                 np.nanmean(whole.per_fish_in_border_samples[:, fish.fish_id]) * 100)
 
 
-def test_minute_lines_are_a_line_per_fish_and_a_mean_per_session():
+def test_minute_lines_are_a_line_per_session_and_a_mean_per_group():
+    # Group g: session a (two fish) and session b (one fish); group h: c.
     table = pd.DataFrame({
-        "Session": ["a"] * 4 + ["b"] * 2, "Fish": ["1", "1", "2", "2", "1", "1"],
-        "Minute": [1, 2, 1, 2, 1, 2], "Value": [1.0, 3.0, 3.0, 5.0, 10.0, 10.0]})
+        "Group": ["g"] * 6 + ["h"] * 2,
+        "Session": ["a"] * 4 + ["b"] * 2 + ["c"] * 2,
+        "Fish": ["1", "1", "2", "2", "1", "1", "1", "1"],
+        "Minute": [1, 2, 1, 2, 1, 2, 1, 2],
+        "Value": [1.0, 3.0, 3.0, 5.0, 10.0, 10.0, 7.0, 7.0]})
     ax = Figure().add_subplot(111)
 
     assert results.draw_minute_lines(ax, table, "Value", "t", "u",
-                                     {"a": (1, 0, 0), "b": (0, 0, 1)})
+                                     {"g": (1, 0, 0), "h": (0, 0, 1)})
 
-    thick = [line for line in ax.lines if line.get_linewidth() > 2]
-    assert [list(line.get_ydata()) for line in thick] == [[2.0, 4.0], [10.0, 10.0]], \
-        "the thick line is the mean of that session's fish, minute by minute"
-    assert len(ax.lines) == 3 + 2, "three fish and two session means"
+    thick = [list(line.get_ydata()) for line in ax.lines if line.get_linewidth() > 2]
+    thin = [list(line.get_ydata()) for line in ax.lines if line.get_linewidth() <= 2]
+    assert thin == [[2.0, 4.0], [10.0, 10.0], [7.0, 7.0]], \
+        "a thin line per session: the mean of its fish, minute by minute"
+    assert thick == [[6.0, 7.0], [7.0, 7.0]], \
+        "a thick line per group: the mean of its sessions, not of its fish"
+    assert not ax.collections, "no band from two sessions"
     assert ax.get_xlabel() == "Minute of the recording"
 
+    with_fish = Figure().add_subplot(111)
+    results.draw_minute_lines(with_fish, table, "Value", "t", "u",
+                              {"g": (1, 0, 0), "h": (0, 0, 1)}, show_fish=True)
+    assert len(with_fish.lines) == len(ax.lines) + 4, "plus a faint line per fish"
+
     smoothed = Figure().add_subplot(111)
-    spiky = pd.DataFrame({"Session": ["a"] * 5, "Fish": ["1"] * 5,
-                          "Minute": [1, 2, 3, 4, 5],
+    spiky = pd.DataFrame({"Group": ["g"] * 5, "Session": ["a"] * 5,
+                          "Fish": ["1"] * 5, "Minute": [1, 2, 3, 4, 5],
                           "Value": [0.0, 0.0, 9.0, 0.0, 0.0]})
-    results.draw_minute_lines(smoothed, spiky, "Value", "t", "u", {"a": (1, 0, 0)},
+    results.draw_minute_lines(smoothed, spiky, "Value", "t", "u", {"g": (1, 0, 0)},
                               smooth_minutes=3)
     assert list(smoothed.lines[-1].get_ydata()) == [0.0, 3.0, 3.0, 3.0, 0.0], \
         "a 3-minute mean spreads one minute's spike over its neighbours"
@@ -308,6 +327,24 @@ def test_minute_lines_are_a_line_per_fish_and_a_mean_per_session():
     table["Value"] = np.nan
     assert not results.draw_minute_lines(empty, table, "Value", "t", "u", {}, "nothing")
     assert empty.texts[0].get_text() == "nothing"
+
+
+def test_a_group_of_three_sessions_gets_its_95_percent_interval():
+    from scipy import stats
+    values = {"a": 1.0, "b": 2.0, "c": 6.0}
+    table = pd.DataFrame({
+        "Group": ["g"] * 6, "Session": [s for s in values for _ in (1, 2)],
+        "Fish": ["1"] * 6, "Minute": [1, 2] * 3,
+        "Value": [v for v in values.values() for _ in (1, 2)]})
+    ax = Figure().add_subplot(111)
+
+    results.draw_minute_lines(ax, table, "Value", "t", "u", {"g": (1, 0, 0)})
+
+    band = ax.collections[0].get_paths()[0].vertices[:, 1]
+    sem = np.std([1.0, 2.0, 6.0], ddof=1) / np.sqrt(3)
+    half = stats.t.ppf(0.975, 2) * sem
+    assert band.max() == pytest.approx(3.0 + half)
+    assert band.min() == pytest.approx(3.0 - half)
 
 
 def test_results_tab_switches_to_minute_by_minute(
@@ -324,9 +361,9 @@ def test_results_tab_switches_to_minute_by_minute(
     drawn = []
     real = results.minute_plot
     monkeypatch.setattr(results, "minute_plot",
-                        lambda ax, table, metric, colors, smooth: (
+                        lambda ax, table, metric, colors, smooth, *rest: (
                             drawn.append((metric.column, smooth)),
-                            real(ax, table, metric, colors, smooth))[1])
+                            real(ax, table, metric, colors, smooth, *rest))[1])
     assert str(app.results_smoothing_box.cget("state")) == "disabled", \
         "nothing to smooth in the group comparison"
 
@@ -503,7 +540,7 @@ def test_run_all_analysis_fills_time_near_the_wall_from_that_arena(
     assert "control_1" in app.file_arena_definitions, \
         "the Spatial tab sees the same arena"
     values = app.results_tree.item(app.results_tree.get_children()[0], "values")
-    assert values[-1] != ""
+    assert values[-2] != "", "near the wall, now that there is an outline"
 
     # The arena is held in the session's unit; changing the unit rescales it.
     before = app.file_arena_definitions["control_1"].vertices_bl.copy()
@@ -519,7 +556,8 @@ def test_wall_panel_says_so_when_there_is_no_arena(two_groups):
     table = results.results_table(two_groups)
     ax = Figure().subplots()
 
-    results.superplot(ax, table, results.METRICS[-1], {})
+    wall = next(m for m in results.METRICS if m.column == "NearWall")
+    results.superplot(ax, table, wall, {})
 
     assert "No tank outline" in ax.texts[0].get_text()
 
@@ -586,3 +624,34 @@ def test_the_combined_csv_keeps_a_session_whose_fish_were_all_left_out(tmp_path)
     assert rows[1]["Status"] == "ok"
     assert "DistancePerTrackedMin" in rows[0] and "Setting_Smoothing_s" in rows[0]
     assert rows[1]["Setting_Smoothing_s"] == "0.1"
+
+
+def test_a_group_ridge_is_the_mean_of_its_tanks_each_counting_the_same():
+    unit = "BL"
+    slow = results.SpeedSample("g", "a", "1", np.full(1000, 0.5), unit)
+    fast = results.SpeedSample("g", "b", "1", np.full(10, 2.5), unit)
+    other = results.SpeedSample("h", "c", "1", np.full(100, 1.5), unit)
+    samples = [slow, fast, other]
+
+    tanks = results.tank_samples(samples + [results.SpeedSample(
+        "g", "a", "2", np.full(1000, 0.5), unit)])
+    assert [(t.session, len(t.speeds)) for t in tanks] == [("a", 2000), ("b", 10),
+                                                           ("c", 100)]
+
+    ax = Figure().add_subplot(111)
+    results.plot_group_speed_ridges(ax, samples, {"g": (1, 0, 0), "h": (0, 0, 1)})
+    fills = ax.collections
+    assert len(fills) == 2, "one filled ridge per group"
+    g_heights = fills[0].get_paths()[0].vertices[:, 1] - 1   # g sits on row 1
+    bins = results._speed_bins(samples)
+    centres = (bins[:-1] + bins[1:]) / 2
+    peak_slow = g_heights[np.argmin(np.abs(centres - 0.5)) + 1]
+    peak_fast = g_heights[np.argmin(np.abs(centres - 2.5)) + 1]
+    assert peak_slow == pytest.approx(peak_fast, rel=0.05), \
+        "a tank tracked 100 times longer does not outweigh the other"
+    assert [t.get_text() for t in ax.get_yticklabels()] == ["g (2 tanks)", "h (1 tank)"]
+
+    curves = Figure().add_subplot(111)
+    results.plot_group_speed_ecdf(curves, samples, {"g": (1, 0, 0), "h": (0, 0, 1)})
+    thick = [line for line in curves.lines if line.get_linewidth() > 2]
+    assert len(thick) == 2, "a curve per group, over thin ones for its tanks"

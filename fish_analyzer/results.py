@@ -22,6 +22,13 @@ are not six independent measurements. The plot is therefore a SuperPlot (Lord
 et al. 2020, J Cell Biol 219:e202001064): every fish is a small dot, each
 session's mean is a large marker, and the line for a group is the mean of its
 session means. Statistics belong on the large markers.
+
+SESSIONS TRACKED WITHOUT IDENTITIES have no fish to give a row to: each
+column is a track that passes from fish to fish (see file_loading.py). Such a
+session gets one row, Fish = POOLED, made from every track together: speeds,
+straightness windows and wall time pooled over all tracked moments, distance
+summed over all tracks and divided by the fish in the tank. These are tank
+values, which is what the large markers are anyway.
 """
 import re
 from dataclasses import dataclass
@@ -40,7 +47,7 @@ class Metric:
     meaning: str           # one or two plain sentences: what it is, how it is made
 
     def axis_label(self, unit: str) -> str:
-        return {"length": unit, "speed": f"{unit}/s",
+        return {"length": unit, "speed": f"{unit}/s", "rate": f"{unit} per tracked min",
                 "ratio": "0 to 1", "percent": "% of time"}[self.kind]
 
 
@@ -69,7 +76,24 @@ METRICS: List[Metric] = [
            "The share of its time spent in the zone along the walls, which is "
            "15% of the tank's shorter side wide. The dashed line is what even "
            "use of the tank would give: the zone's share of the tank's area."),
+    Metric("RestingTime", "freeze_fraction_pct", "Time resting", "percent",
+           "The share of the time it was tracked that the fish spent resting: "
+           "slower than the resting speed for at least the shortest rest, both "
+           "set on Sessions & Units and shown in the panel's title. A gap in "
+           "tracking of up to half a second does not end a rest if the fish is "
+           "in the same place on both sides. Check the setting on the video "
+           "first: Video Inspector rings every fish the analysis counted as "
+           "resting."),
 ]
+
+
+def resting_title(params, unit: str) -> str:
+    """"Time resting" with the rule that made it, so the number never
+    travels without its definition."""
+    if params is None:
+        return "Time resting"
+    return (f"Time resting\n(<{params.rest_speed_threshold:g} {unit}/s for "
+            f"\u2265{params.min_freeze_seconds:g} s)")
 
 JUMPS_MEANING = (
     "How many times the track moved faster than a fish can swim from one "
@@ -79,6 +103,35 @@ JUMPS_MEANING = (
     "fish with many jumps may also have swapped identity with another fish, "
     "so its own numbers partly belong to that fish; check it in Video "
     "Inspector.")
+
+#: Shown in place of Distance whenever a session tracked without identities
+#: is among the results. Their tracks miss more of the time than fish tracked
+#: with identities (70-87% tracked against 92-99% on the first sessions
+#: compared), and total distance falls with every untracked moment; per
+#: tracked minute it does not. It is the mean speed, per minute.
+DISTANCE_PER_TRACKED_MIN = Metric(
+    "DistancePerTrackedMin", "distance_per_tracked_min",
+    "Distance per tracked minute", "rate",
+    "How far the fish swam in each minute it was tracked: total distance "
+    "divided by the time it was seen. Shown instead of total distance when "
+    "a session tracked without identities is loaded, because those miss more "
+    "of the time and total distance would read lower for that reason alone. "
+    "In \"Minute by minute\" (titled \"Distance per minute\") each point is "
+    "the distance swum in that minute divided by the part of the minute the "
+    "fish were tracked: tracked for 45 of the 60 seconds and swimming 60 BL "
+    "in them reads 80 BL, what a whole minute at that pace would give.")
+
+
+def metrics_for(loaded_files: Dict) -> List[Metric]:
+    """The metrics to show: METRICS, with distance per tracked minute in
+    place of total distance if any analysed session was tracked without
+    identities, so every session is measured the same way."""
+    if any(pooled(loaded) and loaded.processed_data
+           for loaded in loaded_files.values()):
+        return [DISTANCE_PER_TRACKED_MIN if m.column == "Distance" else m
+                for m in METRICS]
+    return list(METRICS)
+
 
 #: Columns that describe a row without being a metric to plot.
 WALL_ZONE_SHARE = "WallZoneArea_pct"
@@ -92,15 +145,103 @@ def default_group(session_name: str) -> str:
     return stripped or session_name
 
 
+#: The Fish label of the one row a session tracked without identities gets.
+POOLED = "all fish (no identities)"
+
+
+def pooled(loaded) -> bool:
+    """Whether a session's results are one row for the tank (it was tracked
+    without identities) rather than a row per fish."""
+    return not getattr(loaded, "with_identities", True)
+
+
+def _processing_params(loaded):
+    params = getattr(loaded, "processing_params", None)
+    if params is None:
+        from .processing import ProcessingParameters
+        params = ProcessingParameters()
+    return params
+
+
+def _track_speeds(fish) -> tuple:
+    """(time, speed) of one analysed fish or track, or None."""
+    series = fish.metrics.get("speed_time_series")
+    if series is None:
+        return None
+    return (np.asarray(series["time"], dtype=float),
+            np.asarray(series["speed"], dtype=float))
+
+
+def _track_straightness(loaded, fish) -> tuple:
+    """(first frame of each kept window, its straightness) for one track."""
+    from .processing import straightness_windows
+    params = _processing_params(loaded)
+    fps = loaded.calibration.frame_rate
+    starts, values, _ = straightness_windows(
+        fish.trajectory["x"].to_numpy(), fish.trajectory["y"].to_numpy(),
+        params.straightness_window_frames(fps), fps, params.straightness_min_speed)
+    return starts, values
+
+
+def _pooled_row(loaded) -> Dict:
+    """The headline metrics for a session tracked without identities, every
+    track together. See the module docstring."""
+    tracks = loaded.processed_data
+    fish_in_tank = loaded.fish_in_tank
+    speeds = [s[~np.isnan(s)] for s in
+              (pair[1] for pair in map(_track_speeds, tracks) if pair is not None)]
+    speeds = np.concatenate(speeds) if speeds else np.array([])
+    straight = [_track_straightness(loaded, fish)[1] for fish in tracks]
+    straight = np.concatenate(straight) if straight else np.array([])
+    distance = float(sum(fish.metrics.get("total_distance", 0.0) for fish in tracks))
+    observed_min = sum(fish.metrics.get("observed_duration_s", 0.0)
+                       for fish in tracks) / 60.0
+    tracked = sum(fish.n_valid_frames for fish in tracks)
+    wall = getattr(loaded, "thigmotaxis_results", None)
+    near = np.nan
+    if wall is not None and wall.in_arena_frames is not None:
+        indices = [fish.fish_id for fish in tracks]
+        weights = np.asarray(wall.in_arena_frames, dtype=float)[indices]
+        pct = np.asarray(wall.time_in_border_pct, dtype=float)[indices]
+        usable = weights > 0
+        if usable.any():
+            near = float(np.sum(pct[usable] * weights[usable]) / weights[usable].sum())
+    return {
+        "Fish": POOLED,
+        "Tracked_pct": round(tracked / (fish_in_tank * loaded.n_frames) * 100, 1),
+        "Jumps": int(sum(fish.metrics.get("tracking_jumps", 0) for fish in tracks)),
+        "Distance": distance / fish_in_tank,
+        "MedianSpeed": float(np.median(speeds)) if len(speeds) else np.nan,
+        "Speed99": float(np.percentile(speeds, 99)) if len(speeds) else np.nan,
+        "Straightness": float(straight.mean()) if len(straight) else np.nan,
+        "NearWall": near,
+        "RestingTime": (sum(fish.metrics.get("freeze_total_duration_s", 0.0)
+                            for fish in tracks) / (observed_min * 60) * 100
+                        if observed_min else np.nan),
+        "DistancePerTrackedMin": distance / observed_min if observed_min else np.nan,
+    }
+
+
 def results_table(loaded_files: Dict, file_groups: Optional[Dict[str, str]] = None
                   ) -> pd.DataFrame:
-    """One row per analysed fish. Sessions without results are skipped."""
+    """One row per analysed fish, or for a session tracked without
+    identities one row for the tank. Sessions without results are skipped."""
     file_groups = file_groups or {}
     rows = []
     for name, loaded in loaded_files.items():
         if not loaded.processed_data:
             continue
         group = file_groups.get(name) or default_group(name)
+        if pooled(loaded):
+            wall = getattr(loaded, "thigmotaxis_results", None)
+            rows.append({
+                "Group": group, "Session": name, **_pooled_row(loaded),
+                WALL_ZONE_SHARE: (round(float(wall.border_area_pct), 1)
+                                  if wall is not None else np.nan),
+                "Unit": loaded.calibration.unit_name,
+                "PixelsPerUnit": round(loaded.calibration.pixels_per_unit, 4),
+            })
+            continue
         for fish in loaded.processed_data:
             row = {
                 "Group": group,
@@ -254,10 +395,10 @@ def shared_unit(table: pd.DataFrame) -> str:
 
 
 def superplot(ax, table: pd.DataFrame, metric: Metric,
-              session_colors: Dict[str, tuple]) -> None:
+              session_colors: Dict[str, tuple], title: Optional[str] = None) -> None:
     """One of the headline metrics as a SuperPlot."""
     drawn = draw_superplot(
-        ax, table, metric.column, metric.title,
+        ax, table, metric.column, title or metric.title,
         metric.axis_label(shared_unit(table)), session_colors,
         # Only the wall measure can be missing wholesale: no arena was found.
         empty_message=NO_OUTLINE)
@@ -265,7 +406,7 @@ def superplot(ax, table: pd.DataFrame, metric: Metric,
         return
     if metric.kind == "ratio":
         ax.set_ylim(0, 1)
-    elif metric.kind == "percent":
+    elif metric.column == "NearWall":
         ax.set_ylim(0, 100)
         even_use = table[WALL_ZONE_SHARE].dropna()
         if len(even_use):
@@ -292,13 +433,23 @@ class SpeedSample:
 
 def speed_samples(loaded_files: Dict, file_groups: Optional[Dict[str, str]] = None
                   ) -> List[SpeedSample]:
-    """Every analysed fish's frame-by-frame speeds, gaps removed."""
+    """Every analysed fish's frame-by-frame speeds, gaps removed. A session
+    tracked without identities gives one sample, all its tracks together."""
     file_groups = file_groups or {}
     samples = []
     for name, loaded in loaded_files.items():
         if not loaded.processed_data:
             continue
         group = file_groups.get(name) or default_group(name)
+        if pooled(loaded):
+            speeds = [pair[1] for pair in map(_track_speeds, loaded.processed_data)
+                      if pair is not None]
+            speeds = np.concatenate(speeds) if speeds else np.array([])
+            speeds = speeds[~np.isnan(speeds)]
+            if len(speeds):
+                samples.append(SpeedSample(group, name, POOLED, speeds,
+                                           loaded.calibration.unit_name))
+            continue
         for fish in loaded.processed_data:
             series = fish.metrics.get("speed_time_series")
             if series is None:
@@ -311,10 +462,14 @@ def speed_samples(loaded_files: Dict, file_groups: Optional[Dict[str, str]] = No
     return samples
 
 
-def _speed_bins(samples: List[SpeedSample], n_bins: int = 70) -> np.ndarray:
-    """Shared bins from zero to just past where almost all speeds lie, so the
-    rare fastest frames do not squash everything else against the left."""
-    upper = max(np.percentile(sample.speeds, 99.5) for sample in samples)
+def _speed_bins(samples: List[SpeedSample], n_bins: int = 70,
+                top: Optional[float] = None) -> np.ndarray:
+    """Shared bins from zero to `top`, or by default to just past where
+    almost all speeds lie, so the rare fastest frames do not squash
+    everything else against the left. Only what is drawn stops at the top:
+    every frame still counts in each curve's shares."""
+    upper = (top if top is not None and top > 0 else
+             max(np.percentile(sample.speeds, 99.5) for sample in samples))
     return np.linspace(0.0, float(upper), n_bins + 1)
 
 
@@ -326,7 +481,8 @@ def _density(speeds: np.ndarray, bins: np.ndarray) -> np.ndarray:
 
 
 def plot_session_speed_ecdf(ax, samples: List[SpeedSample],
-                            session_colors: Dict[str, tuple]) -> None:
+                            session_colors: Dict[str, tuple],
+                            top: Optional[float] = None) -> None:
     """One cumulative curve per session, all its fish pooled: the comparison.
 
     A cumulative curve needs no bins and no smoothing, so nothing about it is
@@ -334,7 +490,7 @@ def plot_session_speed_ecdf(ax, samples: List[SpeedSample],
     curve crosses 50% is that session's median speed, where it crosses 99%
     its 99th percentile. A session that is faster overall sits to the right.
     """
-    bins = _speed_bins(samples)
+    bins = _speed_bins(samples, top=top)
     levels = np.linspace(0.0, 1.0, 501)
     sessions = list(dict.fromkeys(sample.session for sample in samples))
     for session in sessions:
@@ -358,10 +514,11 @@ def plot_session_speed_ecdf(ax, samples: List[SpeedSample],
 
 
 def plot_fish_speed_ridges(ax, samples: List[SpeedSample],
-                           session_colors: Dict[str, tuple]) -> None:
+                           session_colors: Dict[str, tuple],
+                           top: Optional[float] = None) -> None:
     """One ridge per fish, stacked and coloured by session: where a single
     unusual animal shows up."""
-    bins = _speed_bins(samples)
+    bins = _speed_bins(samples, top=top)
     centres = (bins[:-1] + bins[1:]) / 2
     densities = [_density(sample.speeds, bins) for sample in samples]
     overlap = 1.8                       # ridge height, in rows
@@ -375,13 +532,117 @@ def plot_fish_speed_ridges(ax, samples: List[SpeedSample],
         ax.fill_between(centres, base, base + height, color=color, alpha=0.55,
                         zorder=row + 1)
         ax.plot(centres, base + height, color="white", linewidth=0.8, zorder=row + 1)
-        labels.append((base, f"{sample.session} \u00b7 {sample.fish}"))
+        # The median, the headline speed: a short tick inside the ridge.
+        median = float(np.median(sample.speeds))
+        ax.plot([median, median], [base, base + overlap * 0.6], color="black",
+                linewidth=1.2, zorder=row + 1)
+        fish = "all fish" if sample.fish in (POOLED, ALL_FISH) else sample.fish
+        labels.append((base, f"{sample.session} \u00b7 {fish}"))
     ax.set_yticks([base for base, _ in labels])
     ax.set_yticklabels([text for _, text in labels], fontsize=8)
-    ax.set_title("Each fish", fontsize=11, fontweight="bold")
-    ax.set_xlabel(f"Speed ({samples[0].unit}/s)")
+    tanks = sum(sample.fish in (POOLED, ALL_FISH) for sample in samples)
+    ax.set_title("Each tank" if tanks == len(samples) else
+                 "Each fish" if tanks == 0 else
+                 "Each fish (each tank where tracked without identities)",
+                 fontsize=11, fontweight="bold")
+    ax.set_xlabel(f"Speed ({samples[0].unit}/s); black tick: median")
     ax.set_xlim(bins[0], bins[-1])
     ax.set_ylim(-0.2, len(samples) - 1 + overlap + 0.2)
+    ax.tick_params(axis="y", length=0)
+    for side in ("top", "right", "left"):
+        ax.spines[side].set_visible(False)
+
+
+#: What one ridge stands for: (shown in the list, level).
+RIDGE_LEVELS = (("Fish", "fish"), ("Tanks", "tanks"), ("Groups", "groups"))
+
+#: The Fish label of a tank made by putting its fish together.
+ALL_FISH = "all fish"
+
+
+def tank_samples(samples: List[SpeedSample]) -> List[SpeedSample]:
+    """One sample per session: every frame of all its fish together, which
+    is what "Each session, all fish together" on the left draws."""
+    out = []
+    for session in dict.fromkeys(sample.session for sample in samples):
+        own = [sample for sample in samples if sample.session == session]
+        out.append(SpeedSample(own[0].group, session, ALL_FISH,
+                               np.concatenate([s.speeds for s in own]), own[0].unit))
+    return out
+
+
+def _by_group(samples: List[SpeedSample]) -> Dict[str, List[SpeedSample]]:
+    """The tanks of each group, in the order the groups first appear."""
+    groups: Dict[str, List[SpeedSample]] = {}
+    for tank in tank_samples(samples):
+        groups.setdefault(tank.group, []).append(tank)
+    return groups
+
+
+def plot_group_speed_ecdf(ax, samples: List[SpeedSample],
+                          group_colors: Dict[str, tuple],
+                          top: Optional[float] = None) -> None:
+    """One cumulative curve per group, the mean of its tanks' curves, with
+    each tank's own curve thin behind it. Every tank counts the same, however
+    long it was tracked: the tank is the unit."""
+    bins = _speed_bins(samples, top=top)
+    speeds = np.linspace(bins[0], bins[-1], 400)
+    for group, tanks in _by_group(samples).items():
+        color = group_colors[group]
+        curves = np.array([[np.mean(tank.speeds <= s) * 100 for s in speeds]
+                           for tank in tanks])
+        for curve in curves:
+            ax.plot(speeds, curve, color=color, linewidth=1.0, alpha=0.5)
+        ax.plot(speeds, curves.mean(axis=0), color=color, linewidth=2.6,
+                label=f"{group}  ({len(tanks)} tank{'s' if len(tanks) != 1 else ''})")
+    for level, text in ((50, "median"), (99, "99th percentile")):
+        ax.axhline(level, color="gray", linestyle=":", linewidth=1)
+        ax.text(bins[-1], level - 1.5, f"{text} ", fontsize=8, color="gray",
+                ha="right", va="top")
+    ax.set_title("Each group (thin lines: its tanks)", fontsize=11, fontweight="bold")
+    ax.set_xlabel(f"Speed ({samples[0].unit}/s)")
+    ax.set_ylabel("% of time at or below this speed")
+    ax.set_xlim(bins[0], bins[-1])
+    ax.set_ylim(0, 100.5)
+    ax.legend(fontsize=9, frameon=False, loc="lower right")
+    for side in ("top", "right"):
+        ax.spines[side].set_visible(False)
+
+
+def plot_group_speed_ridges(ax, samples: List[SpeedSample],
+                            group_colors: Dict[str, tuple],
+                            top: Optional[float] = None) -> None:
+    """One ridge per group: the mean of its tanks' distributions, filled,
+    with each tank's own outlined on it, so a tank that does not fit shows.
+    The tick is the median of the tank medians."""
+    bins = _speed_bins(samples, top=top)
+    centres = (bins[:-1] + bins[1:]) / 2
+    groups = _by_group(samples)
+    overlap = 1.8
+    labels = []
+    for row, (group, tanks) in enumerate(groups.items()):
+        base = len(groups) - 1 - row
+        densities = np.array([_density(tank.speeds, bins) for tank in tanks])
+        mean = densities.mean(axis=0)
+        # One scale for the group and its tanks, so the outlines compare
+        # with the fill.
+        scale = overlap / max(mean.max(), densities.max())
+        color = group_colors[group]
+        ax.fill_between(centres, base, base + mean * scale, color=color,
+                        alpha=0.45, zorder=row + 1)
+        for density in densities:
+            ax.plot(centres, base + density * scale, color=color, linewidth=0.9,
+                    zorder=row + 1)
+        median = float(np.median([np.median(tank.speeds) for tank in tanks]))
+        ax.plot([median, median], [base, base + overlap * 0.6], color="black",
+                linewidth=1.2, zorder=row + 1)
+        labels.append((base, f"{group} ({len(tanks)} tank{'s' if len(tanks) != 1 else ''})"))
+    ax.set_yticks([base for base, _ in labels])
+    ax.set_yticklabels([text for _, text in labels], fontsize=8)
+    ax.set_title("Each group (lines: its tanks)", fontsize=11, fontweight="bold")
+    ax.set_xlabel(f"Speed ({samples[0].unit}/s); black tick: median of the tanks' medians")
+    ax.set_xlim(bins[0], bins[-1])
+    ax.set_ylim(-0.2, len(groups) - 1 + overlap + 0.2)
     ax.tick_params(axis="y", length=0)
     for side in ("top", "right", "left"):
         ax.spines[side].set_visible(False)
@@ -493,7 +754,7 @@ def minute_table(loaded_files: Dict, file_groups: Optional[Dict[str, str]] = Non
     """One row per analysed fish per minute, with the headline metrics for
     that minute alone. Distance is what was swum in the minute; a short last
     minute is scaled up to a full one."""
-    from .processing import straightness_windows
+    from .processing import resting_frames, straightness_windows
 
     file_groups = file_groups or {}
     rows = []
@@ -513,6 +774,13 @@ def minute_table(loaded_files: Dict, file_groups: Optional[Dict[str, str]] = Non
             from .processing import ProcessingParameters
             params = ProcessingParameters()
         window = params.straightness_window_frames(fps)
+        # Without identities every track goes into the one tank row, and the
+        # distance swum by all of them is shared out over the fish in the tank.
+        together = pooled(loaded)
+        per_fish = loaded.fish_in_tank if together else 1
+        # label -> minute -> (speeds, straightness values, wall samples,
+        # whether each tracked speed was resting)
+        collected: Dict[str, List[tuple]] = {}
         for fish in loaded.processed_data:
             series = fish.metrics.get("speed_time_series")
             if series is None:
@@ -525,26 +793,42 @@ def minute_table(loaded_files: Dict, file_groups: Optional[Dict[str, str]] = Non
                 fish.trajectory["x"].to_numpy(), fish.trajectory["y"].to_numpy(),
                 window, fps, params.straightness_min_speed)
             straight_bin = np.minimum((starts / fps // BIN_SECONDS).astype(int), n_bins - 1)
+            resting = resting_frames(fish, params)[:len(speed)]
+            label = POOLED if together else fish.identity_label
+            minutes = collected.setdefault(label, [([], [], [], []) for _ in range(n_bins)])
             for index in range(n_bins):
-                length = min(BIN_SECONDS * (index + 1), duration) - BIN_SECONDS * index
                 tracked = speed[speed_bin == index]
-                tracked = tracked[~np.isnan(tracked)]
-                in_bin = straight[straight_bin == index]
+                minutes[index][0].append(tracked[~np.isnan(tracked)])
+                minutes[index][3].append(resting[(speed_bin == index) & ~np.isnan(speed)])
+                minutes[index][1].append(straight[straight_bin == index])
+                if wall is not None:
+                    minutes[index][2].append(
+                        wall.per_fish_in_border_samples[wall_bin == index, fish.fish_id])
+        for label, minutes in collected.items():
+            for index, (speeds, straights, nears, rests) in enumerate(minutes):
+                length = min(BIN_SECONDS * (index + 1), duration) - BIN_SECONDS * index
+                tracked = np.concatenate(speeds)
+                in_bin = np.concatenate(straights)
+                rest = np.concatenate(rests)
                 near = (np.nan if wall is None else
-                        _nanmean(wall.per_fish_in_border_samples[wall_bin == index,
-                                                                 fish.fish_id]) * 100)
+                        _nanmean(np.concatenate(nears)) * 100)
                 rows.append({
-                    "Group": group, "Session": name, "Fish": fish.identity_label,
+                    "Group": group, "Session": name, "Fish": label,
                     "Minute": index + 1,
-                    "Distance": tracked.sum() / fps * (BIN_SECONDS / length),
+                    "Distance": (tracked.sum() / fps * (BIN_SECONDS / length)
+                                 / per_fish),
+                    "DistancePerTrackedMin": (tracked.mean() * 60
+                                              if len(tracked) else np.nan),
                     "MedianSpeed": np.median(tracked) if len(tracked) else np.nan,
                     "Speed99": np.percentile(tracked, 99) if len(tracked) else np.nan,
                     "Straightness": in_bin.mean() if len(in_bin) else np.nan,
                     "NearWall": near,
+                    "RestingTime": rest.mean() * 100 if len(rest) else np.nan,
                     "Unit": loaded.calibration.unit_name,
                 })
     return pd.DataFrame(rows, columns=["Group", "Session", "Fish", "Minute"]
-                        + [m.column for m in METRICS] + ["Unit"])
+                        + [m.column for m in METRICS]
+                        + ["DistancePerTrackedMin", "Unit"])
 
 
 def _nanmean(values) -> float:
@@ -553,16 +837,30 @@ def _nanmean(values) -> float:
     return float(values.mean()) if len(values) else np.nan
 
 
-def draw_minute_lines(ax, table: pd.DataFrame, column: str, title: str,
-                      ylabel: str, session_colors: Dict[str, tuple],
-                      empty_message: str = "No data.",
-                      smooth_minutes: int = 1) -> bool:
-    """One column of a per-fish, per-minute table: a thin line per fish and a
-    thick one for each session's mean. Returns False if there was nothing to
-    draw. `table` needs Session, Fish and Minute columns.
+#: A group needs this many sessions before its minute-by-minute line gets a
+#: confidence band. From two sessions a 95% interval is the mean plus or minus
+#: 12.7 standard errors: it fills the panel and says less than the two
+#: session lines it is drawn from.
+BAND_MIN_SESSIONS = 3
 
-    With `smooth_minutes` above 1 every line is a running mean over that many
-    minutes, centred, using what there is at the two ends."""
+
+def draw_minute_lines(ax, table: pd.DataFrame, column: str, title: str,
+                      ylabel: str, group_colors: Dict[str, tuple],
+                      empty_message: str = "No data.",
+                      smooth_minutes: int = 1, show_fish: bool = False) -> bool:
+    """One column of a per-fish, per-minute table, by group: a thin line for
+    each session (the mean of its fish), a thick line for each group (the
+    mean of its sessions), and, for a group with BAND_MIN_SESSIONS or more,
+    a band for the 95% confidence interval of that mean. The session lines
+    are the spread the group line is the mean of; the tank is the unit.
+    `show_fish` adds a faint line per fish. Returns False if there was
+    nothing to draw. `table` needs Group, Session, Fish and Minute columns.
+
+    With `smooth_minutes` above 1 every fish's line is a running mean over
+    that many minutes, centred, using what there is at the two ends, and the
+    session and group lines are made from those."""
+    from scipy import stats
+
     ax.set_title(title, fontsize=11, fontweight="bold")
     for side in ("top", "right"):
         ax.spines[side].set_visible(False)
@@ -572,15 +870,33 @@ def draw_minute_lines(ax, table: pd.DataFrame, column: str, title: str,
         ax.text(0.5, 0.5, empty_message, ha="center", va="center",
                 transform=ax.transAxes, fontsize=9, color="gray")
         return False
-    for session in dict.fromkeys(table["Session"]):
-        fish = (table[table["Session"] == session]
-                .pivot(index="Minute", columns="Fish", values=column))
-        if smooth_minutes > 1:
-            fish = fish.rolling(smooth_minutes, center=True, min_periods=1).mean()
-        color = session_colors[session]
-        ax.plot(fish.index, fish.to_numpy(), color=color, linewidth=0.7, alpha=0.35)
-        ax.plot(fish.index, fish.mean(axis=1), color=color, linewidth=2.4,
-                marker="o", markersize=4)
+    for group in dict.fromkeys(table["Group"]):
+        in_group = table[table["Group"] == group]
+        color = group_colors[group]
+        sessions = {}
+        for session in dict.fromkeys(in_group["Session"]):
+            fish = (in_group[in_group["Session"] == session]
+                    .pivot(index="Minute", columns="Fish", values=column))
+            if smooth_minutes > 1:
+                fish = fish.rolling(smooth_minutes, center=True, min_periods=1).mean()
+            if show_fish:
+                ax.plot(fish.index, fish.to_numpy(), color=color, linewidth=0.5,
+                        alpha=0.2)
+            sessions[session] = fish.mean(axis=1)
+            ax.plot(fish.index, sessions[session], color=color, linewidth=1.0,
+                    alpha=0.5)
+        sessions = pd.DataFrame(sessions)
+        mean = sessions.mean(axis=1)
+        n = sessions.notna().sum(axis=1)
+        if len(sessions.columns) >= BAND_MIN_SESSIONS:
+            usable = n >= 2
+            half = (stats.t.ppf(0.975, n[usable] - 1)
+                    * sessions[usable].std(axis=1) / np.sqrt(n[usable]))
+            ax.fill_between(mean[usable].index, mean[usable] - half,
+                            mean[usable] + half, color=color, alpha=0.18,
+                            linewidth=0)
+        ax.plot(mean.index, mean, color=color, linewidth=2.6, marker="o",
+                markersize=4)
     minutes = int(table["Minute"].max())
     # About five labels, whatever the length: every minute crowds a narrow panel.
     step = max(1, int(np.ceil(minutes / 6)))
@@ -594,24 +910,53 @@ def draw_minute_lines(ax, table: pd.DataFrame, column: str, title: str,
 
 
 def minute_plot(ax, table: pd.DataFrame, metric: Metric,
-                session_colors: Dict[str, tuple], smooth_minutes: int = 1) -> None:
-    """One of the headline metrics, minute by minute."""
-    title = "Distance in each minute" if metric.column == "Distance" else metric.title
+                group_colors: Dict[str, tuple], smooth_minutes: int = 1,
+                show_fish: bool = False, title: Optional[str] = None) -> None:
+    """One of the headline metrics, minute by minute, by group."""
+    title = title or {"Distance": "Distance in each minute",
+                      "DistancePerTrackedMin": "Distance per minute"
+                      }.get(metric.column, metric.title)
     drawn = draw_minute_lines(
         ax, table, metric.column, title, metric.axis_label(shared_unit(table)),
-        session_colors, empty_message=NO_OUTLINE, smooth_minutes=smooth_minutes)
+        group_colors, empty_message=NO_OUTLINE, smooth_minutes=smooth_minutes,
+        show_fish=show_fish)
     if not drawn:
         return
     if metric.kind == "ratio":
         ax.set_ylim(0, 1)
-    elif metric.kind == "percent":
+    elif metric.column == "NearWall":
         ax.set_ylim(0, 100)
+
+
+def group_colors(table: pd.DataFrame) -> Dict[str, tuple]:
+    """One colour per group, in the order the groups first appear."""
+    from .overlay_render import fish_colors
+    groups = list(dict.fromkeys(table["Group"]))
+    colors = fish_colors(len(groups))
+    return {group: tuple(colors[i]) for i, group in enumerate(groups)}
+
+
+def minute_legend(figure, colors: Dict[str, tuple]) -> None:
+    """The legend under a minute-by-minute figure: groups, and how to read
+    the thin lines and the band."""
+    from matplotlib.lines import Line2D
+    figure.legend(
+        handles=[Line2D([], [], color=color, linewidth=2.6, label=group)
+                 for group, color in colors.items()],
+        loc="lower center", ncol=min(len(colors), 6), frameon=False, fontsize=9,
+        title="Groups (thin lines: their sessions; band: 95% CI, "
+              f"{BAND_MIN_SESSIONS}+ sessions)", title_fontsize=9)
 
 
 MINUTE_MEANING = (
     "\"Minute by minute\" works each measure out again on every minute of the "
-    "recording by itself. Thin lines are fish, the thick line is their "
-    "session's mean. A point is what happened in that minute and nothing "
+    "recording by itself. Lines are coloured by group: each thin line is a "
+    "session (the mean of its fish), and the thick line is the mean of the "
+    "group's sessions. The thin lines are the spread to judge a difference "
+    "against. A group with three or more sessions also gets a shaded band, "
+    "the 95% confidence interval of its mean; with two sessions that "
+    "interval would be wider than the panel. \"Each fish\" adds a faint "
+    "line per fish. A point is what happened in that minute and nothing "
     "else, unless you choose a Smoothing: then each point is the mean of "
     "the 3 or 5 minutes around it, which steadies a jumpy line and also "
     "spreads a short event over its neighbours. A smoothed plot says so "

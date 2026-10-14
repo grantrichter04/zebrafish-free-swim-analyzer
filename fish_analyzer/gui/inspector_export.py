@@ -118,7 +118,9 @@ class InspectorExportMixin:
                                  self.render_settings_from_vars(),
                                  loaded.calibration.scale_factor,
                                  labels=loaded.metadata.identity_labels,
-                                 outlines=self._inspector_outlines_for(selected, base))
+                                 outlines=self._inspector_outlines_for(selected, base),
+                                 states=self._inspector_states(selected),
+                                 anonymous=not loaded.with_identities)
         return composed, loaded, frame_idx
 
     def _inspector_save_frame(self):
@@ -335,6 +337,7 @@ class InspectorExportMixin:
 
         total = end - start + 1
         colors = fish_colors(loaded.n_fish)
+        states = self._inspector_states(selected)
         cursor = {"frame": start, "written": 0}
         out_buffer = {"array": None}
 
@@ -387,7 +390,8 @@ class InspectorExportMixin:
                                          loaded.calibration.scale_factor,
                                          colors,
                                          loaded.metadata.identity_labels,
-                                         self._inspector_outlines_for(selected, base))
+                                         self._inspector_outlines_for(selected, base),
+                                         states, not loaded.with_identities)
 
                 if strip is None:
                     frame_out = composed

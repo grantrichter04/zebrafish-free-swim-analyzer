@@ -10,6 +10,7 @@ overlays sit under "More options". Scrolling on the video zooms it. Frames
 and clips are exported from here.
 """
 
+import dataclasses
 from typing import Dict, Any, Optional, List
 from pathlib import Path
 import numpy as np
@@ -23,6 +24,7 @@ import matplotlib.pyplot as plt
 from ..shoaling import ShoalingParameters, ShoalingCalculator
 from ..fish_outlines import OutlineFinder
 from ..overlay_render import OverlaySettings, compose_frame, fish_colors
+from ..processing import ProcessingParameters, resting_frames
 
 try:
     import cv2 as _cv2
@@ -169,6 +171,38 @@ class InspectorTabMixin:
         self.inspector_time_panel_box.bind(
             "<<ComboboxSelected>>", self._inspector_on_time_panel_chosen)
 
+        # --- What the analysis decided, drawn on the fish ---
+        heading("Check the analysis")
+        self.inspector_show_resting_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(
+            column, text="Ring resting fish (light blue)",
+            variable=self.inspector_show_resting_var,
+            command=self._inspector_on_overlay_change
+        ).pack(anchor="w")
+        # What the analysis counted, with the rule it used. Read-only: the
+        # rings show what is behind the numbers on Results, so a new rule is
+        # set on Sessions & Units and the analysis run again.
+        self.inspector_rest_rule_label = tk.Label(
+            column, text="", font=("Arial", 8), justify="left")
+        self.inspector_rest_rule_label.pack(anchor="w", padx=(20, 0))
+
+        jump_row = tk.Frame(column)
+        jump_row.pack(fill="x")
+        self.inspector_show_jumps_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(
+            jump_row, text="Ring tracking jumps (red)",
+            variable=self.inspector_show_jumps_var,
+            command=self._inspector_on_overlay_change
+        ).pack(side="left")
+        tk.Button(jump_row, text="\u25B6", width=2,
+                  command=lambda: self._inspector_go_to_jump(1)).pack(side="right")
+        tk.Button(jump_row, text="\u25C0", width=2,
+                  command=lambda: self._inspector_go_to_jump(-1)).pack(side="right")
+        self.inspector_states_note = tk.Label(
+            column, text="", font=("Arial", 8), fg="gray", wraplength=235,
+            justify="left")
+        self.inspector_states_note.pack(anchor="w")
+
         # --- Used less often, so out of the way until asked for ---
         more_button = tk.Button(column, text="\u25B6 More options", relief="flat",
                                 anchor="w", font=("Arial", 9, "bold"))
@@ -196,11 +230,11 @@ class InspectorTabMixin:
         iid_row = tk.Frame(more)
         iid_row.pack(fill="x")
         self.inspector_show_iid_var = tk.BooleanVar(value=False)
-        tk.Checkbutton(
+        self.inspector_iid_check = tk.Checkbutton(
             iid_row, text="Lines to all others, from fish",
             variable=self.inspector_show_iid_var,
-            command=self._inspector_on_overlay_change
-        ).pack(side="left")
+            command=self._inspector_on_overlay_change)
+        self.inspector_iid_check.pack(side="left")
         self.inspector_iid_focus_var = tk.StringVar(value="")
         self.inspector_iid_focus_combo = ttk.Combobox(
             iid_row, textvariable=self.inspector_iid_focus_var,
@@ -405,6 +439,8 @@ class InspectorTabMixin:
             show_nnd=self.inspector_show_nnd_var.get(),
             show_hull=self.inspector_show_hull_var.get(),
             show_iid=self.inspector_show_iid_var.get(),
+            show_resting=self.inspector_show_resting_var.get(),
+            show_jumps=self.inspector_show_jumps_var.get(),
             iid_focus=self._inspector_iid_focus_index(),
             trail_length=self._inspector_trail_frames(),
             trail_opacity=self.TRAIL_OPACITY,
@@ -505,6 +541,13 @@ class InspectorTabMixin:
         # silently carrying it over would export the wrong stretch.
         self._inspector_clear_marks()
 
+        # Without identities there is no "fish N" to draw lines from.
+        if not loaded.with_identities:
+            self.inspector_show_iid_var.set(False)
+        self.inspector_iid_check.config(
+            state="normal" if loaded.with_identities else "disabled")
+        self.inspector_iid_focus_combo.config(
+            state="readonly" if loaded.with_identities else "disabled")
         labels = [str(label) for label in loaded.metadata.identity_labels]
         self.inspector_iid_focus_combo["values"] = labels
         if labels:
@@ -554,6 +597,79 @@ class InspectorTabMixin:
     # =========================================================================
     # NAVIGATION
     # =========================================================================
+
+    def _inspector_states(self, selected: str) -> dict:
+        """What the analysis decided about each fish on each frame, for the
+        rings: "resting" and "jumps", bool arrays (n_frames, n_fish). Empty
+        until the session has been analysed. Made with the settings that
+        analysis ran with, so the rings are what the numbers on Results
+        counted."""
+        loaded = self.loaded_files.get(selected)
+        wanted = (self.inspector_show_resting_var.get()
+                  or self.inspector_show_jumps_var.get())
+        if loaded is None or not loaded.processed_data:
+            self.inspector_rest_rule_label.config(text="")
+            self.inspector_states_note.config(
+                text="Press \"Run All Analysis\" on Sessions & Units to see "
+                     "these." if wanted else "")
+            return {}
+        params = getattr(loaded, "processing_params", None) or ProcessingParameters()
+        unit = loaded.calibration.unit_name
+        self.inspector_rest_rule_label.config(
+            text=f"as analysed: slower than {params.rest_speed_threshold:g} "
+                 f"{unit}/s for at least {params.min_freeze_seconds:g} s")
+        key = (selected, id(loaded.processed_data), id(params))
+        cached = getattr(self, "_insp_states_cache", None)
+        if cached is None or cached[0] != key:
+            shape = (loaded.n_frames, loaded.n_fish)
+            jumps = np.zeros(shape, dtype=bool)
+            resting = np.zeros(shape, dtype=bool)
+            for fish in loaded.processed_data:
+                jumps[fish.jump_frames, fish.fish_id] = True
+                resting[:, fish.fish_id] = resting_frames(fish, params)[:shape[0]]
+            cached = (key, {"jumps": jumps, "resting": resting})
+            self._insp_states_cache = cached
+        states = cached[1]
+        note = ""
+        if wanted:
+            n_jumps = int(states["jumps"].sum())
+            note = (f"{n_jumps} jump{'s' if n_jumps != 1 else ''} in this session; "
+                    "the arrows go to the next and previous.")
+            if self._inspector_rest_boxes_changed(params):
+                note += ("  Sessions & Units now has a different resting "
+                         "setting: press \"Run All Analysis\" there to see it "
+                         "here and in the results.")
+        self.inspector_states_note.config(text=note)
+        return states
+
+    def _inspector_rest_boxes_changed(self, params) -> bool:
+        """Whether the resting boxes on Sessions & Units no longer say what
+        the analysis on show was run with."""
+        try:
+            return (float(self.rest_threshold_var.get()) != params.rest_speed_threshold
+                    or float(self.freeze_min_var.get()) != params.min_freeze_seconds)
+        except (ValueError, tk.TclError):
+            return True
+
+    def _inspector_go_to_jump(self, direction: int):
+        """Move to the next (1) or previous (-1) frame with a tracking jump,
+        and turn the jump rings on so it can be seen."""
+        selected = self.inspector_file_var.get()
+        if not selected or selected not in self.loaded_files:
+            return
+        self.inspector_show_jumps_var.set(True)
+        jumps = self._inspector_states(selected).get("jumps")
+        if jumps is None:
+            return
+        frames = np.flatnonzero(jumps.any(axis=1))
+        current = self._get_inspector_frame_idx()
+        later = frames[frames > current] if direction > 0 else frames[frames < current]
+        if len(later) == 0:
+            self.set_status("No more jumps that way.")
+            return
+        self.inspector_frame_var.set(int(later[0] if direction > 0 else later[-1]))
+        self._update_inspector_info()
+        self._inspector_update_fast()
 
     def _on_inspector_slider_change(self, value):
         """Called when frame slider changes."""
@@ -1144,7 +1260,9 @@ class InspectorTabMixin:
                                 self.render_settings_from_vars(self._insp_zoom),
                                 scale, self._insp_fish_colors,
                                 loaded.metadata.identity_labels,
-                                self._inspector_outlines_for(selected, display))
+                                self._inspector_outlines_for(selected, display),
+                                self._inspector_states(selected),
+                                anonymous=not loaded.with_identities)
 
         # --- Zoom: show only part of the frame, at the same canvas size ---
         x0, y0, view_w, view_h = zoom_view(vid_w, vid_h, self._insp_zoom,

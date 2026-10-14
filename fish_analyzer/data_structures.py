@@ -32,6 +32,17 @@ class IdTrackerMetadata:
     identity_labels: List[str]
     idtracker_version: str
     raw_metadata: Dict[str, Any]
+    #: False for a session idtracker.ai tracked without identities. Its
+    #: columns are then not fish but tracks: when a fish is lost, its track
+    #: can carry on with another fish elsewhere in the tank. The jump that
+    #: makes is left out of speed and distance like any tracking jump (see
+    #: ProcessingParameters.max_plausible_speed), and results.py pools the
+    #: tracks into one value for the tank.
+    with_identities: bool = True
+    #: How many fish were in the tank. Without identities idtracker.ai
+    #: replaces its fish count with the most blobs it saw in any one frame,
+    #: so the columns cannot say; None means it is the number of columns.
+    fish_in_tank: Optional[int] = None
 
     @classmethod
     def from_idtracker_file(cls, metadata_dict: dict) -> 'IdTrackerMetadata':
@@ -216,7 +227,19 @@ class LoadedTrajectoryFile:
 
     @property
     def n_fish(self) -> int:
+        """Columns in the trajectory array: fish, or without identities,
+        tracks (see IdTrackerMetadata.with_identities)."""
         return self.trajectories.shape[1]
+
+    @property
+    def with_identities(self) -> bool:
+        return self.metadata.with_identities
+
+    @property
+    def fish_in_tank(self) -> int:
+        """How many fish were filmed, which without identities is not the
+        number of columns."""
+        return self.metadata.fish_in_tank or self.n_fish
 
     @property
     def duration_seconds(self) -> float:

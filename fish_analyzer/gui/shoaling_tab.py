@@ -53,6 +53,17 @@ class ShoalingTabMixin:
     )
     NO_SHOALING_YET = ("No results yet. Load sessions and press \"Run All "
                        "Analysis\" on the Sessions & Units tab.")
+    NO_IDENTITIES = (
+        "  Sessions tracked without identities are left out ({}): there, fish "
+        "go missing mostly while touching another fish, so the moments left "
+        "to measure leave out close contact and the shoal would look looser "
+        "than it is.")
+
+    def _shoaling_left_out(self) -> str:
+        """The note naming sessions left out for having no identities."""
+        names = [name for name, loaded in self.loaded_files.items()
+                 if loaded.processed_data and not loaded.with_identities]
+        return self.NO_IDENTITIES.format(", ".join(names)) if names else ""
 
     def _create_shoaling_tab(self):
         tab = ttk.Frame(self.notebook)
@@ -119,7 +130,10 @@ class ShoalingTabMixin:
         self._draw_shoaling_plot()
 
         if table.empty:
-            self.shoaling_note_var.set(self.NO_SHOALING_YET)
+            left_out = self._shoaling_left_out()
+            self.shoaling_note_var.set(
+                "No shoaling results." + left_out if left_out
+                else self.NO_SHOALING_YET)
             self.shoaling_export_button.config(state="disabled")
             return
 
@@ -130,7 +144,8 @@ class ShoalingTabMixin:
             "is what fish placed at random in the tank would give: below it, "
             "they keep together more than chance."
             + ("" if summary["RandomNND"].notna().all() else
-               "  Sessions without an arena outline have no random reference."))
+               "  Sessions without an arena outline have no random reference.")
+            + self._shoaling_left_out())
         self.shoaling_export_button.config(state="normal")
 
         unit = results.shared_unit(table)
@@ -171,6 +186,7 @@ class ShoalingTabMixin:
             self.shoaling_smoothing_box.get(), 1) if by_minute else 1
         if by_minute:
             minutes = shoal_summary.minute_table(self.loaded_files, self.file_groups)
+            colors = results.group_colors(minutes)
         for ax, (column, title, _) in zip(axes, shoal_summary.MEASURES):
             label = shoal_summary.measure_unit(column, unit)
             # The hull is one value for the shoal, so one point per session.
@@ -178,7 +194,7 @@ class ShoalingTabMixin:
             few = "Needs at least\nthree fish."
             if by_minute:
                 results.draw_minute_lines(ax, minutes, column, title, label,
-                                          session_colors, empty_message=few,
+                                          colors, empty_message=few,
                                           smooth_minutes=smooth)
             elif not results.draw_superplot(ax, shown, column, title, label,
                                             session_colors, empty_message=few):
@@ -188,13 +204,16 @@ class ShoalingTabMixin:
                 results.draw_reference_line(ax, reference.mean(), "if random")
                 ax.set_ylim(top=max(ax.get_ylim()[1], reference.mean() * 1.15))
 
-        figure.legend(
-            handles=[Line2D([], [], marker="o", linestyle="", markersize=9,
-                            markerfacecolor=session_colors[name],
-                            markeredgecolor="black", label=name)
-                     for name in sessions],
-            loc="lower center", ncol=min(len(sessions), 6), frameon=False,
-            fontsize=9, title="Sessions")
+        if by_minute:
+            results.minute_legend(figure, colors)
+        else:
+            figure.legend(
+                handles=[Line2D([], [], marker="o", linestyle="", markersize=9,
+                                markerfacecolor=session_colors[name],
+                                markeredgecolor="black", label=name)
+                         for name in sessions],
+                loc="lower center", ncol=min(len(sessions), 6), frameon=False,
+                fontsize=9, title="Sessions")
         figure.suptitle(results.smoothing_note(smooth), fontsize=9, color="#b35c00")
         figure.tight_layout(rect=(0, 0.13, 1, 0.95 if smooth > 1 else 1))
         embed_figure_with_toolbar(figure, self.shoaling_plot_frame)

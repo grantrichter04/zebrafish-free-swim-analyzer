@@ -15,6 +15,7 @@ from dataclasses import dataclass
 import numpy as np
 import matplotlib.pyplot as plt
 
+from .segments import run_lengths
 from .shoaling import nearest_neighbour_distances
 
 try:
@@ -35,6 +36,10 @@ class OverlaySettings:
     show_nnd: bool = False
     show_hull: bool = False
     show_iid: bool = False
+    #: Ring a fish on the frames the analysis counts it as resting, and on
+    #: the frames it dropped as tracking jumps (see compose_frame's states).
+    show_resting: bool = False
+    show_jumps: bool = False
     iid_focus: int = 0
     trail_length: int = 0
     trail_opacity: float = 0.6
@@ -60,8 +65,19 @@ def rgb_uint8(rgba) -> tuple:
     return (int(rgba[0] * 255), int(rgba[1] * 255), int(rgba[2] * 255))
 
 
+#: Ring colours for what the analysis decided about a fish on this frame.
+#: Neither is a colour tab10 gives a fish dot.
+RESTING_COLOR = (90, 200, 255)     # light blue
+JUMP_COLOR = (230, 0, 0)           # red
+
+
+#: Every position of a session tracked without identities: one colour and
+#: no number, because a track there is not one fish.
+ANONYMOUS_COLOR = (255, 255, 255)
+
+
 def compose_frame(base, trajectories, frame_idx, settings, scale, colors=None,
-                  labels=None, outlines=None):
+                  labels=None, outlines=None, states=None, anonymous=False):
     """Draw the overlays for one frame onto a copy of `base`.
 
     Parameters
@@ -83,6 +99,14 @@ def compose_frame(base, trajectories, frame_idx, settings, scale, colors=None,
         fish has the same number here as in the results. Defaults to 1, 2, ...
     outlines : list of contours, optional
         Blob outlines to draw, from fish_outlines.OutlineFinder.find().
+    states : dict, optional
+        "resting" and/or "jumps": bool arrays shaped (n_frames, n_fish),
+        True where the analysis counted that fish as resting, or dropped
+        the frame as a tracking jump. Drawn as rings when the settings ask.
+        Trails are also cut at the jumps, as the analysis cuts them.
+    anonymous : bool
+        The session was tracked without identities: every dot and trail is
+        one colour, and the dots carry no number.
 
     Returns
     -------
@@ -95,12 +119,17 @@ def compose_frame(base, trajectories, frame_idx, settings, scale, colors=None,
         colors = fish_colors(n_fish)
     if labels is None:
         labels = [str(i + 1) for i in range(n_fish)]
+    if anonymous:
+        colors = np.tile(np.array(ANONYMOUS_COLOR + (255,)) / 255.0, (n_fish, 1))
+        labels = [""] * n_fish
+    states = states or {}
 
     positions = trajectories[frame_idx]
 
     if CV2_AVAILABLE:
         _draw_cv2(display, trajectories, positions, frame_idx, n_fish,
-                  colors, settings, scale, labels, outlines)
+                  colors, settings, scale, labels, outlines, states.get("jumps"))
+        _draw_state_rings(display, positions, frame_idx, settings, states)
     else:
         _draw_numpy(display, positions, n_fish, colors, settings)
     return display
@@ -128,7 +157,7 @@ def _draw_numpy(display, positions, n_fish, colors, settings):
 
 
 def _draw_cv2(display, trajectories, positions, frame_idx, n_fish, colors,
-              settings, scale, labels, outlines=None):
+              settings, scale, labels, outlines=None, jumps=None):
     """Draw every enabled overlay directly onto the array.
 
     Order matters: trails and the hull go underneath, dots and labels on top.
@@ -136,7 +165,7 @@ def _draw_cv2(display, trajectories, positions, frame_idx, n_fish, colors,
     if outlines:
         cv2.drawContours(display, outlines, -1, OUTLINE_COLOR,
                          _width(settings, 2), lineType=cv2.LINE_AA)
-    _draw_trails(display, trajectories, frame_idx, n_fish, colors, settings)
+    _draw_trails(display, trajectories, frame_idx, n_fish, colors, settings, jumps)
     if settings.show_nnd:
         _draw_nnd(display, positions, scale, settings)
     if settings.show_hull:
@@ -146,12 +175,18 @@ def _draw_cv2(display, trajectories, positions, frame_idx, n_fish, colors,
     _draw_positions(display, positions, n_fish, colors, settings, labels)
 
 
-def _draw_trails(display, trajectories, frame_idx, n_fish, colors, settings):
+def _draw_trails(display, trajectories, frame_idx, n_fish, colors, settings,
+                 jumps=None):
     """All trails into one overlay, blended once.
 
     Previously each fish copied the whole frame and blended separately, which
     cost n_fish full-frame copies per frame and compounded the alpha, so a
     fish drawn later came out at a different opacity than one drawn first.
+
+    A trail is cut wherever the analysis cuts the track: at a tracking gap,
+    and at a frame dropped as a jump (`jumps`, bool (n_frames, n_fish)). It
+    shows only movement that was measured, never a line across the tank
+    from one fish to another.
     """
     if settings.trail_length <= 0:
         return
@@ -164,10 +199,12 @@ def _draw_trails(display, trajectories, frame_idx, n_fish, colors, settings):
     for i in range(n_fish):
         traj = trajectories[start:end, i, :]
         valid = ~np.isnan(traj[:, 0])
-        if np.sum(valid) < 2:
+        if jumps is not None:
+            valid &= ~jumps[start:end, i]
+        runs = [traj[a:b].astype(np.int32) for a, b in run_lengths(valid) if b - a >= 2]
+        if not runs:
             continue
-        pts = traj[valid].astype(np.int32)
-        cv2.polylines(overlay, [pts], False, rgb_uint8(colors[i]), thickness,
+        cv2.polylines(overlay, runs, False, rgb_uint8(colors[i]), thickness,
                       lineType=cv2.LINE_AA)
         drew = True
 
@@ -251,6 +288,27 @@ def _draw_iid(display, positions, n_fish, settings, scale):
         _label(display, f'{d:.1f}', mid, IID_COLOR, settings)
 
 
+def _draw_state_rings(display, positions, frame_idx, settings, states):
+    """A ring round each fish the analysis counts as resting on this frame,
+    and a wider red one round a fish whose position here was dropped as a
+    tracking jump. Drawn round the dot, which has the fish's own colour."""
+    r = settings.dot_radius
+    for name, show, color, gap in (("resting", settings.show_resting, RESTING_COLOR, 4),
+                                   ("jumps", settings.show_jumps, JUMP_COLOR, 9)):
+        mask = states.get(name)
+        if not show or mask is None or frame_idx >= len(mask):
+            continue
+        for i in np.flatnonzero(mask[frame_idx]):
+            if np.isnan(positions[i, 0]):
+                continue
+            centre = (int(positions[i, 0]), int(positions[i, 1]))
+            radius = r + _width(settings, gap)
+            cv2.circle(display, centre, radius, (0, 0, 0), _width(settings, 5),
+                       lineType=cv2.LINE_AA)
+            cv2.circle(display, centre, radius, color, _width(settings, 3),
+                       lineType=cv2.LINE_AA)
+
+
 def _draw_positions(display, positions, n_fish, colors, settings, labels):
     if not settings.show_positions:
         return
@@ -263,8 +321,10 @@ def _draw_positions(display, positions, n_fish, colors, settings, labels):
         cv2.circle(display, (px, py), r, color, -1, lineType=cv2.LINE_AA)
         cv2.circle(display, (px, py), r, (0, 0, 0), _width(settings, 2),
                    lineType=cv2.LINE_AA)
-        font_scale = max(0.3, r / 20.0)
         text = str(labels[i])
+        if not text:
+            continue
+        font_scale = max(0.3, r / 20.0)
         (tw, th), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX,
                                       font_scale, 1)
         cv2.putText(display, text, (px - tw // 2, py + th // 2),

@@ -382,7 +382,7 @@ def test_identity_training_can_be_finished_from_the_tab(
     def run(video, setup, on_line, should_stop=lambda: False,
             should_finish_training=lambda: False):
         on_line("12:53:15 Batch | Batches/s | Silhouette score | Too far apart")
-        on_line("12:55:02   600 |   12.3    |      0.8312!     |      4.1%  |  9.8%")
+        on_line("12:55:02   600 |   12.3    |      0.8312!     |          4.1%        |        9.8%      contrastive.py:651")
         deadline = time.monotonic() + 10
         while not should_finish_training() and time.monotonic() < deadline:
             time.sleep(0.02)
@@ -532,3 +532,42 @@ def test_review_explains_itself_when_the_folder_is_not_a_full_session(
     tab._review_session(experiment / "session_control", "control")
 
     assert "not a complete idtracker.ai session" in told[0]
+
+
+# --- the training chart --------------------------------------------------------
+
+REAL_ROWS = [
+    "09:49:22   500 |    6.9    |      0.3724!     |          87.5%        |        74.0%                        contrastive.py:651",
+    "09:49:52   700 |    6.9    |      0.5001!     |          82.6%        |        71.9%                        contrastive.py:651",
+    "09:51:06  1200 |    6.9    |      0.4910      |          76.8%        |        64.1%                        contrastive.py:651",
+]
+
+
+def test_training_rows_are_read_from_idtrackerais_table(tab):
+    """Lines as idtracker.ai 6.0.14 prints them, including a check that was
+    not a new best (no "!")."""
+    tab._tracking_training_rows = []
+    for line in ["         Batch | Batches/s | Silhouette score | Too far apart + pairs",
+                 *REAL_ROWS,
+                 "         Loading best model weights from the checkpoint"]:
+        tab._tracking_follow_training(line)
+
+    assert tab._tracking_training_rows == [
+        (500, 0.3724, 87.5, 74.0), (700, 0.5001, 82.6, 71.9), (1200, 0.4910, 76.8, 64.1)]
+    assert tab._tracking_silhouette is None, "training is over"
+    score, pairs = tab.tracking_training_figure.axes
+    assert list(score.lines[0].get_ydata()) == [0.3724, 0.5001, 0.4910], "every check, unsmoothed"
+    assert list(score.lines[1].get_ydata()) == [0.5001], "the best is marked"
+    assert [line.get_label() for line in pairs.lines] == [
+        "same fish, placed apart", "different fish, placed together"]
+    tab._tracking_training_rows = []
+    tab._tracking_draw_training()
+
+
+def test_the_chart_says_what_it_is_for_before_any_training(tab):
+    tab._tracking_training_rows = []
+    tab._tracking_draw_training()
+
+    figure = tab.tracking_training_figure
+    assert figure.axes == []
+    assert "learning" in figure.texts[0].get_text()

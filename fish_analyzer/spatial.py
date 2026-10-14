@@ -210,6 +210,10 @@ class ThigmotaxisResults:
     #: the tank evenly would spend this share of its time near the wall, so it
     #: is the level "time near the wall" has to be read against.
     border_area_pct: float = float('nan')
+    #: Shape (n_fish,): frames each fish was tracked inside the arena, the
+    #: denominator of time_in_border_pct. Pooling tracks recorded without
+    #: identities weights each track by it.
+    in_arena_frames: Optional[np.ndarray] = None
 
     def get_smoothed_group_timeseries(self, window_seconds: float = 5.0) -> np.ndarray:
         """
@@ -593,4 +597,5 @@ class ThigmotaxisCalculator:
             frame_rate=self.file.calibration.frame_rate,
             sample_interval=self.sample_interval,
             border_area_pct=100.0 * (1.0 - center_poly.area / arena_poly.area),
+            in_arena_frames=frames_in_border + frames_in_center,
         )

@@ -1,5 +1,38 @@
 # Changelog
 
+## Unreleased - sessions without identities, resting time, and checking it on the video
+
+- **Sessions tracked without identities are recognised** from their
+  session.json and reported per tank, not per fish: their columns are tracks
+  that pass from fish to fish, so every track is pooled into one row
+  ("all fish (no identities)"). The fish count is read from the setup
+  printed in idtracker.ai's log, because without identities idtracker.ai
+  overwrites it with the most blobs it saw in a frame. On Results, distance
+  is then shown per tracked minute for every session, since these sessions
+  are seen less of the time. Shoaling leaves them out and says why: fish go
+  missing mostly while touching (median 0.6-0.7 BL from another fish in the
+  frame before, against 1.1-1.3 BL overall), so close contact is lost.
+  Sessions & Units shows "no identities" in place of idtracker.ai's
+  accuracy, which it reports as 100% for identities it never assigned.
+- **Time resting** is a measure on Results: the share of tracked time slower
+  than the resting speed for at least the shortest rest, with that rule in
+  the panel title.
+- **Video Inspector, "Check the analysis"**: rings round fish the analysis
+  counted as resting (with the settings that analysis ran with) and round
+  frames dropped as tracking jumps, with buttons to step between jumps.
+  Trails are cut at gaps and jumps, so they show only movement that was
+  measured. Without identities, positions are unnumbered and one colour.
+- **Minute by minute is drawn by group**: a thin line per session and a
+  thick line for the group's mean; a 95% confidence band for groups with
+  three or more sessions. "Each fish" adds the fish back.
+- **Speed distributions** can show ridges per fish, tank or group (a group's
+  ridge is the mean of its tanks', each tank counting the same), have a
+  median tick, and a box to set where the speed axis ends.
+- **Panels** on Group comparison and Minute by minute can be ticked on and off.
+- **Export results** writes a folder: a CSV for each view on Results, a
+  Tracking column on every row, and a README saying what each column is.
+- **Tracking tab** draws idtracker.ai's identity training as it runs.
+
 ## Unreleased - measures that tracker wobble and dropout cannot move
 
 A review against simulated fish found that the tracker's ~1 px frame-to-frame
