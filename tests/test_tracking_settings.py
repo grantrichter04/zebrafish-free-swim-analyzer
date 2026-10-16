@@ -151,7 +151,10 @@ def test_tracking_records_how_the_app_ran_it(tmp_path, monkeypatch):
     assert record == {"analyzer_version": provenance.analyzer_version(),
                       "rolling_background": True,
                       "setup": "rig.toml",
-                      "setup_text": setup.read_text(encoding="utf-8")}
+                      "setup_text": setup.read_text(encoding="utf-8"),
+                      "tracking_seconds": record["tracking_seconds"]}
+    assert record["tracking_seconds"] >= 0
+    assert tracking.tracking_seconds(video) == record["tracking_seconds"]
 
 
 def test_a_failed_run_records_nothing(tmp_path, monkeypatch):
@@ -160,3 +163,17 @@ def test_a_failed_run_records_nothing(tmp_path, monkeypatch):
     assert not tracking.run_tracking(video, tmp_path / "rig.toml", lambda _: None).ok
     assert not (tmp_path / "session_exp").exists()
 
+
+
+def test_tracking_time_reads_none_when_not_recorded(tmp_path):
+    video = _touch(tmp_path / "exp.avi")
+    assert tracking.tracking_seconds(video) is None
+    (tmp_path / "session_exp").mkdir()
+    (tmp_path / "session_exp" / tracking.TRACKED_WITH_FILE).write_text(
+        json.dumps({"setup": "rig.toml"}), encoding="utf-8")
+    assert tracking.tracking_seconds(video) is None
+
+
+def test_durations_read_as_clock_times():
+    assert tracking.format_duration(65) == "1:05"
+    assert tracking.format_duration(3 * 3600 + 4 * 60 + 9.6) == "3:04:10"

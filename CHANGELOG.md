@@ -71,6 +71,16 @@ found that an export could not be traced to the code that made it.
 - The explanation of 95th percentile speed said "faster than this for only
   1% of the time"; it is 5%.
 
+### Small display changes
+
+- **Time to track each video** is shown in a new column in "1. Videos" on
+  the Tracking tab, and the batch summary gives the total. It is kept in
+  `freeswim_tracking.json` as `tracking_seconds`, so it survives a restart;
+  videos tracked before this show nothing there.
+- **Identity numbers on the inspector's dots are larger**, with a black edge,
+  and sit just beside the dot so the dot's colour stays visible. Inside the
+  dot they were too small to read at the default dot size.
+
 ### Sessions without identities, resting time, and checking it on the video
 
 - **Sessions tracked without identities are recognised** from their

@@ -316,18 +316,40 @@ def run_tracking(video: Path, setup: Path,
         finish_flag = Path(folder) / "finish_training"
         run_process(build_track_command(video, setup, finish_flag),
                     video.parent, line, stop)
+    seconds = time.monotonic() - started
     ok = not stopped[0] and tracking_status(video) == TRACKED
     if ok:
-        _record_how_it_was_tracked(video, setup)
+        _record_how_it_was_tracked(video, setup, seconds)
     return TrackOutcome(
         video=video,
         ok=ok,
         stopped=stopped[0],
-        seconds=time.monotonic() - started,
+        seconds=seconds,
         last_lines=list(tail))
 
 
-def _record_how_it_was_tracked(video: Path, setup: Path) -> None:
+def tracking_seconds(video: Path) -> Optional[float]:
+    """How long this app took to track `video`, or None if not recorded
+    (tracked before this was kept, or outside the app)."""
+    try:
+        with open(session_folder_for(video) / TRACKED_WITH_FILE,
+                  encoding="utf-8") as file:
+            seconds = json.load(file).get("tracking_seconds")
+    except (OSError, ValueError, AttributeError):
+        return None
+    return float(seconds) if isinstance(seconds, (int, float)) else None
+
+
+def format_duration(seconds: float) -> str:
+    """1:05:09 for over an hour, 12:34 for less."""
+    minutes, secs = divmod(int(round(seconds)), 60)
+    hours, minutes = divmod(minutes, 60)
+    return (f"{hours}:{minutes:02d}:{secs:02d}" if hours
+            else f"{minutes}:{secs:02d}")
+
+
+def _record_how_it_was_tracked(video: Path, setup: Path,
+                               seconds: Optional[float] = None) -> None:
     """Write TRACKED_WITH_FILE into the video's new session folder."""
     try:
         setup_text = Path(setup).read_text(encoding="utf-8")
@@ -336,7 +358,8 @@ def _record_how_it_was_tracked(video: Path, setup: Path) -> None:
     record = {"analyzer_version": provenance.analyzer_version(),
               "rolling_background": idtrackerai_rolling.setup_statistic(setup)[0],
               "setup": Path(setup).name,
-              "setup_text": setup_text}
+              "setup_text": setup_text,
+              "tracking_seconds": None if seconds is None else round(seconds, 1)}
     try:
         (session_folder_for(video) / TRACKED_WITH_FILE).write_text(
             json.dumps(record, indent=2), encoding="utf-8")

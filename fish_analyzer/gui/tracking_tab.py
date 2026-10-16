@@ -181,13 +181,15 @@ class TrackingTabMixin:
                   command=self._tracking_refresh).pack(side="left", padx=2)
 
         self.tracking_videos_tree = ttk.Treeview(
-            frame, columns=("video", "status", "setup"), show="headings",
+            frame, columns=("video", "status", "time", "setup"), show="headings",
             height=5, selectmode="browse")
         self.tracking_videos_tree.heading("video", text="Video")
         self.tracking_videos_tree.heading("status", text="Status")
+        self.tracking_videos_tree.heading("time", text="Time to track")
         self.tracking_videos_tree.heading("setup", text="Tracked with")
         self.tracking_videos_tree.column("video", width=420, anchor="w")
         self.tracking_videos_tree.column("status", width=160, anchor="w")
+        self.tracking_videos_tree.column("time", width=100, anchor="w")
         self.tracking_videos_tree.column("setup", width=300, anchor="w")
         self.tracking_videos_tree.pack(fill="x", padx=10, pady=(0, 8))
         self.tracking_videos_tree.bind(
@@ -334,6 +336,7 @@ class TrackingTabMixin:
         for index, video in enumerate(self._tracking_videos):
             tree.insert("", "end", iid=str(index),
                         values=(video.name, self._tracking_status(video),
+                                self._tracking_time_label(video),
                                 self._tracking_setup_label(video)))
         if self._tracking_videos:
             keep = (self._tracking_videos.index(selected_video)
@@ -365,6 +368,13 @@ class TrackingTabMixin:
         """The setup `video` will be tracked with: its own, else the one
         selected for the folder."""
         return tracking.setup_for(video, self._tracking_selected_setup())
+
+    @staticmethod
+    def _tracking_time_label(video: Path) -> str:
+        if tracking.tracking_status(video) != tracking.TRACKED:
+            return ""
+        seconds = tracking.tracking_seconds(video)
+        return "" if seconds is None else tracking.format_duration(seconds)
 
     def _tracking_setup_label(self, video: Path) -> str:
         setup = self._tracking_setup_for(video)
@@ -739,7 +749,9 @@ class TrackingTabMixin:
         failed = [f"{o.video.name}: {o.reason()}"
                   for o in outcomes if not o.ok and not o.stopped]
         self.tracking_progress_var.set(
-            f"{len(succeeded)} of {len(todo)} video(s) tracked."
+            f"{len(succeeded)} of {len(todo)} video(s) tracked"
+            + (f" in {tracking.format_duration(sum(o.seconds for o in outcomes))}"
+               if outcomes else "") + "."
             + (" Stopped before the rest." if stopped else ""))
         if stopped and not failed:
             return

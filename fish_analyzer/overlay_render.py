@@ -324,9 +324,22 @@ def _draw_positions(display, positions, n_fish, colors, settings, labels):
         text = str(labels[i])
         if not text:
             continue
-        font_scale = max(0.3, r / 20.0)
-        (tw, th), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX,
-                                      font_scale, 1)
-        cv2.putText(display, text, (px - tw // 2, py + th // 2),
-                    cv2.FONT_HERSHEY_SIMPLEX, font_scale,
-                    (255, 255, 255), 1, cv2.LINE_AA)
+        # The number sits beside the dot, sized for reading: inside the dot
+        # it had to be too small to make out at the default dot size, and a
+        # number drawn over the dot hides the colour that matches the fish
+        # to the plots. A black edge keeps it legible over any background.
+        font_scale = max(0.7 * settings.line_scale, r / 14.0)
+        thickness = max(1, int(round(font_scale * 2)))
+        x = px + int(round(r * 0.8))
+        y = py - int(round(r * 0.8))
+        # The edge is the text drawn again around it, not a thicker stroke:
+        # some OpenCV builds ignore putText's thickness.
+        edge = _width(settings, 1)
+        for dx in (-edge, 0, edge):
+            for dy in (-edge, 0, edge):
+                if dx or dy:
+                    cv2.putText(display, text, (x + dx, y + dy),
+                                cv2.FONT_HERSHEY_SIMPLEX, font_scale,
+                                (0, 0, 0), thickness, cv2.LINE_AA)
+        cv2.putText(display, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX,
+                    font_scale, (255, 255, 255), thickness, cv2.LINE_AA)
