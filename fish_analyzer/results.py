@@ -891,12 +891,16 @@ BAND_MIN_SESSIONS = 3
 def draw_minute_lines(ax, table: pd.DataFrame, column: str, title: str,
                       ylabel: str, group_colors: Dict[str, tuple],
                       empty_message: str = "No data.",
-                      smooth_minutes: int = 1, show_fish: bool = False) -> bool:
+                      smooth_minutes: int = 1, show_fish: bool = False,
+                      show_groups: bool = True, show_tanks: bool = True,
+                      show_band: bool = False) -> bool:
     """One column of a per-fish, per-minute table, by group: a thin line for
     each session (the mean of its fish), a thick line for each group (the
     mean of its sessions), and, for a group with BAND_MIN_SESSIONS or more,
     a band one standard error of that mean either side. The session lines
     are the spread the group line is the mean of; the tank is the unit.
+    Each layer can be left out: `show_groups`, `show_tanks` and `show_band`
+    (off by default: with a few tanks it says less than their lines), and
     `show_fish` adds a faint line per fish. Returns False if there was
     nothing to draw. `table` needs Group, Session, Fish and Minute columns.
 
@@ -925,19 +929,21 @@ def draw_minute_lines(ax, table: pd.DataFrame, column: str, title: str,
                 ax.plot(fish.index, fish.to_numpy(), color=color, linewidth=0.5,
                         alpha=0.2)
             sessions[session] = fish.mean(axis=1)
-            ax.plot(fish.index, sessions[session], color=color, linewidth=1.0,
-                    alpha=0.5)
+            if show_tanks:
+                ax.plot(fish.index, sessions[session], color=color,
+                        linewidth=1.0, alpha=0.5)
         sessions = pd.DataFrame(sessions)
         mean = sessions.mean(axis=1)
         n = sessions.notna().sum(axis=1)
-        if len(sessions.columns) >= BAND_MIN_SESSIONS:
+        if show_band and len(sessions.columns) >= BAND_MIN_SESSIONS:
             usable = n >= 2
             half = sessions[usable].std(axis=1) / np.sqrt(n[usable])
             ax.fill_between(mean[usable].index, mean[usable] - half,
                             mean[usable] + half, color=color, alpha=0.18,
                             linewidth=0)
-        ax.plot(mean.index, mean, color=color, linewidth=2.6, marker="o",
-                markersize=4)
+        if show_groups:
+            ax.plot(mean.index, mean, color=color, linewidth=2.6, marker="o",
+                    markersize=4)
     minutes = int(table["Minute"].max())
     # About five labels, whatever the length: every minute crowds a narrow panel.
     step = max(1, int(np.ceil(minutes / 6)))
@@ -952,14 +958,16 @@ def draw_minute_lines(ax, table: pd.DataFrame, column: str, title: str,
 
 def minute_plot(ax, table: pd.DataFrame, metric: Metric,
                 group_colors: Dict[str, tuple], smooth_minutes: int = 1,
-                show_fish: bool = False, title: Optional[str] = None) -> None:
-    """One of the headline metrics, minute by minute, by group."""
+                show_fish: bool = False, title: Optional[str] = None,
+                **layers) -> None:
+    """One of the headline metrics, minute by minute, by group. `layers` are
+    draw_minute_lines's show_ switches."""
     title = title or {"DistancePerTrackedMin": "Distance per minute"
                       }.get(metric.column, metric.title)
     drawn = draw_minute_lines(
         ax, table, metric.column, title, metric.axis_label(shared_unit(table)),
         group_colors, empty_message=NO_OUTLINE, smooth_minutes=smooth_minutes,
-        show_fish=show_fish)
+        show_fish=show_fish, **layers)
     if not drawn:
         return
     if metric.kind == "ratio":
@@ -1006,16 +1014,24 @@ def session_colors(table: pd.DataFrame) -> Dict[str, tuple]:
     return colors
 
 
-def minute_legend(figure, colors: Dict[str, tuple]) -> None:
+def minute_legend(figure, colors: Dict[str, tuple], show_groups: bool = True,
+                  show_tanks: bool = True, show_band: bool = False,
+                  show_fish: bool = False) -> None:
     """The legend under a minute-by-minute figure: groups, and how to read
-    the thin lines and the band."""
+    the lines and the band that are on show."""
     from matplotlib.lines import Line2D
+    shown = [text for on, text in (
+        (show_groups, "thick line: mean of the group's tanks"),
+        (show_tanks, "thin lines: its tanks"),
+        (show_band, "band: \u00b11 standard error of the group mean, "
+                    f"{BAND_MIN_SESSIONS}+ tanks"),
+        (show_fish, "faint lines: its fish")) if on]
     figure.legend(
         handles=[Line2D([], [], color=color, linewidth=2.6, label=group)
                  for group, color in colors.items()],
         loc="lower center", ncol=min(len(colors), 6), frameon=False, fontsize=9,
-        title="Groups (thin lines: their tanks; band: \u00b11 standard error "
-              f"of the group mean, {BAND_MIN_SESSIONS}+ tanks)", title_fontsize=9)
+        title="Groups" + (f" ({'; '.join(shown)})" if shown else ""),
+        title_fontsize=9)
 
 
 MINUTE_MEANING = (
@@ -1023,8 +1039,9 @@ MINUTE_MEANING = (
     "recording by itself. Lines are coloured by group: each thin line is a "
     "session (the mean of its fish), and the thick line is the mean of the "
     "group's sessions. The thin lines are the spread to judge a difference "
-    "against. A group with three or more sessions also gets a shaded band, "
-    "one standard error of its mean either side. That is narrower than a 95% "
+    "against. \"Group mean\", \"Tanks\" and \"Each fish\" turn those "
+    "lines on and off. \"Band\" shades, for a group with three or more "
+    "sessions, one standard error of its mean either side. That is narrower than a 95% "
     "confidence interval (with three sessions, about a quarter as wide), so "
     "bands that do not overlap are not a significant difference; test the "
     "session means for that. \"Each fish\" adds a faint "

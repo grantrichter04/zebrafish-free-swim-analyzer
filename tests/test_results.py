@@ -339,7 +339,8 @@ def test_a_group_of_three_sessions_gets_a_one_standard_error_band():
         "Value": [v for v in values.values() for _ in (1, 2)]})
     ax = Figure().add_subplot(111)
 
-    results.draw_minute_lines(ax, table, "Value", "t", "u", {"g": (1, 0, 0)})
+    results.draw_minute_lines(ax, table, "Value", "t", "u", {"g": (1, 0, 0)},
+                              show_band=True)
 
     band = ax.collections[0].get_paths()[0].vertices[:, 1]
     half = np.std([1.0, 2.0, 6.0], ddof=1) / np.sqrt(3)
@@ -361,9 +362,10 @@ def test_results_tab_switches_to_minute_by_minute(
     drawn = []
     real = results.minute_plot
     monkeypatch.setattr(results, "minute_plot",
-                        lambda ax, table, metric, colors, smooth, *rest: (
+                        lambda ax, table, metric, colors, smooth, *rest, **layers: (
                             drawn.append((metric.column, smooth)),
-                            real(ax, table, metric, colors, smooth, *rest))[1])
+                            real(ax, table, metric, colors, smooth, *rest,
+                                 **layers))[1])
     assert str(app.results_smoothing_box.cget("state")) == "disabled", \
         "nothing to smooth in the group comparison"
 
@@ -699,3 +701,20 @@ def test_fish_ridges_keep_each_group_together_under_its_name():
     assert [t.get_text() for t in ax.get_yticklabels()] == [
         "a · 1", "b · 1", "c · 1"], "g's tanks together, first group on top"
     assert {t.get_text() for t in ax.texts} == {"g", "h"}, "each group named"
+
+
+def test_each_minute_layer_can_be_turned_off_and_the_band_starts_off():
+    table = pd.DataFrame({
+        "Group": ["g"] * 6, "Session": [s for s in "abc" for _ in (1, 2)],
+        "Fish": ["1"] * 6, "Minute": [1, 2] * 3, "Value": [1.0, 1, 2, 2, 6, 6]})
+    def lines(**layers):
+        ax = Figure().add_subplot(111)
+        results.draw_minute_lines(ax, table, "Value", "t", "u", {"g": (1, 0, 0)},
+                                  **layers)
+        return ([l.get_linewidth() > 2 for l in ax.lines].count(True),
+                [l.get_linewidth() > 2 for l in ax.lines].count(False),
+                len(ax.collections))
+    assert lines() == (1, 3, 0), "group mean and tanks; no band unless asked"
+    assert lines(show_band=True) == (1, 3, 1)
+    assert lines(show_groups=False) == (0, 3, 0)
+    assert lines(show_tanks=False) == (1, 0, 0)

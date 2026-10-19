@@ -46,8 +46,9 @@ class ResultsTabMixin:
             "compare the large markers.",
         "minutes":
             "Each measure minute by minute. Thin lines are tanks, the thick "
-            "line is the mean of a group's tanks, and the band is one "
-            "standard error of that mean either side.",
+            "line is the mean of a group's tanks, and the band (off at first) "
+            "is one standard error of that mean either side. Turn each on "
+            "or off with the boxes above.",
         "distributions":
             "How speeds are spread, each group's tanks in shades of one "
             "colour. Left: the share of time at or below each speed; a curve "
@@ -108,6 +109,20 @@ class ResultsTabMixin:
             view_row, text="Each fish", variable=self.results_each_fish,
             state="disabled", command=self._draw_results_plot)
         self.results_each_fish_check.pack(side="left", padx=(10, 0))
+        # The other layers of the minute-by-minute plot, each switchable.
+        # The band is off at first: from a few tanks it says less than
+        # their own lines.
+        self.results_minute_layers = {}
+        self.results_minute_layer_checks = []
+        for key, text, on in (("show_groups", "Group mean", True),
+                              ("show_tanks", "Tanks", True),
+                              ("show_band", "Band", False)):
+            var = tk.BooleanVar(value=on)
+            self.results_minute_layers[key] = var
+            check = tk.Checkbutton(view_row, text=text, variable=var,
+                                   state="disabled", command=self._draw_results_plot)
+            check.pack(side="left", padx=(4, 0))
+            self.results_minute_layer_checks.append(check)
         # Only the speed distributions have ridges.
         tk.Label(view_row, text="Ridges:").pack(side="left", padx=(14, 3))
         self.results_ridge_box = ttk.Combobox(
@@ -235,8 +250,9 @@ class ResultsTabMixin:
             child.destroy()
         self.results_smoothing_box.config(
             state="readonly" if self.results_view.get() == "minutes" else "disabled")
-        self.results_each_fish_check.config(
-            state="normal" if self.results_view.get() == "minutes" else "disabled")
+        for check in [self.results_each_fish_check] + self.results_minute_layer_checks:
+            check.config(
+                state="normal" if self.results_view.get() == "minutes" else "disabled")
         self.results_ridge_box.config(
             state="readonly" if self.results_view.get() == "distributions"
             else "disabled")
@@ -309,6 +325,8 @@ class ResultsTabMixin:
             if by_minute:
                 minutes = results.minute_table(self.loaded_files, self.file_groups)
                 colors = results.group_colors(minutes)
+                layers = {key: var.get()
+                          for key, var in self.results_minute_layers.items()}
             metrics = [metric for metric in results.METRICS
                        if self.results_panel_vars[metric.column].get()]
             if not metrics:
@@ -322,11 +340,13 @@ class ResultsTabMixin:
                 title = resting if metric.column == "RestingTime" else None
                 if by_minute:
                     results.minute_plot(ax, minutes, metric, colors, smooth,
-                                        self.results_each_fish.get(), title)
+                                        self.results_each_fish.get(), title,
+                                        **layers)
                 else:
                     results.superplot(ax, table, metric, session_colors, title)
             if by_minute:
-                results.minute_legend(figure, colors)
+                results.minute_legend(figure, colors, show_fish=self.results_each_fish.get(),
+                                      **layers)
             else:
                 figure.legend(
                     handles=[Line2D([], [], marker="o", linestyle="", markersize=9,

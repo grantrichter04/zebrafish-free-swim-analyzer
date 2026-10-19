@@ -88,9 +88,12 @@ found that an export could not be traced to the code that made it.
   between groups. "Where they swim" puts each group on a row of its own,
   named down the left.
 - **The minute-by-minute band is one standard error of the group mean**,
-  not a 95% confidence interval. From three tanks that interval is the mean
-  plus or minus 4.3 standard errors, and two groups' intervals covered the
-  panel.
+  not a 95% confidence interval, and is off until "Band" is ticked. From
+  three tanks that interval is the mean plus or minus 4.3 standard errors,
+  and two groups' intervals covered the panel.
+- **Each minute-by-minute layer can be switched off**: "Group mean",
+  "Tanks" and "Band" sit beside "Each fish", and the legend names only what
+  is on show.
 - **The note above the Results plot describes the view on show.** It
   described the group comparison whatever was showing.
 
