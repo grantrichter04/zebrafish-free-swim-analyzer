@@ -80,6 +80,19 @@ found that an export could not be traced to the code that made it.
 - **Identity numbers on the inspector's dots are larger**, with a black edge,
   and sit just beside the dot so the dot's colour stays visible. Inside the
   dot they were too small to read at the default dot size.
+- **Results are coloured by group.** Each group has a colour of its own and
+  its tanks are shades of it, on every Results and Shoaling plot. Two groups
+  are no longer neighbouring blues on the minute-by-minute plot, and the
+  group comparison reads by condition before tank.
+- **Speed ridges keep each group together**, under its name, with a gap
+  between groups. "Where they swim" puts each group on a row of its own,
+  named down the left.
+- **The minute-by-minute band is one standard error of the group mean**,
+  not a 95% confidence interval. From three tanks that interval is the mean
+  plus or minus 4.3 standard errors, and two groups' intervals covered the
+  panel.
+- **The note above the Results plot describes the view on show.** It
+  described the group comparison whatever was showing.
 
 ### Sessions without identities, resting time, and checking it on the video
 

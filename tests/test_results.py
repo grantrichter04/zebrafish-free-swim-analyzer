@@ -331,8 +331,7 @@ def test_minute_lines_are_a_line_per_session_and_a_mean_per_group():
     assert empty.texts[0].get_text() == "nothing"
 
 
-def test_a_group_of_three_sessions_gets_its_95_percent_interval():
-    from scipy import stats
+def test_a_group_of_three_sessions_gets_a_one_standard_error_band():
     values = {"a": 1.0, "b": 2.0, "c": 6.0}
     table = pd.DataFrame({
         "Group": ["g"] * 6, "Session": [s for s in values for _ in (1, 2)],
@@ -343,8 +342,7 @@ def test_a_group_of_three_sessions_gets_its_95_percent_interval():
     results.draw_minute_lines(ax, table, "Value", "t", "u", {"g": (1, 0, 0)})
 
     band = ax.collections[0].get_paths()[0].vertices[:, 1]
-    sem = np.std([1.0, 2.0, 6.0], ddof=1) / np.sqrt(3)
-    half = stats.t.ppf(0.975, 2) * sem
+    half = np.std([1.0, 2.0, 6.0], ddof=1) / np.sqrt(3)
     assert band.max() == pytest.approx(3.0 + half)
     assert band.min() == pytest.approx(3.0 - half)
 
@@ -663,3 +661,41 @@ def test_the_top_speed_explanation_matches_its_percentile():
     """It said "1% of the time", left over from the 99th percentile."""
     speed95 = next(m for m in results.METRICS if m.column == "Speed95")
     assert "faster than this for only 5% of the time" in speed95.meaning
+
+
+# --- colour by group ---------------------------------------------------------------
+
+def test_a_groups_tanks_are_shades_of_its_colour_and_groups_differ():
+    import matplotlib.colors as mcolors
+    table = pd.DataFrame({"Group": ["g", "h", "g", "h", "g"],
+                          "Session": ["a", "c", "b", "d", "e"]})
+    assert results.sessions_by_group(table) == {"g": ["a", "b", "e"], "h": ["c", "d"]}
+    groups = results.group_colors(table)
+    sessions = results.session_colors(table)
+    hue = lambda color: mcolors.rgb_to_hsv(color[:3])[0]
+    assert abs(hue(groups["g"]) - hue(groups["h"])) > 0.1, "groups look different"
+    for group, names in results.sessions_by_group(table).items():
+        assert all(abs(hue(sessions[n]) - hue(groups[group])) < 0.05 for n in names), \
+            "a tank is a shade of its group's colour"
+    assert len({sessions[n] for n in "abe"}) == 3, "and the tanks differ from each other"
+
+
+def test_each_group_gets_rows_of_its_own_in_the_density_panels():
+    rows, columns, places = results.grouped_panel_grid(
+        {"g": ["a", "b", "c"], "h": ["d", "e"]})
+    assert (rows, columns) == (2, 3)
+    assert places == {"a": 1, "b": 2, "c": 3, "d": 4, "e": 5}
+    rows, columns, places = results.grouped_panel_grid({"g": list("abcdefgh")})
+    assert (rows, columns) == results.panel_grid(8), "one group: the wide layout"
+
+
+def test_fish_ridges_keep_each_group_together_under_its_name():
+    rng = np.random.default_rng(0)
+    samples = [results.SpeedSample(group, tank, "1", rng.gamma(2, 1, 500), "BL")
+               for group, tank in (("g", "a"), ("h", "c"), ("g", "b"))]
+    ax = Figure().add_subplot(111)
+    results.plot_fish_speed_ridges(ax, samples, {"a": (1, 0, 0), "b": (0.5, 0, 0),
+                                                 "c": (0, 0, 1)})
+    assert [t.get_text() for t in ax.get_yticklabels()] == [
+        "a · 1", "b · 1", "c · 1"], "g's tanks together, first group on top"
+    assert {t.get_text() for t in ax.texts} == {"g", "h"}, "each group named"

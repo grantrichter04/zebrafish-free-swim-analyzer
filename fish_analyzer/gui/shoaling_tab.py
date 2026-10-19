@@ -19,7 +19,6 @@ from matplotlib.lines import Line2D
 
 from .. import results, shoal_summary
 from ..export import export_shoaling_metrics_csv, export_shoaling_summary_csv
-from ..overlay_render import fish_colors
 from .utils import ask_csv_save_path, embed_figure_with_toolbar
 
 
@@ -174,9 +173,9 @@ class ShoalingTabMixin:
         if table is None or table.empty:
             return
 
-        sessions = list(dict.fromkeys(table["Session"]))
-        colors = fish_colors(len(sessions))
-        session_colors = {name: tuple(colors[i]) for i, name in enumerate(sessions)}
+        sessions = [name for names in results.sessions_by_group(table).values()
+                    for name in names]
+        session_colors = results.session_colors(table)
         unit = results.shared_unit(table)
         figure = Figure(figsize=(11, 3.6), dpi=100)
         axes = figure.subplots(1, len(shoal_summary.MEASURES))

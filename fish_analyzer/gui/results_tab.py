@@ -16,7 +16,6 @@ from matplotlib.figure import Figure
 from matplotlib.lines import Line2D
 
 from .. import results, results_export
-from ..overlay_render import fish_colors
 from .utils import embed_figure_with_toolbar
 
 
@@ -38,11 +37,34 @@ class ResultsTabMixin:
         ("RestingTime", "Resting %", 80),
     )
 
+    #: How to read each view, for the note above the plot.
+    VIEW_NOTES = {
+        "comparison":
+            "Each group's tanks are shades of one colour. Small dots are fish, "
+            "large markers are tank means, and the black line is the mean of "
+            "a group's tanks. Fish sharing a tank are not independent, so "
+            "compare the large markers.",
+        "minutes":
+            "Each measure minute by minute. Thin lines are tanks, the thick "
+            "line is the mean of a group's tanks, and the band is one "
+            "standard error of that mean either side.",
+        "distributions":
+            "How speeds are spread, each group's tanks in shades of one "
+            "colour. Left: the share of time at or below each speed; a curve "
+            "further right is faster. Right: the shape of each distribution, "
+            "grouped by condition; the black tick is the median.",
+        "density":
+            "Where the fish spent their time, all of a tank's fish together, "
+            "one row per group. Brighter is more time; every map shares one "
+            "colour scale.",
+    }
+
     def _create_results_tab(self):
         tab = ttk.Frame(self.notebook)
         self.notebook.add(tab, text="Results")
         self.results_tab_frame = tab
         self._results_table = None
+        self._results_note_parts = ("", "")
 
         top = tk.Frame(tab)
         top.pack(fill="x", padx=20, pady=(10, 0))
@@ -170,13 +192,11 @@ class ResultsTabMixin:
         fish = f"{int((~pooled).sum())} fish" if not pooled.all() else ""
         tanks = (f"{int(pooled.sum())} tank(s) tracked without identities"
                  if pooled.any() else "")
-        self.results_note_var.set(
+        # What the plot shows goes between these, and changes with the view.
+        self._results_note_parts = (
             f"{' and '.join(t for t in (fish, tanks) if t)} in "
-            f"{len(sessions)} session(s), {len(groups)} group(s). Small dots "
-            "are fish, large markers are session means, and the line is the "
-            "mean of a group's sessions. Fish sharing a tank are not "
-            "independent, so compare the large markers."
-            + ("" if not pooled.any() else
+            f"{len(sessions)} session(s), {len(groups)} group(s).",
+            ("" if not pooled.any() else
                "  A session tracked without identities cannot tell its fish "
                "apart, so it has one value for the whole tank.")
             + ("" if per_group.min() > 1 else
@@ -228,10 +248,13 @@ class ResultsTabMixin:
         table = self._results_table
         if table is None or table.empty:
             return
+        lead, tail = self._results_note_parts
+        self.results_note_var.set(
+            f"{lead} {self.VIEW_NOTES[self.results_view.get()]}{tail}")
 
-        sessions = list(dict.fromkeys(table["Session"]))
-        colors = fish_colors(len(sessions))
-        session_colors = {name: tuple(colors[i]) for i, name in enumerate(sessions)}
+        by_group = results.sessions_by_group(table)
+        sessions = [name for names in by_group.values() for name in names]
+        session_colors = results.session_colors(table)
         figure = Figure(figsize=(11, 3.6), dpi=100)
 
         if self.results_view.get() == "distributions":
@@ -262,14 +285,19 @@ class ResultsTabMixin:
             maps = [results.position_density(self.loaded_files[name], cell)
                     for name in sessions]
             ceiling = results.shared_density_ceiling([m[0] for m in maps])
-            rows, columns = results.panel_grid(len(sessions))
+            rows, columns, places = results.grouped_panel_grid(by_group)
+            group_colors = results.group_colors(table)
             axes = []
-            for index, (name, (density, x_edges, y_edges)) in enumerate(
-                    zip(sessions, maps)):
-                axes.append(figure.add_subplot(rows, columns, index + 1))
+            for name, (density, x_edges, y_edges) in zip(sessions, maps):
+                axes.append(figure.add_subplot(rows, columns, places[name]))
                 image = results.plot_position_density(
                     axes[-1], name, self.loaded_files[name], density, x_edges,
                     y_edges, ceiling, self.file_arena_definitions.get(name))
+                group = table.loc[table["Session"] == name, "Group"].iloc[0]
+                if len(by_group) > 1 and name == by_group[group][0]:
+                    # The group's name down the left of its row.
+                    axes[-1].set_ylabel(group, fontsize=12, fontweight="bold",
+                                        color=group_colors[group])
             unit = self.loaded_files[sessions[0]].calibration.unit_name
             figure.colorbar(
                 image, ax=axes, shrink=0.85, extend="max",

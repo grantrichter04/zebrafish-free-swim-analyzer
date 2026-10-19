@@ -472,6 +472,7 @@ def plot_session_speed_ecdf(ax, samples: List[SpeedSample],
     curve crosses 50% is that session's median speed, where it crosses 95%
     its 95th percentile. A session that is faster overall sits to the right.
     """
+    samples = _grouped(samples)
     bins = _speed_bins(samples, top=top)
     levels = np.linspace(0.0, 1.0, 501)
     sessions = list(dict.fromkeys(sample.session for sample in samples))
@@ -503,23 +504,49 @@ def plot_session_speed_ecdf(ax, samples: List[SpeedSample],
         ax.spines[side].set_visible(False)
 
 
+def _grouped(samples: List[SpeedSample]) -> List[SpeedSample]:
+    """The samples with each group's together, groups in the order they first
+    appear, and in their own order inside a group."""
+    order = list(dict.fromkeys(sample.group for sample in samples))
+    return sorted(samples, key=lambda sample: order.index(sample.group))
+
+
 def plot_fish_speed_ridges(ax, samples: List[SpeedSample],
                            session_colors: Dict[str, tuple],
                            top: Optional[float] = None) -> None:
     """One ridge per fish, stacked and coloured by session: where a single
-    unusual animal shows up."""
+    unusual animal shows up. Each group's ridges are kept together under its
+    name, with a gap between groups."""
+    samples = _grouped(samples)
     bins = _speed_bins(samples, top=top)
     centres = (bins[:-1] + bins[1:]) / 2
-    densities = [_density(sample.speeds, bins) for sample in samples]
-    overlap = 1.8                       # ridge height, in rows
+    # Ridge height, in rows. Many fish need the overlap to fit; a few tanks
+    # read better apart.
+    many = len(samples) > 8
+    overlap = 1.8 if many else 1.3
+    groups = list(dict.fromkeys(sample.group for sample in samples))
+    # Between groups, room above the top ridge for the group's name: rows
+    # are thinner with many fish, so the name takes more of them.
+    room = (1.8 if many else 0.6) if len(groups) > 1 else 0.0
+    gap = overlap - 1 + room if room else 0.0
+    # Bases from the top down: the first fish at the top, and a gap above
+    # every group's first ridge for its name.
+    bases, level = [], 0.0
+    for row, sample in enumerate(samples):
+        if row and sample.group != samples[row - 1].group:
+            level -= gap
+        bases.append(level)
+        level -= 1
+    lowest = min(bases)
+    bases = [base - lowest for base in bases]
     labels = []
-    for row, (sample, density) in enumerate(zip(samples, densities)):
-        base = len(samples) - 1 - row   # first fish at the top
+    for row, (sample, base) in enumerate(zip(samples, bases)):
+        density = _density(sample.speeds, bins)
         # Each ridge is scaled to its own peak. The shape is what is being
         # read here; one fish with a tall spike would otherwise flatten the rest.
         height = density / density.max() * overlap
         color = session_colors[sample.session]
-        ax.fill_between(centres, base, base + height, color=color, alpha=0.55,
+        ax.fill_between(centres, base, base + height, color=color, alpha=0.6,
                         zorder=row + 1)
         ax.plot(centres, base + height, color="white", linewidth=0.8, zorder=row + 1)
         # The median, the headline speed: a short tick inside the ridge.
@@ -528,6 +555,13 @@ def plot_fish_speed_ridges(ax, samples: List[SpeedSample],
                 linewidth=1.2, zorder=row + 1)
         fish = "all fish" if sample.fish in (POOLED, ALL_FISH) else sample.fish
         labels.append((base, f"{sample.session} \u00b7 {fish}"))
+        if room and (row == 0 or sample.group != samples[row - 1].group):
+            ridge_top = base + overlap
+            # In the group's darkest shade, its last tank's.
+            last = [s for s in samples if s.group == sample.group][-1]
+            ax.text(bins[-1], ridge_top + room * 0.1, sample.group, ha="right",
+                    va="bottom", fontsize=10, fontweight="bold",
+                    color=session_colors[last.session], zorder=len(samples) + 2)
     ax.set_yticks([base for base, _ in labels])
     ax.set_yticklabels([text for _, text in labels], fontsize=8)
     tanks = sum(sample.fish in (POOLED, ALL_FISH) for sample in samples)
@@ -537,7 +571,7 @@ def plot_fish_speed_ridges(ax, samples: List[SpeedSample],
                  fontsize=11, fontweight="bold")
     ax.set_xlabel(f"Speed ({samples[0].unit}/s); black tick: median")
     ax.set_xlim(bins[0], bins[-1])
-    ax.set_ylim(-0.2, len(samples) - 1 + overlap + 0.2)
+    ax.set_ylim(-0.2, max(bases) + overlap + room + 0.2)
     ax.tick_params(axis="y", length=0)
     for side in ("top", "right", "left"):
         ax.spines[side].set_visible(False)
@@ -652,6 +686,25 @@ def panel_grid(n_sessions: int) -> tuple:
     """(rows, columns) for one panel per session in a wide, short figure."""
     columns = min(n_sessions, int(np.ceil(np.sqrt(3 * n_sessions))))
     return int(np.ceil(n_sessions / columns)), columns
+
+
+def grouped_panel_grid(groups: Dict[str, List[str]]) -> tuple:
+    """(rows, columns, places) for one panel per session with each group on
+    rows of its own, so the groups compare top to bottom. `places` maps each
+    session to its 1-based subplot number. A group with more sessions than
+    fit across wraps onto further rows. With one group, or one session per
+    group, it is panel_grid's wide layout."""
+    sessions = [name for names in groups.values() for name in names]
+    if len(groups) < 2 or max(len(names) for names in groups.values()) < 2:
+        rows, columns = panel_grid(len(sessions))
+        return rows, columns, {name: i + 1 for i, name in enumerate(sessions)}
+    columns = min(6, max(len(names) for names in groups.values()))
+    places, row = {}, 0
+    for names in groups.values():
+        for index, name in enumerate(names):
+            places[name] = (row + index // columns) * columns + index % columns + 1
+        row += int(np.ceil(len(names) / columns))
+    return row, columns, places
 
 
 def density_cell(loaded_files: Dict, sessions: List[str], across: int = 48) -> float:
@@ -828,9 +881,10 @@ def _nanmean(values) -> float:
 
 
 #: A group needs this many sessions before its minute-by-minute line gets a
-#: confidence band. From two sessions a 95% interval is the mean plus or minus
-#: 12.7 standard errors: it fills the panel and says less than the two
-#: session lines it is drawn from.
+#: band. The band is one standard error of the group mean either side, not a
+#: 95% interval: from three sessions that interval is the mean plus or minus
+#: 4.3 standard errors, and two groups' intervals cover the panel and hide
+#: the lines. The session lines are the spread to judge a difference by.
 BAND_MIN_SESSIONS = 3
 
 
@@ -841,7 +895,7 @@ def draw_minute_lines(ax, table: pd.DataFrame, column: str, title: str,
     """One column of a per-fish, per-minute table, by group: a thin line for
     each session (the mean of its fish), a thick line for each group (the
     mean of its sessions), and, for a group with BAND_MIN_SESSIONS or more,
-    a band for the 95% confidence interval of that mean. The session lines
+    a band one standard error of that mean either side. The session lines
     are the spread the group line is the mean of; the tank is the unit.
     `show_fish` adds a faint line per fish. Returns False if there was
     nothing to draw. `table` needs Group, Session, Fish and Minute columns.
@@ -849,8 +903,6 @@ def draw_minute_lines(ax, table: pd.DataFrame, column: str, title: str,
     With `smooth_minutes` above 1 every fish's line is a running mean over
     that many minutes, centred, using what there is at the two ends, and the
     session and group lines are made from those."""
-    from scipy import stats
-
     ax.set_title(title, fontsize=11, fontweight="bold")
     for side in ("top", "right"):
         ax.spines[side].set_visible(False)
@@ -880,8 +932,7 @@ def draw_minute_lines(ax, table: pd.DataFrame, column: str, title: str,
         n = sessions.notna().sum(axis=1)
         if len(sessions.columns) >= BAND_MIN_SESSIONS:
             usable = n >= 2
-            half = (stats.t.ppf(0.975, n[usable] - 1)
-                    * sessions[usable].std(axis=1) / np.sqrt(n[usable]))
+            half = sessions[usable].std(axis=1) / np.sqrt(n[usable])
             ax.fill_between(mean[usable].index, mean[usable] - half,
                             mean[usable] + half, color=color, alpha=0.18,
                             linewidth=0)
@@ -917,12 +968,42 @@ def minute_plot(ax, table: pd.DataFrame, metric: Metric,
         ax.set_ylim(0, 100)
 
 
+#: One colour family per group. A group's tanks are shades of its colour, so
+#: every plot reads by condition first and by tank second. Past six groups
+#: the families come round again.
+GROUP_FAMILIES = ("Blues", "Oranges", "Greens", "Purples", "Reds", "Greys")
+
+
+def _family(index: int):
+    import matplotlib
+    return matplotlib.colormaps[GROUP_FAMILIES[index % len(GROUP_FAMILIES)]]
+
+
+def sessions_by_group(table: pd.DataFrame) -> Dict[str, List[str]]:
+    """Each group's sessions, groups in the order they first appear."""
+    out: Dict[str, List[str]] = {}
+    for group, session in table[["Group", "Session"]].drop_duplicates().itertuples(
+            index=False):
+        out.setdefault(group, []).append(session)
+    return out
+
+
 def group_colors(table: pd.DataFrame) -> Dict[str, tuple]:
     """One colour per group, in the order the groups first appear."""
-    from .overlay_render import fish_colors
-    groups = list(dict.fromkeys(table["Group"]))
-    colors = fish_colors(len(groups))
-    return {group: tuple(colors[i]) for i, group in enumerate(groups)}
+    return {group: tuple(_family(i)(0.75))
+            for i, group in enumerate(sessions_by_group(table))}
+
+
+def session_colors(table: pd.DataFrame) -> Dict[str, tuple]:
+    """One colour per session: a shade of its group's colour, light to dark
+    in the order the sessions appear."""
+    colors = {}
+    for i, sessions in enumerate(sessions_by_group(table).values()):
+        shades = (np.linspace(0.45, 0.95, len(sessions)) if len(sessions) > 1
+                  else [0.75])
+        for session, shade in zip(sessions, shades):
+            colors[session] = tuple(_family(i)(shade))
+    return colors
 
 
 def minute_legend(figure, colors: Dict[str, tuple]) -> None:
@@ -933,8 +1014,8 @@ def minute_legend(figure, colors: Dict[str, tuple]) -> None:
         handles=[Line2D([], [], color=color, linewidth=2.6, label=group)
                  for group, color in colors.items()],
         loc="lower center", ncol=min(len(colors), 6), frameon=False, fontsize=9,
-        title="Groups (thin lines: their sessions; band: 95% CI, "
-              f"{BAND_MIN_SESSIONS}+ sessions)", title_fontsize=9)
+        title="Groups (thin lines: their tanks; band: \u00b11 standard error "
+              f"of the group mean, {BAND_MIN_SESSIONS}+ tanks)", title_fontsize=9)
 
 
 MINUTE_MEANING = (
@@ -943,8 +1024,10 @@ MINUTE_MEANING = (
     "session (the mean of its fish), and the thick line is the mean of the "
     "group's sessions. The thin lines are the spread to judge a difference "
     "against. A group with three or more sessions also gets a shaded band, "
-    "the 95% confidence interval of its mean; with two sessions that "
-    "interval would be wider than the panel. \"Each fish\" adds a faint "
+    "one standard error of its mean either side. That is narrower than a 95% "
+    "confidence interval (with three sessions, about a quarter as wide), so "
+    "bands that do not overlap are not a significant difference; test the "
+    "session means for that. \"Each fish\" adds a faint "
     "line per fish. A point is what happened in that minute and nothing "
     "else, unless you choose a Smoothing: then each point is the mean of "
     "the 3 or 5 minutes around it, which steadies a jumpy line and also "
