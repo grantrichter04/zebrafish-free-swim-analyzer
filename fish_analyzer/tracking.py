@@ -120,6 +120,44 @@ def session_reviewed_on(session_folder: Path) -> Optional[str]:
     return str(stamp)[:10] if stamp else None
 
 
+#: Kept in a session folder: what was chosen for the session in this app and
+#: should come back with it, so far its experimental group.
+SESSION_CHOICES_FILE = "freeswim_session.json"
+
+
+def saved_group(session_folder: Path) -> Optional[str]:
+    """The group last set for the session in its folder, or None."""
+    try:
+        with open(Path(session_folder) / SESSION_CHOICES_FILE,
+                  encoding="utf-8") as file:
+            group = json.load(file).get("group")
+    except (OSError, ValueError, AttributeError):
+        return None
+    return str(group) if group else None
+
+
+def save_group(session_folder: Path, group: Optional[str]) -> bool:
+    """Keep `group` in the session folder (None forgets it). Returns False if
+    the folder could not be written, for example on a read-only drive."""
+    path = Path(session_folder) / SESSION_CHOICES_FILE
+    try:
+        with open(path, encoding="utf-8") as file:
+            choices = json.load(file)
+        if not isinstance(choices, dict):
+            choices = {}
+    except (OSError, ValueError):
+        choices = {}
+    if group:
+        choices["group"] = group
+    else:
+        choices.pop("group", None)
+    try:
+        path.write_text(json.dumps(choices, indent=2), encoding="utf-8")
+    except OSError:
+        return False
+    return True
+
+
 def build_review_command(session_folder: Path) -> List[str]:
     """Open idtracker.ai's validator on a session folder.
 

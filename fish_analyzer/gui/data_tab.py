@@ -84,7 +84,9 @@ class DataTabMixin:
             text="A session is one tracked video. Sessions tracked on the "
                  "Tracking tab arrive here with \"Load tracked sessions for "
                  "analysis\"; \"Add sessions...\" takes a session folder or a "
-                 "folder of them. Names and groups label every plot and export. "
+                 "folder of them. Names and groups label every plot and export; "
+                 "select several rows (Shift- or Ctrl-click) to set their "
+                 "group at once, and it is remembered with the session. "
                  "\"Open in validator...\" is idtracker.ai's tool for checking "
                  "that fish were not swapped; saving there ticks Reviewed. "
                  "\"Tank outline...\" is only needed when the outline drawn "
@@ -313,6 +315,7 @@ class DataTabMixin:
 
         self.file_arena_definitions.pop(nickname, None)
         self.file_groups.pop(nickname, None)
+        self.session_folders.pop(nickname, None)
 
     @staticmethod
     def _invalidation_notice(cleared: list) -> str:
@@ -423,6 +426,12 @@ class DataTabMixin:
             # leaves the existing one intact.
             self._purge_file_state(nickname)
         self.loaded_files[nickname] = loaded_file
+        if path.is_dir():
+            # The group set for it last time, kept in its folder.
+            self.session_folders[nickname] = path
+            group = tracking.saved_group(path)
+            if group:
+                self.file_groups[nickname] = group
 
         self._sessions_changed()
         self._update_inspector_file_dropdown()
@@ -534,7 +543,8 @@ class DataTabMixin:
             for name, loaded in self.loaded_files.items()}
         self.loaded_files[new].nickname = new
 
-        for keyed in (self.file_arena_definitions, self.video_readers):
+        for keyed in (self.file_arena_definitions, self.video_readers,
+                      self.session_folders):
             if old in keyed:
                 keyed[new] = keyed.pop(old)
         # A group that was chosen stays. One that was only ever derived from
@@ -561,15 +571,30 @@ class DataTabMixin:
             "Set group",
             f"Group for the {len(selected)} selected session(s), for example "
             "control or treated.\nSessions with the same group are pooled "
-            "in group plots and share a Group value in exports:",
+            "in group plots and share a Group value in exports."
+            + ("\nTo set several at once, Shift- or Ctrl-click them in the "
+               "table first." if len(selected) == 1 else "")
+            + "\nThe group is kept in the session folder and comes back "
+              "when the session is loaded again:",
             initialvalue=self._group_of(selected[0]), parent=self.root)
         if label is None:
             return
+        unsaved = []
         for nickname in selected:
-            if label.strip():
-                self.file_groups[nickname] = label.strip()
+            group = label.strip() or None
+            if group:
+                self.file_groups[nickname] = group
             else:
                 self.file_groups.pop(nickname, None)
+            folder = self.session_folders.get(nickname)
+            if folder is not None and not tracking.save_group(folder, group):
+                unsaved.append(nickname)
+        if unsaved:
+            messagebox.showwarning(
+                "Group not saved",
+                "The group is set for now, but could not be written into the "
+                "folder of: " + ", ".join(unsaved) + ". It will need setting "
+                "again next time those sessions are loaded.")
         self._update_sessions_table()
         self._refresh_result_tabs()
 

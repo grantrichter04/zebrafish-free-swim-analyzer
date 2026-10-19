@@ -116,6 +116,9 @@ class GUIBase:
 
         # Group assignments: file nickname → group label (for collapsed distributions)
         self.file_groups: Dict[str, str] = {}
+        # The folder each session was loaded from, where its group is kept.
+        # A bare trajectories file has none.
+        self.session_folders: Dict[str, Any] = {}
 
         # Create the main window
         self.root = tk.Tk()

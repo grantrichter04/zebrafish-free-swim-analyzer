@@ -268,3 +268,14 @@ def test_identity_training_can_be_finished_early(tmp_path, monkeypatch):
     assert lines[0].startswith("arguments --load"), "idtracker.ai got its arguments"
     assert lines[-2:] == ["Training interrupted by user",
                           "carried on to the rest of tracking"]
+
+
+def test_a_sessions_group_is_kept_beside_it(tmp_path):
+    assert tracking.saved_group(tmp_path) is None
+    assert tracking.save_group(tmp_path, "GRNA")
+    assert tracking.saved_group(tmp_path) == "GRNA"
+    (tmp_path / tracking.SESSION_CHOICES_FILE).write_text("not json")
+    assert tracking.saved_group(tmp_path) is None, "a damaged file is no group"
+    assert tracking.save_group(tmp_path, "control")
+    assert tracking.saved_group(tmp_path) == "control"
+    assert not tracking.save_group(tmp_path / "missing", "x"), "an unwritable folder says so"

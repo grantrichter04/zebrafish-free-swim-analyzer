@@ -307,6 +307,32 @@ def test_several_sessions_can_be_put_in_one_group(
     assert {r["group"] for r in _rows(app).values()} == {"treated"}
 
 
+def test_a_group_is_kept_in_the_session_folder_and_comes_back(
+        app, quiet, tmp_path, synthetic_npy, synthetic_npy_larger_fish, monkeypatch):
+    from fish_analyzer import tracking
+    _make_session(tmp_path, synthetic_npy, "tank3")
+    _make_session(tmp_path, synthetic_npy_larger_fish, "tank7")
+    app._add_path(tmp_path)
+    monkeypatch.setattr(data_tab.simpledialog, "askstring", lambda *a, **k: "treated")
+    app.sessions_tree.selection_set(["tank3", "tank7"])
+    app._set_group()
+
+    assert tracking.saved_group(tmp_path / "session_tank3") == "treated"
+    for name in list(app.loaded_files):
+        app._purge_file_state(name)
+    app.loaded_files.clear()
+    app._add_path(tmp_path)
+
+    assert app.file_groups == {"tank3": "treated", "tank7": "treated"}, \
+        "loading the sessions again brings their group back"
+
+    monkeypatch.setattr(data_tab.simpledialog, "askstring", lambda *a, **k: "")
+    app.sessions_tree.selection_set(["tank3"])
+    app._set_group()
+    assert tracking.saved_group(tmp_path / "session_tank3") is None, \
+        "clearing the group forgets it in the folder too"
+
+
 def test_a_chosen_group_survives_a_rename(
         app, quiet, tmp_path, synthetic_npy, monkeypatch):
     app._add_path(_make_session(tmp_path, synthetic_npy, "tank3"))

@@ -111,6 +111,7 @@ def app(_gui_app):
     for mapping in (_gui_app.loaded_files,
                     _gui_app.file_arena_definitions,
                     _gui_app.file_groups,
+                    _gui_app.session_folders,
                     _gui_app.video_readers):
         mapping.clear()
 
