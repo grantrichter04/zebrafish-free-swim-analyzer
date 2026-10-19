@@ -96,7 +96,10 @@ with the videos: they are the tracking results.
    One scale is used for every session, so results can be compared between
    them, and it is written into every export.
    - **Rename...** and **Set group...** give sessions short names and put them
-     in experimental groups; these label every plot and export.
+     in experimental groups; these label every plot and export. Select
+     several rows (Shift- or Ctrl-click) to group them at once. A group is
+     kept in the session folder (`freeswim_session.json`) and comes back
+     when the session is loaded again.
    - **Open in validator...** opens idtracker.ai's own tool on the selected
      session, to check that fish were not swapped and correct any that were.
      Save there (Ctrl+S) and the session is ticked as **Reviewed** and
