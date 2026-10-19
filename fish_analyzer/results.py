@@ -304,12 +304,37 @@ def session_means(table: pd.DataFrame, columns: Optional[List[str]] = None
             .mean().reset_index())
 
 
+#: What the "Error bars" list offers: (shown in the list, kind).
+ERROR_BAR_CHOICES = (("95% CI", "ci95"), ("SD", "sd"), ("None", "none"))
+
+
+def group_error(session_values, kind: str) -> Optional[float]:
+    """Half the length of a group's error bar, from its session means (never
+    its fish, which are not independent): the standard deviation, or half a
+    95% confidence interval of the mean. None when there are too few
+    sessions: an SD needs two, and a confidence interval
+    BAND_MIN_SESSIONS, since from two it is the mean plus or minus 12.7
+    standard errors."""
+    from scipy import stats
+    values = np.asarray(session_values, dtype=float)
+    values = values[~np.isnan(values)]
+    n = len(values)
+    if kind == "sd" and n >= 2:
+        return float(values.std(ddof=1))
+    if kind == "ci95" and n >= BAND_MIN_SESSIONS:
+        return float(stats.t.ppf(0.975, n - 1) * values.std(ddof=1) / np.sqrt(n))
+    return None
+
+
 def draw_superplot(ax, table: pd.DataFrame, column: str, title: str, ylabel: str,
                    session_colors: Dict[str, tuple],
-                   empty_message: str = "No data.") -> bool:
+                   empty_message: str = "No data.",
+                   error_bars: str = "none") -> bool:
     """Draw one column of a per-fish table as a SuperPlot: fish as small dots,
     sessions as large markers, and a line per group at the mean of its
-    session means. Returns False if there was nothing to draw.
+    session means. `error_bars` ("sd", "ci95" or "none") adds a bar on each
+    group's mean, worked out from its session means; see group_error.
+    Returns False if there was nothing to draw.
 
     `table` needs Group and Session columns and one row per fish.
     """
@@ -349,12 +374,17 @@ def draw_superplot(ax, table: pd.DataFrame, column: str, title: str, ylabel: str
         if len(group_means):
             ax.hlines(group_means.mean(), position - 0.4, position + 0.4,
                       colors="black", linewidths=2, zorder=4)
+            half = group_error(group_means, error_bars)
+            if half is not None:
+                # Just past the end of the mean line, clear of the sessions.
+                ax.errorbar(position + 0.45, group_means.mean(), yerr=half,
+                            color="black", linewidth=1.5, capsize=5, zorder=4)
 
     ax.set_xticks(range(len(groups)))
     crowded = len(groups) > 3 or max(len(str(g)) for g in groups) > 10
     ax.set_xticklabels(groups, rotation=25 if crowded else 0,
                        ha="right" if crowded else "center")
-    ax.set_xlim(-0.6, len(groups) - 0.4)
+    ax.set_xlim(-0.6, len(groups) - 0.35)
     ax.set_ylabel(ylabel)
     ax.set_ylim(bottom=0)
     ax.grid(True, axis="y", alpha=0.3)
@@ -374,13 +404,14 @@ def shared_unit(table: pd.DataFrame) -> str:
 
 
 def superplot(ax, table: pd.DataFrame, metric: Metric,
-              session_colors: Dict[str, tuple], title: Optional[str] = None) -> None:
+              session_colors: Dict[str, tuple], title: Optional[str] = None,
+              error_bars: str = "none") -> None:
     """One of the headline metrics as a SuperPlot."""
     drawn = draw_superplot(
         ax, table, metric.column, title or metric.title,
         metric.axis_label(shared_unit(table)), session_colors,
         # Only the wall measure can be missing wholesale: no arena was found.
-        empty_message=NO_OUTLINE)
+        empty_message=NO_OUTLINE, error_bars=error_bars)
     if not drawn:
         return
     if metric.kind == "ratio":

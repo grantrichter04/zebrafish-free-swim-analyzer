@@ -94,6 +94,10 @@ found that an export could not be traced to the code that made it.
 - **Each minute-by-minute layer can be switched off**: "Group mean",
   "Tanks" and "Band" sit beside "Each fish", and the legend names only what
   is on show.
+- **Error bars on the group comparison**, beside each group's mean: a 95%
+  confidence interval (the default, from three tanks), the SD, or none,
+  chosen in "Error bars". Both are worked out from the tank means, never
+  the fish.
 - **A session's group is remembered.** "Set group..." keeps it in
   `freeswim_session.json` in the session folder, and it comes back when the
   session is loaded again. The dialog and the Sessions note say that

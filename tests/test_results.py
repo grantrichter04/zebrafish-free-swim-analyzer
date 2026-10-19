@@ -718,3 +718,29 @@ def test_each_minute_layer_can_be_turned_off_and_the_band_starts_off():
     assert lines(show_band=True) == (1, 3, 1)
     assert lines(show_groups=False) == (0, 3, 0)
     assert lines(show_tanks=False) == (1, 0, 0)
+
+
+def test_a_groups_error_bar_comes_from_its_tank_means_not_its_fish():
+    from scipy import stats
+    # Three tanks of two fish: tank means 1, 2 and 6.
+    table = pd.DataFrame({
+        "Group": ["g"] * 6, "Session": [s for s in "abc" for _ in (1, 2)],
+        "Value": [0.0, 2.0, 1.0, 3.0, 5.0, 7.0]})
+    tank_means = [1.0, 2.0, 6.0]
+    sd = np.std(tank_means, ddof=1)
+    assert results.group_error(tank_means, "sd") == pytest.approx(sd)
+    assert results.group_error(tank_means, "ci95") == pytest.approx(
+        stats.t.ppf(0.975, 2) * sd / np.sqrt(3))
+    assert results.group_error([1.0, 2.0], "ci95") is None, "no interval from two tanks"
+    assert results.group_error([1.0, 2.0], "none") is None
+
+    ax = Figure().add_subplot(111)
+    results.draw_superplot(ax, table, "Value", "t", "u", {s: (0, 0, 1) for s in "abc"},
+                           error_bars="ci95")
+    bar = ax.containers[0].lines[2][0].get_segments()[0][:, 1]
+    half = results.group_error(tank_means, "ci95")
+    assert bar.min() == pytest.approx(3.0 - half) and bar.max() == pytest.approx(3.0 + half)
+
+    plain = Figure().add_subplot(111)
+    results.draw_superplot(plain, table, "Value", "t", "u", {s: (0, 0, 1) for s in "abc"})
+    assert not plain.containers, "no error bar unless asked for"

@@ -42,7 +42,8 @@ class ResultsTabMixin:
         "comparison":
             "Each group's tanks are shades of one colour. Small dots are fish, "
             "large markers are tank means, and the black line is the mean of "
-            "a group's tanks. Fish sharing a tank are not independent, so "
+            "a group's tanks, with its error bar (95% CI or SD of the tank "
+            "means, as chosen). Fish sharing a tank are not independent, so "
             "compare the large markers.",
         "minutes":
             "Each measure minute by minute. Thin lines are tanks, the thick "
@@ -166,6 +167,16 @@ class ResultsTabMixin:
             self.results_panel_vars[metric.column] = var
             tk.Checkbutton(panel_row, text=metric.title, variable=var,
                            command=self._draw_results_plot).pack(side="left", padx=4)
+        # Only the group comparison has error bars: on each group's mean,
+        # from its tank means.
+        tk.Label(panel_row, text="Error bars:").pack(side="left", padx=(18, 3))
+        self.results_error_box = ttk.Combobox(
+            panel_row, state="readonly", width=7,
+            values=[text for text, _ in results.ERROR_BAR_CHOICES])
+        self.results_error_box.current(0)
+        self.results_error_box.pack(side="left")
+        self.results_error_box.bind(
+            "<<ComboboxSelected>>", lambda e: self._draw_results_plot())
 
         self.results_plot_frame = tk.Frame(tab)
         self.results_plot_frame.pack(fill="both", expand=True, padx=20, pady=5)
@@ -261,6 +272,9 @@ class ResultsTabMixin:
             else "disabled")
         self.results_squares_box.config(
             state="normal" if self.results_view.get() == "density" else "disabled")
+        self.results_error_box.config(
+            state="readonly" if self.results_view.get() == "comparison"
+            else "disabled")
         table = self._results_table
         if table is None or table.empty:
             return
@@ -343,7 +357,10 @@ class ResultsTabMixin:
                                         self.results_each_fish.get(), title,
                                         **layers)
                 else:
-                    results.superplot(ax, table, metric, session_colors, title)
+                    results.superplot(
+                        ax, table, metric, session_colors, title,
+                        dict(results.ERROR_BAR_CHOICES).get(
+                            self.results_error_box.get(), "none"))
             if by_minute:
                 results.minute_legend(figure, colors, show_fish=self.results_each_fish.get(),
                                       **layers)
@@ -396,7 +413,12 @@ class ResultsTabMixin:
         text.insert(
             "end",
             "Small dots are fish. Large markers are session means. The black "
-            "line is the mean of a group's session means. Fish sharing a tank "
+            "line is the mean of a group's session means, and the bar beside "
+            "it is worked out from those session means too: SD, their spread, "
+            "or a 95% confidence interval for the group mean. "
+            "With three sessions that interval is wide (the mean plus or minus "
+            "4.3 standard errors); it is shown from three sessions on. Fish "
+            "sharing a tank "
             "influence each other, so the session is the unit to compare, and "
             "a group needs several sessions before it can be tested against "
             "another.\n")
